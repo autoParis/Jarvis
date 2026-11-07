@@ -1,0 +1,184 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { openStore } from './store.ts';
+import { makeNative, type Claude } from './native.ts';
+import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId } from './nativeroutes.ts';
+import { buildCommand, isNativeArgs, nativeName, WORKER_PERMISSION, BUTTON_ONLY } from './gate.ts';
+import { chatLines } from './transcript.ts';
+
+const id = { run: 'run_x', handle: 'term_x' };
+
+/** A fake `claude`: one background worker that starts, is listed alive, and a relay that always says SENT. */
+function fakeClaude() {
+  const calls: string[][] = [];
+  const agent: any = { id: 'abc12345', sessionId: 'abc12345-0000-0000-0000-000000000000', name: 'probe-1', kind: 'background', pid: 42, status: 'idle', state: 'done' };
+  const claude: Claude = async (args) => {
+    calls.push(args);
+    if (args[0] === '--version') return { code: 0, out: '2.1.316 (Claude Code)', err: '' };
+    if (args[0] === '--bg') return { code: 0, out: `backgrounded · ${agent.id} · ${args[2]}\n`, err: '' };
+    if (args[0] === 'agents') return { code: 0, out: JSON.stringify([agent]), err: '' };
+    if (args[0] === '-p') return { code: 0, out: JSON.stringify({ type: 'result', is_error: false, result: 'SENT' }), err: '' };
+    return { code: 0, out: '', err: '' };
+  };
+  return { claude, calls, agent };
+}
+
+function setup() {
+  const store = openStore(':memory:');
+  const logs: string[] = [];
+  const log = (m: string, f?: object) => logs.push(`${m} ${JSON.stringify(f ?? {})}`);
+  const cards: any[] = [], reports: any[] = [], notices: string[] = [], changed: string[] = [];
+  const { claude, calls, agent } = fakeClaude();
+  const native = makeNative({ store, log, jarvisUrl: 'http://127.0.0.1:1', dataDir: mkdtempSync(join(tmpdir(), 'jarvis-nr-')), claude,
+    onChange: () => {}, onReport: (w, t, final) => reports.push({ w: w.id, t, final }), onCard: a => cards.push(a), onNotice: (_w, t) => notices.push(t) });
+  const o = { native, store, log, askChanged: (i: string) => changed.push(i) };
+  return { store, log, logs, native, o, cards, reports, notices, changed, calls, agent };
+}
+
+test('the hook routes: a known worker\'s permission prompt becomes a card and resolves on the tap; a stop stores the report; unknown sessions get nothing', async () => {
+  const s = setup();
+  const w = await s.native.start({ name: 'probe-1', cwd: '/tmp', brief: 'x' });
+  const body = { session_id: w.session_id, tool_name: 'Bash', tool_input: { command: 'touch /tmp/x' }, transcript_path: '/tmp/t.jsonl' };
+  const held = nativeRoute(s.o, 'POST', '/api/hooks/permission', body);
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(s.cards.length, 1);
+  assert.equal(s.cards[0].action, WORKER_PERMISSION);
+  assert.equal(JSON.parse(s.cards[0].args).summary, 'touch /tmp/x');
+  assert.equal(s.native.get(w.id)?.state, 'blocked');
+  assert.deepEqual(s.native.decide(s.cards[0].id, false), { ok: true });
+  const r = await held;
+  assert.equal(r?.status, 200);
+  assert.equal((r?.body as any).hookSpecificOutput.decision.behavior, 'deny');
+  assert.equal(s.store.approval(s.cards[0].id)?.result, 'denied');
+  // The stop hook: the report word for word, outcome from the first line.
+  const stop = await nativeRoute(s.o, 'POST', '/api/hooks/stop', { session_id: w.session_id, last_assistant_message: 'DONE: all good\n\nDetails here.', stop_hook_active: false });
+  assert.equal(stop?.status, 200);
+  assert.equal(s.native.get(w.id)?.report, 'DONE: all good\n\nDetails here.');
+  assert.equal(s.reports[0].final, true);
+  // A session jarvisd did not start: an empty decision (which the worker reads as a denial) and nothing stored.
+  const stranger = await nativeRoute(s.o, 'POST', '/api/hooks/permission', { session_id: 'nope', tool_name: 'Bash', tool_input: {} });
+  assert.deepEqual(stranger?.body, {});
+  assert.equal(s.cards.length, 2); // created, then decided; nothing for the stranger
+  assert.ok(s.logs.some(l => l.startsWith('hook from an unknown session')));
+  const pre = await nativeRoute(s.o, 'POST', '/api/hooks/pre', { session_id: w.session_id, tool_name: 'AskUserQuestion' });
+  assert.equal((pre?.body as any).hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(await nativeRoute(s.o, 'GET', '/api/hooks/stop', {}), undefined);
+  assert.equal(await nativeRoute(s.o, 'POST', '/api/other', {}), undefined);
+});
+
+test('a worker\'s message to the brain becomes a question item; a stranger\'s is dropped; the brain\'s reply answers it', async () => {
+  const s = setup();
+  const w = await s.native.start({ name: 'probe-1', cwd: '/tmp', brief: 'x' });
+  const dropped = routeWorkerTurn({ native: s.native, store: s.store, log: s.log }, { from: 'someone-else', text: 'hi' }, 'Hello stranger');
+  assert.equal(dropped.speak, false);
+  assert.equal(dropped.item, undefined);
+  assert.ok(s.logs.some(l => l.startsWith('brain ignored a message from a session jarvisd did not start')));
+  const none = routeWorkerTurn({ native: s.native, store: s.store, log: s.log }, undefined, 'x');
+  assert.equal(none.speak, false);
+  const r = routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 1000 }, { from: 'probe-1', text: 'QUESTION: merge?' }, 'Probe one asks whether to merge.');
+  assert.equal(r.item?.external_id, askId(w.id, 1000));
+  assert.equal(r.item?.dispatch_id, `n:${w.id}`);
+  assert.equal(r.item?.body, 'QUESTION: merge?');
+  assert.equal(r.speak, true);
+  assert.equal(s.store.openItems().length, 1);
+  // The brain's reply through jarvis-native: relayed, and the open question is answered in Jarvis's name.
+  const reply = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1', text: 'Yes, merge it.' });
+  assert.equal(reply?.status, 200);
+  assert.ok(s.calls.some(c => c[0] === '-p' && c.includes('SendMessage')));
+  assert.equal(s.store.openItems().length, 0);
+  assert.equal(s.store.item(askId(w.id, 1000))?.answered_by, 'jarvis');
+  assert.deepEqual(s.changed, [askId(w.id, 1000)]);
+  const missing = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'nobody', text: 'x' });
+  assert.equal(missing?.status, 404);
+  const bad = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1' });
+  assert.equal(bad?.status, 400);
+  // The silent case: the brain said SILENT, so nothing is spoken but the card still exists.
+  const quiet = routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 2000 }, { from: 'probe-1', text: 'status: fine' }, 'SILENT');
+  assert.equal(quiet.speak, false);
+  assert.deepEqual(answerOpenAsks(s.store, w.id, 'ok', 'owner'), [askId(w.id, 2000)]);
+});
+
+test('the gate routes native worker-start, stop and abandon to native.ts and never proposes a permission card', () => {
+  assert.ok(isNativeArgs('worker-start', { native: true }));
+  assert.ok(isNativeArgs('worker-start', {}), 'native by default since 2026-11-06');
+  assert.ok(!isNativeArgs('worker-start', { orca: true }));
+  assert.ok(isNativeArgs('question', {}) && isNativeArgs('side-chat', {}));
+  assert.ok(!isNativeArgs('today-start', {}), 'Today stays on Orca until converted');
+  const q = buildCommand('question', { repo: '/r', question: 'Why?' }, id);
+  assert.equal(q[0], 'native'); assert.match(q[3], /Read-only research/); assert.match(q[3], /first line is exactly `DONE: answered`/); assert.doesNotMatch(q[3], /worker_done/);
+  const sc = buildCommand('side-chat', { repo: '/r', text: 'hi there' }, id);
+  assert.equal(sc[0], 'native'); assert.match(sc[3], /Side chat with the owner/); assert.match(sc[3], /hi there/); assert.doesNotMatch(sc[3], /orca orchestration/);
+  assert.equal(buildCommand('question', { repo: '/r', orca: true, question: 'Why?' }, id)[0], 'orca');
+  assert.ok(isNativeArgs('worker-stop', { dispatch: 'n:abc' }));
+  assert.ok(!isNativeArgs('worker-stop', { dispatch: 'ctx_1' }));
+  const start = buildCommand('worker-start', { repo: '/r', spec: 'Do #1', native: true, taskTitle: '#1 topic' }, id);
+  assert.equal(start[0], 'native'); assert.equal(start[1], 'start'); assert.equal(start[2], '/r');
+  assert.match(start[3], /Do #1\n\n## Filing issues/);
+  assert.doesNotMatch(start[3], /Orca brief above/);
+  assert.match(start[3], /## You are a Jarvis worker/);
+  assert.match(start[3], /DONE: <one sentence>/);
+  assert.throws(() => buildCommand('worker-start', { repo: '/r', spec: 'x', native: true, permissionMode: 'plan' }, id), /permissionMode/);
+  assert.deepEqual(buildCommand('worker-stop', { dispatch: 'n:abc' }, id), ['native', 'stop', 'n:abc']);
+  assert.deepEqual(buildCommand('worker-abandon', { dispatch: 'n:abc' }, id), ['native', 'abandon', 'n:abc']);
+  assert.equal(buildCommand('worker-stop', { dispatch: 'ctx_1' }, id)[0], 'orca');
+  assert.throws(() => buildCommand(WORKER_PERMISSION, { worker: 'abc' }, id), /cannot be proposed/);
+  assert.ok(BUTTON_ONLY.has(WORKER_PERMISSION));
+  assert.equal(nativeName('#4412 Onboarding wizard!', 7), '4412-onboarding-wizard-7');
+  assert.equal(nativeName(undefined, 8), 'worker-8');
+});
+
+test('a cross-session message in a worker\'s transcript shows as a reply line, not as a hidden meta turn', () => {
+  const peer = { type: 'user', isMeta: true, turnOrigin: 'peer', timestamp: '2026-11-06T22:00:00Z', message: { role: 'user', content: 'Another Claude session sent a message:\n<cross-session-message from="uds:/tmp/x.sock" from-name="jarvis-brain-relay" from-mode="prompting">\nhello 42\n</cross-session-message>\n\nThis came from another Claude session.' } };
+  const meta = { type: 'user', isMeta: true, message: { role: 'user', content: 'noise' } };
+  const lines = chatLines([JSON.stringify(peer), JSON.stringify(meta)].join('\n'), 0);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].kind, 'reply');
+  assert.equal(lines[0].text, 'hello 42');
+});
+
+test('an interactive worker starts in a pseudo-terminal, is found by name, stops by its process group and resumes in a new one', async () => {
+  const store = openStore(':memory:');
+  const logs: string[] = [];
+  const agent: any = { kind: 'interactive', name: 'design-5', pid: 777, status: 'busy', sessionId: 'c0ffee00-1111-2222-3333-444444444444' };
+  const spawned: string[][] = [], killed: number[] = [];
+  const claude: Claude = async (args) => {
+    if (args[0] === '--version') return { code: 0, out: '2.1.316', err: '' };
+    if (args[0] === 'agents') return { code: 0, out: JSON.stringify([agent]), err: '' };
+    if (args[0] === '-p') return { code: 0, out: JSON.stringify({ result: 'SENT' }), err: '' };
+    return { code: 0, out: '', err: '' };
+  };
+  const native = makeNative({ store, log: (m, f) => logs.push(`${m} ${JSON.stringify(f ?? {})}`), jarvisUrl: 'http://127.0.0.1:1', dataDir: mkdtempSync(join(tmpdir(), 'jarvis-nr-')), claude,
+    spawnPty: argv => { spawned.push(argv); return 4242; }, killGroup: pgid => killed.push(pgid),
+    onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {} });
+  const w = await native.start({ name: 'design-5', cwd: '/tmp', brief: 'Publish a design', interactive: true, approvalId: 5 });
+  assert.equal(w.id, 'c0ffee00');
+  assert.equal(w.kind, 'interactive');
+  assert.equal(w.pgid, 4242);
+  assert.equal(w.state, 'working');
+  assert.deepEqual(spawned[0].slice(0, 3), ['claude', '--name', 'design-5']);
+  assert.equal(spawned[0].at(-1), 'Publish a design');
+  assert.ok(!spawned[0].includes('--bg'));
+  // Liveness from status: busy is working, waiting is blocked, idle after a report is done.
+  agent.status = 'waiting';
+  await native.poll();
+  assert.equal(native.get('c0ffee00')?.state, 'blocked');
+  agent.status = 'idle';
+  native.stopHook({ session_id: agent.sessionId, last_assistant_message: 'DONE: published' });
+  await native.poll();
+  assert.equal(native.get('c0ffee00')?.state, 'done');
+  // Stop ends the process group; a reply afterwards resumes the conversation in a new terminal.
+  await native.stop('c0ffee00');
+  assert.deepEqual(killed, [4242]);
+  assert.equal(native.get('c0ffee00')?.state, 'stopped');
+  delete agent.pid;
+  const r = native.reply('c0ffee00', 'again', 'owner');
+  await new Promise(res => setTimeout(res, 50));
+  agent.pid = 778;
+  assert.deepEqual(await r, { ok: true });
+  assert.ok(spawned[1].includes('--resume') && spawned[1].includes(agent.sessionId));
+  await assert.rejects(native.attach('c0ffee00'), /Use Desktop/);
+  assert.ok(logs.some(l => l.startsWith('native worker started') && l.includes('"kind":"interactive"')));
+});

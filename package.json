@@ -1,0 +1,14 @@
+{
+  "name": "jarvis",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning daemon/main.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test daemon/*.test.ts",
+    "preview": "node --disable-warning=ExperimentalWarning bin/preview.ts",
+    "setup": "bin/setup"
+  }
+}

@@ -1,0 +1,23 @@
+#!/usr/bin/env node
+// Reminders for the owner. jarvisd holds the rules; this only relays. Times come back in UTC with due_eastern beside them.
+//   jarvis-remind add --due <ISO with offset, or +90m, +2h, +1d4h> --text "Call Sam"
+//   jarvis-remind list         every reminder not done
+//   jarvis-remind done <id>    the owner acknowledged it, or it is no longer needed
+const [cmd, ...rest] = process.argv.slice(2);
+const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
+const url = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/reminders`;
+const usage = 'usage: jarvis-remind add --due <ISO with offset or +duration> --text <text> | list | done <id>';
+let req;
+if (cmd === 'add') req = [url, { method: 'POST', body: JSON.stringify({ due: flag('due'), text: flag('text') }) }];
+else if (cmd === 'list' && !rest.length) req = [url];
+else if (cmd === 'done' && /^\d+$/.test(rest[0] ?? '')) req = [`${url}/${rest[0]}/done`, { method: 'POST' }];
+else { console.error(usage); process.exit(2); }
+try {
+  const res = await fetch(...req);
+  const text = await res.text();
+  if (res.ok) console.log(text); else console.error(text);
+  process.exit(res.ok ? 0 : 1);
+} catch (e) {
+  console.error(`jarvisd unreachable: ${e.cause?.code ?? e}`);
+  process.exit(1);
+}

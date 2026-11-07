@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+// The brain's way to a background Claude worker (a `claude --bg` session jarvisd started). jarvisd holds the rules; this only relays.
+//   jarvis-native reply --worker <name or n:id> --text "<the owner's answer, or the brain's instruction>"
+//                       jarvisd respawns the worker if its process was stopped, carries the words in with SendMessage, and
+//                       marks the worker's open question answered. Starting, stopping and abandoning go through jarvis-act.
+//   jarvis-native list   every native worker: id, name, state, report
+const [cmd, ...rest] = process.argv.slice(2);
+const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
+const url = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/native`;
+let req;
+if (cmd === 'reply' && flag('worker') && flag('text')) req = [`${url}/reply`, { method: 'POST', body: JSON.stringify({ worker: flag('worker'), text: flag('text') }) }];
+else if (cmd === 'list') req = [`${url}/list`, { method: 'POST' }];
+else { console.error('usage: jarvis-native reply --worker <name or n:id> --text <text> | list'); process.exit(2); }
+try {
+  const res = await fetch(...req);
+  const text = await res.text();
+  if (res.ok) console.log(text); else console.error(text);
+  process.exit(res.ok ? 0 : 1);
+} catch (e) {
+  console.error(`jarvisd unreachable: ${e.cause?.code ?? e}`);
+  process.exit(1);
+}

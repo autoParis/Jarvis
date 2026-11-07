@@ -1,0 +1,4 @@
+{
+ "source": "Empty on purpose. Export your own Dealerships tab to this shape and run jarvis-migration import-dealers --file <path.json>.",
+ "dealerships": []
+}

@@ -1,0 +1,28 @@
+# Personal and generated data. Never commit these from an install.
+data/
+.env
+node_modules/
+voice/models/
+.DS_Store
+
+# Screenshots, pictures and reports made from real data.
+docs/screens/
+docs/design/**/screens/
+docs/audits/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.mp4
+*.mov
+
+# The vault holds real people, clients and notes. Only the templates are tracked.
+# bin/setup copies vault/people.example.md to vault/people.md.
+vault/people.md
+vault/notes/*
+!vault/notes/.gitkeep
+!vault/notes/README.md
+vault/projects/*
+!vault/projects/example-project.md
+!vault/projects/jarvis.md

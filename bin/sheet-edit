@@ -1,0 +1,7 @@
+#!/usr/bin/env -S node --disable-warning=ExperimentalWarning
+// Writes to the Marketplace migration sheet, and only that sheet. Usage and edit format: docs/sheet-edit.md
+//   sheet-edit <edit.json> [--dry-run] [--sheet-id <id>]
+// Exit codes: 0 done, 1 gws failure or read-back mismatch, 2 refused, 3 preflight abort.
+import { run } from '../daemon/sheet-edit.ts';
+
+process.exitCode = run(process.argv.slice(2));

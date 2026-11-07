@@ -1,0 +1,1973 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#DCEBE8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0A1312" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg">
+<title>Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app">
+<aside id="work" aria-label="Work">
+  <div class="w-head"><b>Work</b><span class="c-sub" id="workcount"></span></div>
+  <button type="button" id="tojarvis" class="here"><b>Jarvis</b><span class="conn" id="status" title="connecting…"><span class="sr">connecting…</span></span><small>Main conversation</small></button>
+  <div id="workerr" hidden></div>
+  <div class="list"><div id="worklist"></div></div>
+  <div class="done-line" id="doneinfo"></div>
+</aside>
+<main id="center">
+  <header class="c-head">
+    <div class="h-left">
+      <button type="button" class="ib" id="railbtn" aria-label="Work list" title="Work list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M15 5v14"/></svg></button>
+    <div class="h-chat"><h1>Jarvis</h1><span class="c-sub">Main conversation</span><span class="conn" title="connecting…"></span></div>
+    <div class="h-pane"><button type="button" id="pane-back" aria-label="Back to Jarvis"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span id="pane-back-label">Jarvis</span></button><div class="h"><div id="pane-title"></div><div id="pane-sub"></div></div></div>
+    </div>
+    <!-- Option H of the top area: one icon and one count for each need. The desktop keeps the label; the phone shows the icons with round badges. -->
+    <div id="needbar">
+      <button type="button" class="need-btn need-req" id="req-btn" aria-expanded="false" aria-controls="pop-requests" aria-label="Requests, nothing open" title="Requests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.6a2.4 2.4 0 0 1 4.7.7c0 1.6-2.4 2.1-2.4 3.6M12 16.8h.01"/></svg><span class="nl">Requests</span><em hidden></em></button>
+      <button type="button" class="need-btn need-msg" id="msg-btn" aria-expanded="false" aria-controls="pop-messages" aria-label="Messages, nothing open" title="Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17h-8.5L6 20.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"/></svg><span class="nl">Messages</span><em hidden></em></button>
+      <button type="button" class="need-btn need-today" id="today-btn" aria-expanded="false" aria-controls="pop-today" aria-label="Today, nothing needs you" title="Today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 7h10M9.5 12h10M9.5 17h10M4.5 7h.01M4.5 12h.01M4.5 17h.01"/></svg><span class="nl">Today</span><em hidden></em></button>
+      <button type="button" class="need-btn need-mig" id="mig-btn" aria-expanded="false" aria-controls="pop-migration" aria-label="Leads, nobody to contact" title="Leads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M15 11h6M18 8l3 3-3 3"/></svg><span class="nl">Leads</span><em hidden></em></button>
+    </div>
+    <div class="tools">
+      <button type="button" class="ib" id="pane-open" hidden aria-label="Open in Orca" title="Open in Orca"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M18 14v5H5V6h5"/></svg></button>
+      <button type="button" class="ib" id="pane-desktop" hidden aria-label="Open in the Claude desktop app" title="Open in the Claude desktop app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+      <button type="button" class="term-act" id="term-copy" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg><span id="term-copy-label">Copy attach command</span></button>
+      <button type="button" class="term-act bad" id="term-end" hidden>End</button>
+      <button type="button" class="stop" id="pane-stop" hidden><span class="g g-stopped" aria-hidden="true"></span><span id="pane-stop-label">Stop</span></button>
+      <button type="button" class="ib" id="newchat" aria-label="New session" title="New session" aria-haspopup="dialog" aria-expanded="false" aria-controls="newpick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+      <div id="more"><button type="button" class="ib" id="morebtn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="menu" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg></button>
+        <div id="menu" hidden><button id="menu-new" type="button">New session</button><button id="alerts" type="button" aria-pressed="false" hidden>Alerts<span></span></button><button id="sound" type="button" aria-pressed="false">Sound<span></span></button><button id="reportsbtn" type="button">Reports</button><button id="auditbtn" type="button">Audit log</button><button id="shellbtn" type="button">Shell</button><button id="pairbtn" type="button" hidden>Pair the Mac</button></div></div>
+    </div>
+  </header>
+  <!-- The meeting toast (Leads, temporary): the Eastern day of the meeting only. The x closes it for that meeting, on every screen. -->
+  <div class="mtoast-row"><div class="mtoast" id="mtoast" role="status" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></svg><b class="mt-who"></b><span class="mt-at"></span><button type="button" class="mt-x" id="mtoast-x" aria-label="Close the meeting reminder" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div></div>
+  <div id="doneline" hidden><span class="txt"></span><button type="button" aria-label="Dismiss">×</button></div>
+  <section id="pop-requests" class="pop" role="dialog" aria-label="Requests" tabindex="-1" hidden>
+    <div class="pop-head"><b>Requests</b><span class="c-sub" id="req-pos"></span><button type="button" class="ib pop-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="pop-body" id="req-body">
+      <div id="req-card"></div>
+      <form id="req-free" hidden><label class="sr" for="req-free-text">Or type your own answer</label><textarea id="req-free-text" rows="1" placeholder="Or type your own answer" autocomplete="off"></textarea><button type="submit" class="ghost">Send</button></form>
+    </div>
+    <div class="pop-foot" id="req-foot" hidden><div class="pop-others" id="req-others" hidden></div><button type="button" class="pop-more" id="req-more" aria-expanded="false"></button></div>
+  </section>
+  <section id="pop-messages" class="pop" role="dialog" aria-label="Messages" tabindex="-1" hidden>
+    <div class="pop-head"><b>Messages</b><span class="c-sub" id="msg-pos"></span><button type="button" class="ib pop-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="pop-body" id="msg-body">
+      <div id="msg-card"></div>
+      <div class="draft"><label for="msg-draft" id="msg-draft-label">Draft reply</label><textarea id="msg-draft" rows="4"></textarea></div>
+      <div class="pair"><button type="button" class="no" id="msg-handled">I'll handle it</button><button type="button" class="yes" id="msg-send">Send reply</button></div>
+      <a id="msg-open" class="msg-open" target="_blank" rel="noopener"></a>
+    </div>
+    <div class="pop-foot" id="msg-foot" hidden><div class="pop-others" id="msg-others" hidden></div><button type="button" class="pop-more" id="msg-more" aria-expanded="false"></button></div>
+  </section>
+  <section id="pop-migration" class="pop" role="dialog" aria-label="Leads" tabindex="-1" hidden>
+    <div class="pop-head"><b>Leads</b><span class="c-sub" id="mig-sub"></span><button type="button" class="ib pop-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div id="mig-add"></div>
+    <div class="pop-body" id="mig-list"></div>
+    <div class="m-foot">Working list only. The migration sheet stays the record and nothing syncs.</div>
+  </section>
+  <section id="pop-today" class="pop" role="dialog" aria-label="Today" tabindex="-1" hidden>
+    <div class="pop-head"><b>Today</b><span class="c-sub" id="today-sub"></span><button type="button" class="ib pop-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <form id="today-form" autocomplete="off">
+      <input id="today-text" type="text" aria-label="Add to today" placeholder="Drop a thought" enterkeyhint="done">
+      <button type="button" class="ib" id="today-mic" aria-label="Add by voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <button type="button" id="today-go" aria-pressed="false" title="Run this on its own when Jarvis can write the spec without guessing. Nothing outward runs without your tap.">Go</button>
+    </form>
+    <p id="today-err" role="alert" hidden></p>
+    <div class="pop-body" id="today-list"></div>
+  </section>
+  <div id="chat">
+    <div id="log"><div id="items"></div></div>
+    <form id="f" class="dock"><div class="dock-in">
+      <div id="chat-working" class="working-line" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Working…</div>
+      <!-- The message the owner answers, from the reply button or a swipe to the left. Sending clears it, X cancels it. -->
+      <div id="reply-strip" hidden>
+        <button type="button" id="reply-go" class="rs-body" aria-label="Go to the message you are answering"><span class="rs-text"><b id="reply-who"></b><span id="reply-line"></span></span></button>
+        <button type="button" id="reply-cancel" aria-label="Cancel the reply" title="Cancel the reply"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>
+      </div>
+      <div id="pending"></div>
+      <!-- One pill (option A, morphing). Typing: attach, text, mic (dictate), wave (hands-free) or send.
+           Hands-free: the same pill turns teal and shows what the voice loop is doing, End, and a keyboard button. -->
+      <div class="composer">
+        <div class="field" id="bar" data-mode="type">
+          <button id="add" type="button" class="ib" aria-label="Attach a picture" title="Attach a picture"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.2a1.7 1.7 0 0 1-2.4-2.4L15 7"/></svg></button>
+          <input id="file" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+          <textarea id="t" rows="1" placeholder="Message Jarvis" aria-label="Message"></textarea>
+          <button id="mic" type="button" class="ib" aria-label="Dictate: hold to talk, or tap to start and tap again to send" title="Dictate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+          <button id="wave" type="button" aria-label="Start hands-free" title="Hands-free"><svg class="wave" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg><svg class="send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+          <button id="keys" type="button" class="ib" aria-label="Type instead" title="Type instead"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg></button>
+          <button id="voice-state" type="button" aria-live="polite"><span class="vdot" aria-hidden="true"></span><span id="voice-label">Listening</span></button>
+          <button id="hands-end" type="button">End</button>
+        </div>
+      </div>
+      <!-- The brain's model and effort as quiet text under the pill, at the left edge, so a tap meant for the text box never lands on it. -->
+      <div class="dock-tools"><button id="model-pill" type="button" class="model-pill" aria-haspopup="dialog" aria-label="Model and effort" disabled>…</button></div>
+    </div></form>
+  </div>
+  <section id="pane" hidden aria-label="Transcript">
+    <div id="pane-log"><div id="pane-lines"></div></div>
+    <form id="steer" class="dock"><div class="dock-in">
+      <div id="pane-working" class="working-line" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Working…</div>
+      <div id="wait-box" hidden><span>This session is waiting on you</span><button type="button" id="wait-open">Open the question</button></div>
+      <div id="steer-cards"></div>
+      <div id="steer-hint"></div>
+      <div class="composer" id="steer-row"><div class="field"><textarea id="steer-text" rows="1" aria-label="Message to this session"></textarea><button type="submit" class="go" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></div></div>
+    </div></form>
+  </section>
+  <section id="report" hidden aria-label="Report"></section>
+  <section id="term" hidden aria-label="Terminal">
+    <div id="term-host" tabindex="0" aria-label="Terminal screen. Keys go straight to the shell."></div>
+    <div id="term-pair" hidden><form><p><b>Pair this Mac once.</b> On your phone, open the menu and tap Pair the Mac. Type its code here, then Touch ID.</p>
+      <div class="term-pair-row"><input id="term-pair-code" inputmode="numeric" autocomplete="off" maxlength="9" aria-label="Pairing code" placeholder="8-digit code"><button type="submit">Pair with Touch ID</button><button type="button" class="term-pair-cancel">Cancel</button></div>
+      <p class="term-pair-err" role="alert"></p></form></div>
+    <textarea id="term-input" aria-label="Type into the terminal" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" enterkeyhint="send"></textarea>
+    <div id="term-keys" role="toolbar" aria-label="Terminal keys">
+      <button type="button" data-k="Escape">esc</button><button type="button" data-k="Tab">tab</button><button type="button" id="tk-ctrl" aria-pressed="false">ctrl</button>
+      <button type="button" data-k="Up" aria-label="Up">↑</button><button type="button" data-k="Down" aria-label="Down">↓</button><button type="button" data-k="Left" aria-label="Left">←</button><button type="button" data-k="Right" aria-label="Right">→</button>
+      <button type="button" id="tk-paste">paste</button>
+      <button type="button" id="tk-kbd" aria-label="Open the keyboard" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 9.5h.01M9.3 9.5h.01M12.6 9.5h.01M15.9 9.5h.01M18 9.5h.01M6 12h.01M18 12h.01M8.5 15h7"/></svg></button>
+    </div>
+    <div id="term-status" aria-live="polite"></div>
+  </section>
+</main>
+</div>
+<div id="scrim"></div>
+<form id="newpick" hidden role="dialog" aria-label="New session">
+  <div class="np-seg" id="np-kind" role="radiogroup" aria-label="Kind"></div>
+  <div class="np-seg" id="np-repo" role="radiogroup" aria-label="Project"></div>
+  <div class="np-foot">
+    <label class="np-wt" id="np-wt-row"><input type="checkbox" id="np-wt" role="switch">Worktree</label>
+    <button type="submit" class="np-go" id="np-go"><span id="np-go-label">Start</span><kbd id="np-keys" aria-hidden="true">⌘↵</kbd></button>
+  </div>
+</form>
+<section id="shell" hidden role="dialog" aria-label="Shell">
+  <div class="w-head"><b>Shell</b><div class="tools"><button type="button" class="shell-act" id="shell-hide">Hide</button><button type="button" class="shell-act bad" id="shell-close">Close</button></div></div>
+  <p id="shell-note">Ends on Close, after 3 minutes with this page closed, or when jarvisd restarts. Commands go to the log, output does not. Line output only: vim and top do not draw here.</p>
+  <pre id="shell-out" tabindex="0" aria-live="off"></pre>
+  <p id="shell-ended" hidden></p>
+  <form id="shell-form"><textarea id="shell-text" rows="3" aria-label="Command" placeholder="Paste a command" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"></textarea>
+    <div class="shell-row"><button type="button" class="shell-act" id="shell-ctrlc">Ctrl-C</button><button type="submit" class="shell-act run" id="shell-run">Run</button></div></form>
+</section>
+<section id="audit" hidden role="dialog" aria-label="Audit log">
+  <div class="w-head"><b>Audit log</b><div class="tools"><button type="button" class="ib" id="audit-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div></div>
+  <div id="audit-body"></div>
+</section>
+<section id="model-sheet" hidden role="dialog" aria-label="Select model" tabindex="-1">
+  <div class="ms-grip" aria-hidden="true"></div>
+  <div class="ms-head"><button type="button" class="ib" id="model-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button><b>Select model</b></div>
+  <p id="model-err" role="alert" hidden></p>
+  <div id="model-body"></div>
+</section>
+<div id="viewer" role="dialog" aria-label="Image"><img alt=""><button type="button">Close</button></div>
+<script src="/markdown.js"></script>
+<script src="/askcard.js"></script>
+<script src="/paste.js"></script>
+<script type="module">
+import { DEFAULTS, makeSegmenter, levelDb, encodeWav } from '/listen.js';
+import { STATE as REQ_STATE, ago, requestMark, openIdOf } from '/requestlist.js';
+import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, messageFootHtml, toolRunHtml, toolRunSummary, briefFoldHtml, paneTag, COPY_ICON, COPIED_ICON, SPEAK, REPLY_ICON, quoteHtml, quoteSnippet, quoteWho } from '/workfold.js';
+import { makeSpeech } from '/speech.js';
+import { enterSends } from '/enterkey.js';
+import { makeScreen, feed as feedScreen, screenText } from '/shell.js';
+import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
+import { todayButton, makeTodayPop } from '/today.js';
+import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
+import { boxAfterSend } from '/dictate.js';
+import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
+import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
+import { makeModelPicker } from '/modelpicker.js';
+import { openTerminal, keyboardInset } from '/terminal.js';
+import { KINDS, orderRepos, projectLabel, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
+import { mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml } from '/worklist.js';
+const $ = id => document.getElementById(id);
+// Every POST carries this page's secret from the event stream. jarvisd refuses actions as the owner without it,
+// so a process on the Mac cannot press Approve or speak for him with a plain request.
+let uiSession = '';
+const rawFetch = window.fetch.bind(window);
+window.fetch = (url, o = {}) => rawFetch(url, o.method === 'POST' ? { ...o, headers: { ...o.headers, 'x-jarvis-session': uiSession } } : o);
+const log = $('log'), items = $('items'), t = $('t'), status = $('status'), mic = $('mic'), soundBtn = $('sound');
+
+// ---- rendering ----
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// `[image: /abs/path.png]` from Jarvis becomes a thumbnail served by the daemon's /image route.
+const IMAGE_MARKER = /\[image:\s*([^\]\n]+?)\s*\]/g;
+function render(text) {
+  return text.split(IMAGE_MARKER).map((part, i) => i % 2 ? shot(part) : links(part)).join('');
+}
+function shot(path) {
+  const src = '/image?path=' + encodeURIComponent(path), name = path.split('/').pop();
+  return `<button type="button" class="shot" data-src="${esc(src)}"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" onerror="this.parentNode.classList.add('broken')"><span>${esc(name)}</span></button>`;
+}
+const viewer = $('viewer');
+// A thumbnail can be in the chat, a worker's transcript or a question in the Requests popup.
+document.addEventListener('click', e => {
+  const b = e.target.closest('.shot');
+  if (!b || b.classList.contains('broken')) return;
+  viewer.querySelector('img').src = b.dataset.src;
+  viewer.classList.add('open');
+});
+viewer.onclick = () => { viewer.classList.remove('open'); viewer.querySelector('img').removeAttribute('src'); };
+function links(text) {
+  return esc(text).replace(/https?:\/\/[^\s)]+/g, u =>
+    /\.(png|jpe?g|gif|webp)(\?|$)/i.test(u) ? `<a href="${u}" target="_blank"><img src="${u}" alt=""></a>` : `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+}
+const lineText = new WeakMap(); // what the copy button under each message copies: the text as written, markdown included
+// `quote` is the message the owner answered, on a message he sent as a reply. It sits on top of his words.
+function add(cls, text, at, speak, quote) {
+  if (cls === 'event') return addEvent(text, at);
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  // Jarvis writes markdown; everything else (The owner, events) shows as typed.
+  if (cls === 'jarvis') { d.classList.add('md'); d.innerHTML = markdown(text, shot); titleCards(d); }
+  else d.innerHTML = (cls === 'owner' ? quoteHtml(quote) : '') + render(text);
+  const line = document.createElement('div');
+  line.className = 'line line-' + cls;
+  const turn = (cls === 'owner' || cls === 'jarvis') && Number.isInteger(speak?.id) ? speak.id : 0;
+  if (turn) { line.dataset.turn = turn; line.dataset.at = at; }
+  line.append(d);
+  line.insertAdjacentHTML('beforeend', messageFootHtml(at, cls === 'jarvis' && speak?.clips ? speak : null, turn));
+  lineText.set(line, text);
+  append(line, cls === 'owner');
+}
+async function copyMessage(b) {
+  let done = true;
+  try { await navigator.clipboard.writeText(lineText.get(b.closest('.line'))); } catch { done = false; }
+  b.innerHTML = done ? COPIED_ICON : COPY_ICON;
+  b.title = done ? 'Copied' : 'Could not copy';
+  b.setAttribute('aria-label', b.title);
+  clearTimeout(b.resetTimer);
+  b.resetTimer = setTimeout(() => { b.innerHTML = COPY_ICON; b.title = 'Copy'; b.setAttribute('aria-label', 'Copy message'); }, 1500);
+}
+// A new line rises into place. Lines drawn from the history do not.
+let drawingHistory = false;
+function append(el, force) {
+  if (!drawingHistory) el.classList.add('rise');
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
+  items.appendChild(el);
+  if (atBottom || force) toBottom();
+}
+// Stay pinned to the newest message while images and cards finish laying out, unless the owner scrolled up.
+// Our own scrolls are ignored, so a layout change landing in the same frame cannot unpin it.
+let pinned = true, autoTop = -1;
+function toBottom() { pinned = true; log.scrollTop = log.scrollHeight; autoTop = log.scrollTop; }
+log.addEventListener('scroll', () => { if (log.scrollTop !== autoTop) pinned = log.scrollHeight - log.scrollTop - log.clientHeight < 120; });
+new ResizeObserver(() => { if (pinned) toBottom(); }).observe(items);
+
+// ---- what Jarvis did in a turn: one "Worked for" row above the reply, its steps read from the daemon when it first opens ----
+function addFold(f) {
+  const d = document.createElement('div');
+  d.className = 'fold';
+  d.innerHTML = foldHtml(f);
+  append(d);
+}
+async function toggleFold(b) {
+  const open = b.getAttribute('aria-expanded') !== 'true', body = b.nextElementSibling;
+  // What opens grows downward from where the owner is reading, so the view must not jump to the newest line.
+  pinned = false;
+  b.setAttribute('aria-expanded', String(open));
+  body.hidden = !open;
+  if (!open || !b.dataset.fold || body.dataset.loaded) return;
+  body.dataset.loaded = '1';
+  body.textContent = 'Reading…';
+  try {
+    const r = await fetch('/api/fold/' + encodeURIComponent(b.dataset.fold));
+    if (!r.ok) throw new Error(`error ${r.status}`);
+    body.innerHTML = stepsHtml((await r.json()).steps, text => markdown(text, shot));
+  } catch (err) { delete body.dataset.loaded; body.textContent = 'Could not read the steps: ' + err.message; }
+}
+
+// ---- the chat's event lines, folded to one row each. A question's line never shows here: the question is behind the Requests button, its answer a quiet line. ----
+const askData = new Map(), askErrors = new Map();
+const ASK_LINE = /^- \[(question|escalation)\][^\n]*?message_id=(\S+)/;
+function addEvent(text, at) {
+  for (const message of eventMessages(text)) {
+    const m = ASK_LINE.exec(message);
+    if (m && askData.has(m[2])) continue;
+    const d = document.createElement('div');
+    d.className = 'fold';
+    d.innerHTML = messageFoldHtml({ text: message, at }, render);
+    append(d);
+  }
+}
+// One folded row per answer, "You answered" or "Jarvis steered". Each answer once, however many times it is reported.
+const answerLines = new Set();
+function answerLine(key, line) {
+  if (answerLines.has(key) || !line.answer) return;
+  answerLines.add(key);
+  const d = document.createElement('template');
+  d.innerHTML = answerFoldHtml(line, render);
+  append(d.content.firstElementChild);
+}
+// "Handed to a worker": one row per request, its status kept current. Tapping opens the worker.
+const handed = new Map();
+function handedHtml(r) {
+  return `${requestMark(r.status)}<small>Handed to a worker · ${esc(REQ_STATE[r.status] || r.status)}</small><b>${esc(r.title)}</b><span class="ago">${ago(r.startedAt, Date.now())}</span>`;
+}
+function handedRow(r) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'hand';
+  b.innerHTML = handedHtml(r);
+  handed.set(r.id, b);
+  append(b);
+}
+items.addEventListener('click', e => {
+  const fold = e.target.closest('.fold-toggle');
+  if (fold) return toggleFold(fold);
+  const copy = e.target.closest('.msg-copy');
+  if (copy) return copyMessage(copy);
+  const reply = e.target.closest('.msg-reply');
+  if (reply) return startReply(reply.closest('.line'));
+  const quote = e.target.closest('.quote');
+  if (quote) return goToQuote(quote);
+  const speaker = e.target.closest('.msg-speak');
+  if (speaker) return speech.toggle(Number(speaker.dataset.turn), Number(speaker.dataset.clips));
+  const b = e.target.closest('.hand');
+  if (!b) return tapLine(e);
+  if (b.disabled) return;
+  const r = requests.find(x => handed.get(x.id) === b);
+  if (r) openPane(openIdOf(r));
+});
+// A touch screen has no hover: a tap on a message shows its row, and a tap anywhere else in the chat hides it.
+const noHover = matchMedia('(hover: none)');
+function tapLine(e) {
+  if (!noHover.matches || e.target.closest('a, button') || !getSelection().isCollapsed) return;
+  const line = e.target.closest('.line');
+  const was = line?.classList.contains('shown');
+  items.querySelectorAll('.line.shown').forEach(x => x.classList.remove('shown'));
+  if (line && !was) line.classList.add('shown');
+}
+
+// ---- a reply to one message: the reply button under it, or a swipe to the left on a phone ----
+// The strip above the box names the message. Sending (typed or dictated) carries its turn id and clears the strip.
+let replyTo = null;
+function startReply(line) {
+  const id = Number(line?.dataset.turn);
+  if (!id) return;
+  replyTo = { id, role: line.classList.contains('line-owner') ? 'owner' : 'jarvis' };
+  $('reply-who').textContent = quoteWho(replyTo.role);
+  $('reply-line').textContent = quoteSnippet(lineText.get(line)) || 'Message';
+  $('reply-strip').hidden = false;
+  if (bar.dataset.mode === 'voice') $('keys').click(); else t.focus();
+}
+function cancelReply() { replyTo = null; $('reply-strip').hidden = true; }
+$('reply-cancel').onclick = () => { cancelReply(); t.focus(); };
+$('reply-go').onclick = () => replyTo && goToQuote({ dataset: { quote: replyTo.id } });
+t.addEventListener('keydown', e => { if (e.key === 'Escape' && replyTo) { e.preventDefault(); cancelReply(); } });
+// A tap on a quote scrolls to the message it quotes and marks it for a moment.
+function goToQuote(q) {
+  const target = items.querySelector(`.line[data-turn="${Number(q.dataset.quote)}"]`);
+  if (!target) { q.title = 'That message is older than the chat on this page'; return; }
+  pinned = false;
+  target.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  target.classList.remove('flash'); void target.offsetWidth; target.classList.add('flash');
+  clearTimeout(target.flashTimer);
+  target.flashTimer = setTimeout(() => target.classList.remove('flash'), 1600);
+}
+// The swipe. The message follows the finger to the left and a reply arrow fades in behind it. Past the threshold the
+// arrow fills in, and letting go there starts the reply. A short drag, a scroll, a drag to the right or a text selection does nothing.
+let drag = null;
+function endDrag(go) {
+  if (!drag) return;
+  const { line, hint } = drag;
+  drag = null;
+  line.classList.remove('dragging', 'armed');
+  line.style.setProperty('--swipe', '0px');
+  setTimeout(() => { hint?.remove(); if (drag?.line !== line) line.classList.remove('swiping'); }, 200);
+  if (go) startReply(line);
+}
+items.addEventListener('touchstart', e => {
+  endDrag(false);
+  const line = e.touches.length === 1 && e.target.closest('.line[data-turn]');
+  if (!line || e.target.closest(SWIPE_IGNORE) || !getSelection().isCollapsed || popOpen) return;
+  const x = e.touches[0].clientX;
+  if (x > innerWidth - REPLY_SWIPE.edge) return; // the right edge is Safari's forward gesture
+  drag = { line, x, y: e.touches[0].clientY, lock: null, armed: false, hint: null };
+}, { passive: true });
+items.addEventListener('touchmove', e => {
+  if (!drag) return;
+  const dx = e.touches[0].clientX - drag.x, dy = e.touches[0].clientY - drag.y;
+  if (!drag.lock) {
+    drag.lock = replyLock(dx, dy);
+    if (drag.lock === 'none') { drag = null; return; }
+    if (!drag.lock) return;
+    const hint = document.createElement('span');
+    hint.className = 'swipe-hint'; hint.setAttribute('aria-hidden', 'true'); hint.innerHTML = REPLY_ICON;
+    drag.hint = hint;
+    drag.line.append(hint);
+    drag.line.classList.add('swiping', 'dragging');
+  }
+  if (!getSelection().isCollapsed) return endDrag(false);
+  e.preventDefault(); // the drag is sideways now, so the chat must not scroll under it
+  const off = replyOffset(dx), armed = -dx >= REPLY_SWIPE.threshold;
+  drag.line.style.setProperty('--swipe', `${off}px`);
+  drag.hint.style.opacity = String(Math.min(1, -off / REPLY_SWIPE.threshold));
+  if (armed !== drag.armed) { drag.armed = armed; drag.line.classList.toggle('armed', armed); if (armed) navigator.vibrate?.(8); }
+}, { passive: false });
+items.addEventListener('touchend', () => { if (drag?.lock === 'reply') endDrag(drag.armed); else drag = null; }, { passive: true });
+items.addEventListener('touchcancel', () => endDrag(false), { passive: true });
+
+// ---- the Requests popup: one open question or approval, the others behind one line of text ----
+const approvals = new Map(), tapped = new Set(), approvalErrors = new Map();
+const parseArgs = a => { try { return JSON.parse(a.args); } catch { return {}; } };
+const dbTime = t => `${String(t).replace(' ', 'T')}Z`;
+const askMd = text => markdown(text, shot);
+let current = null, othersOpen = false, drawnKey = null, drawnHtml = '';
+/** Open items in the order they arrived, so the first is the one that has waited longest. Asks carry no urgency field. Emails wait behind their own button. */
+function openItems() {
+  const asks = [...askData.values()].filter(a => a.status !== 'answered').map(a => ({ key: `ask:${a.id}`, at: a.at, tag: a.title, line: a.question || a.title, ask: a }));
+  const appr = [...approvals.values()].filter(a => a.status === 'pending' && a.action !== 'gmail-send' && !tapped.has(a.id)).map(a => ({ key: `approval:${a.id}`, at: dbTime(a.created_at), tag: approvalTag(a.action, parseArgs(a)), line: a.say, approval: a }));
+  return [...asks, ...appr].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+function approvalHtml(a, tag, withButtons) {
+  const err = approvalErrors.get(a.id);
+  return `<div class="ask-tag"><div class="ask-title">${esc(tag)}</div><span class="ago">${ago(dbTime(a.created_at), Date.now())}</span></div>`
+    + approvalBodyHtml(a, parseArgs(a))
+    + (withButtons ? approvalPairHtml(a.id, a.action) : '')
+    + (err ? `<div class="outcome"><span class="pill failed">not sent</span>${esc(err)}</div>` : '');
+}
+let reqHad = false, msgHad = false;
+function renderRequests() {
+  const list = openItems();
+  const item = list.find(x => x.key === current) ?? list[0];
+  current = item?.key ?? null;
+  const html = !item ? '<p class="pop-empty">Nothing waits on you.</p>'
+    : item.ask ? `<div class="ask ${esc(item.ask.kind)}" data-ask="${esc(item.ask.id)}">${askCardHtml(item.ask, askMd, askErrors.get(item.ask.id))}</div>`
+    : approvalHtml(item.approval, item.tag, true);
+  const card = $('req-card'), free = $('req-free'), box = $('req-free-text');
+  if (current !== drawnKey || html !== drawnHtml) {
+    card.innerHTML = html;
+    if (current !== drawnKey) {
+      box.value = ''; box.style.height = '';
+      card.classList.remove('rise'); void card.offsetWidth; card.classList.add('rise');
+      $('req-body').scrollTop = 0;
+    }
+    drawnKey = current; drawnHtml = html;
+  }
+  // Only a key answers a terminal menu. Words sent from a box would go to the worker as a message while it sits there.
+  free.hidden = !item?.ask || !!item.ask.prompt;
+  box.disabled = item?.ask?.status === 'sending';
+  const rest = list.filter(x => x !== item);
+  if (!rest.length) othersOpen = false;
+  $('req-pos').textContent = item ? `${list.indexOf(item) + 1} of ${list.length}` : '';
+  $('req-foot').hidden = !rest.length;
+  $('req-more').textContent = rest.length === 1 ? '1 other request' : `${rest.length} other requests`;
+  $('req-more').setAttribute('aria-expanded', String(othersOpen));
+  const others = $('req-others');
+  others.hidden = !othersOpen;
+  others.innerHTML = othersOpen ? rest.map(x => `<button type="button" class="rest" data-item="${esc(x.key)}"><span class="g g-waiting" aria-hidden="true"></span><span class="t"><span class="rest-tag">${esc(x.tag)}</span>${x.line && x.line !== x.tag ? `<span class="rest-line">${esc(x.line)}</span>` : ''}</span><span class="ago">${ago(x.at, Date.now())}</span></button>`).join('') : '';
+  // The last answer closes the popup. A popup opened with nothing in it stays open on its empty line.
+  if (!list.length && reqHad && popOpen === 'requests') setPop(null);
+  reqHad = !!list.length;
+  paintNeedbar();
+  if (pane.id) paneHead();
+}
+const select = key => { current = key; othersOpen = false; renderRequests(); };
+$('req-more').onclick = () => { othersOpen = !othersOpen; renderRequests(); };
+$('req-others').addEventListener('click', e => { const b = e.target.closest('[data-item]'); if (b) select(b.dataset.item); });
+async function answerAsk(id, value) {
+  const card = askData.get(id);
+  if (!card || !value) return;
+  askErrors.delete(id);
+  askUpdate({ ...card, status: 'sending' });
+  try {
+    const r = await fetch('/api/ask/answer', { method: 'POST', body: JSON.stringify({ id, value }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) askErrors.set(id, j.error || `error ${r.status}`);
+    // The card closes when the prompt has gone, so its message goes in the chat.
+    if (!r.ok && j.ask?.status === 'answered') add('event', j.error);
+    askUpdate(j.ask || card);
+  } catch (err) { askErrors.set(id, 'No answer from Jarvis: ' + err.message); askUpdate(card); }
+}
+function askUpdate(card) {
+  const old = askData.get(card.id);
+  askData.set(card.id, card);
+  if (card.status === 'answered' && old?.status !== 'answered' && card.answer) {
+    answerLine(`ask:${card.id}`, { tag: card.title, answer: card.options.find(o => o.value === card.answer)?.label ?? card.answer, at: card.settledAt ?? new Date().toISOString(), by: card.answeredBy });
+  }
+  renderRequests();
+}
+$('req-card').addEventListener('click', e => {
+  const opt = e.target.closest('.ask-opt');
+  if (opt && !opt.disabled) {
+    const id = opt.closest('.ask').dataset.ask, option = askData.get(id)?.options[Number(opt.dataset.i)];
+    if (option?.compose) return $('req-free-text').focus();
+    return answerAsk(id, option?.value);
+  }
+  decideClick(e);
+});
+$('req-free').onsubmit = e => {
+  e.preventDefault();
+  const box = $('req-free-text'), text = box.value.trim(), id = current?.startsWith('ask:') && current.slice(4);
+  if (!text || !id) return box.focus();
+  answerAsk(id, text);
+};
+$('req-free-text').addEventListener('keydown', e => { if (enterSends(e)) { e.preventDefault(); $('req-free').requestSubmit(); } });
+$('req-free-text').addEventListener('input', e => { const b = e.target; b.style.height = 'auto'; b.style.height = b.scrollHeight + 'px'; });
+
+// ---- approvals: decided from the Requests popup or from a worker's pane. The outcome comes back as a quiet line. ----
+function decideClick(e) {
+  const b = e.target.closest('.yes, .no');
+  const id = b && Number(b.closest('[data-approval]').dataset.approval);
+  if (id) decide(id, b.classList.contains('yes'));
+}
+function setApproval(a) {
+  approvals.set(a.id, a);
+  if (a.status !== 'pending' && a.decided_by !== 'automatic') {
+    const outcome = approvalOutcomeText(a);
+    if (outcome) answerLine(`approval:${a.id}`, { tag: approvalTag(a.action, parseArgs(a)), answer: outcome, at: a.decided_at ? dbTime(a.decided_at) : new Date().toISOString(), failed: a.status === 'failed' || a.status === 'unknown' });
+  }
+  paneCard(a);
+  renderRequests();
+}
+async function decide(id, approve) {
+  tapped.add(id);
+  approvalErrors.delete(id);
+  renderRequests(); // the next item takes its place at once; the outcome arrives as a line in the chat
+  paneCard(approvals.get(id));
+  const fail = msg => { tapped.delete(id); approvalErrors.set(id, msg); current = `approval:${id}`; renderRequests(); if (!paneCards.has(id)) setPop('requests'); paneCard(approvals.get(id)); };
+  try {
+    const r = await fetch('/api/approval', { method: 'POST', body: JSON.stringify({ id, approve }) });
+    const j = await r.json().catch(() => ({}));
+    // Already decided elsewhere (another page, a spoken yes): show what the server has instead of an error.
+    if (j.approval && j.approval.status !== 'pending') return setApproval(j.approval);
+    if (!r.ok) return fail(j.error || `error ${r.status}`);
+    setApproval(j);
+  } catch (err) { fail('No answer from Jarvis: ' + err.message); }
+}
+
+// ---- the Messages popup: one open message, the others behind one line of text. Never mixed with the requests. ----
+let messages = [], msgCurrent = null, msgOthersOpen = false, msgDrawnKey = null, msgDrawnHtml = '', msgCopied = null, msgCopiedTimer;
+const msgSending = new Set(), msgErrors = new Map(), msgEdits = new Map();
+const openMessages = () => messages.filter(m => !msgSending.has(m.id));
+function renderMessages() {
+  const list = openMessages();
+  const m = list.find(x => x.id === msgCurrent) ?? list[0];
+  msgCurrent = m?.id ?? null;
+  const html = m ? messageHeadHtml(m, Date.now(), msgErrors.get(m.id)) : '<p class="pop-empty">No message waits on you.</p>';
+  for (const el of [$('msg-body').querySelector('.draft'), $('msg-body').querySelector('.pair')]) el.hidden = !m;
+  if (!m) $('msg-open').hidden = true;
+  const card = $('msg-card'), box = $('msg-draft');
+  if (msgCurrent !== msgDrawnKey || html !== msgDrawnHtml) {
+    card.innerHTML = html;
+    if (msgCurrent !== msgDrawnKey) { card.classList.remove('rise'); void card.offsetWidth; card.classList.add('rise'); $('msg-body').scrollTop = 0; }
+  }
+  // What the owner typed stays. An untouched box follows the newest draft, which may be a reply Jarvis just proposed.
+  if (m && (msgCurrent !== msgDrawnKey || !msgEdits.has(m.id))) { box.value = msgEdits.get(m.id) ?? m.draft; fitDraft(); }
+  msgDrawnKey = msgCurrent; msgDrawnHtml = html;
+  if (m) {
+    $('msg-open').href = m.openUrl; $('msg-open').textContent = m.openLabel; $('msg-open').hidden = !m.openUrl;
+    const c = messageControls(m, msgCopied === m.id);
+    $('msg-draft-label').textContent = c.draft; $('msg-send').textContent = c.send; $('msg-handled').textContent = c.handled;
+  }
+  const rest = list.filter(x => x !== m);
+  if (!rest.length) msgOthersOpen = false;
+  $('msg-pos').textContent = m ? `${list.indexOf(m) + 1} of ${list.length}` : '';
+  $('msg-foot').hidden = !rest.length;
+  $('msg-more').textContent = otherMessagesLabel(rest.length);
+  $('msg-more').setAttribute('aria-expanded', String(msgOthersOpen));
+  const others = $('msg-others');
+  others.hidden = !msgOthersOpen;
+  others.innerHTML = msgOthersOpen ? rest.map(x => `<button type="button" class="rest" data-msg="${esc(x.id)}"><span class="g g-waiting" aria-hidden="true"></span><span class="t">${esc(x.label)}: ${esc(x.subject || x.from)}</span><span class="ago">${ago(x.at, Date.now())}</span></button>`).join('') : '';
+  if (!list.length && msgHad && popOpen === 'messages') setPop(null);
+  msgHad = !!list.length;
+  paintNeedbar();
+}
+function fitDraft() { const b = $('msg-draft'); b.style.height = 'auto'; b.style.height = b.scrollHeight + 2 + 'px'; }
+function showMessages(list) {
+  messages = list;
+  for (const id of [...msgEdits.keys()]) if (!list.some(m => m.id === id) && !msgSending.has(id)) msgEdits.delete(id);
+  renderMessages();
+}
+const selectMessage = id => { msgCurrent = id; msgOthersOpen = false; renderMessages(); };
+$('msg-more').onclick = () => { msgOthersOpen = !msgOthersOpen; renderMessages(); };
+$('msg-others').addEventListener('click', e => { const b = e.target.closest('[data-msg]'); if (b) selectMessage(b.dataset.msg); });
+$('msg-draft').addEventListener('input', () => { if (msgCurrent) msgEdits.set(msgCurrent, $('msg-draft').value); fitDraft(); });
+// Like Approve, a press moves on at once. A failure brings the email back with its error and with what the owner wrote.
+async function messageAction(path, body, onDone) {
+  const id = body.id;
+  msgSending.add(id);
+  msgErrors.delete(id);
+  renderMessages();
+  const fail = msg => { msgSending.delete(id); msgErrors.set(id, msg); msgDrawnHtml = ''; selectMessage(id); setPop('messages'); };
+  try {
+    const r = await fetch(path, { method: 'POST', body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (j.messages) messages = j.messages;
+    if (!r.ok) return fail(j.error || `error ${r.status}`);
+    msgSending.delete(id);
+    msgEdits.delete(id);
+    onDone?.();
+    renderMessages();
+  } catch (err) { fail('No answer from Jarvis: ' + err.message); }
+}
+// A message the owner sends himself: the words in the box go to the clipboard, and the card stays until Done.
+async function copyDraft(id, text) {
+  msgErrors.delete(id);
+  try {
+    await navigator.clipboard.writeText(text);
+    msgCopied = id;
+    clearTimeout(msgCopiedTimer);
+    msgCopiedTimer = setTimeout(() => { msgCopied = null; renderMessages(); }, 1500);
+  } catch {
+    $('msg-draft').select();
+    msgErrors.set(id, 'Could not copy. The words are selected, so copy them by hand.');
+  }
+  renderMessages();
+}
+$('msg-send').onclick = () => {
+  const box = $('msg-draft'), text = box.value.trim();
+  if (!msgCurrent) return;
+  if (!text) return box.focus();
+  if (messages.find(x => x.id === msgCurrent)?.copyOnly) return copyDraft(msgCurrent, text);
+  msgEdits.set(msgCurrent, box.value);
+  messageAction('/api/message/send', { id: msgCurrent, text });
+};
+$('msg-handled').onclick = () => {
+  const m = messages.find(x => x.id === msgCurrent);
+  if (m) messageAction('/api/message/handled', { id: m.id }, () => answerLine(`handled:${m.id}`, m.copyOnly ? { tag: `Message to ${m.from}`, answer: 'Done', at: new Date().toISOString() } : { tag: `${m.label} from ${m.from}`, answer: 'You will handle it', at: new Date().toISOString() }));
+};
+
+// ---- the buttons (option H of the top area). All four are always there, so they never move; a count shows only above zero. ----
+const POPS = { requests: { el: $('pop-requests'), btn: $('req-btn') }, messages: { el: $('pop-messages'), btn: $('msg-btn') }, today: { el: $('pop-today'), btn: $('today-btn') }, migration: { el: $('pop-migration'), btn: $('mig-btn') } };
+let popOpen = null;
+function paintCount(btn, n, aria) {
+  const em = btn.querySelector('em');
+  em.textContent = n;
+  em.hidden = !n;
+  btn.classList.toggle('has-count', !!n);
+  btn.setAttribute('aria-label', aria);
+}
+function paintToday() {
+  const b = todayButton(today.current());
+  paintCount($('today-btn'), b.count, b.aria);
+}
+// Migration (temporary, docs/migration/README.md): the Leads button counts To contact only. The meeting toast shows on the
+// meeting's Eastern day. Its x closes it for that meeting on every page: the daemon keeps the closed keys with the migration data.
+let toastClosing = null;
+function paintMigration() {
+  const b = migrationButton(migration.current());
+  paintCount($('mig-btn'), b.count, b.aria);
+  paintToast();
+}
+function paintToast() {
+  const t = meetingToast(migration.current(), [...migration.toastClosed(), toastClosing].filter(Boolean)), el = $('mtoast');
+  el.hidden = !t;
+  if (!t) return;
+  Object.assign(el.dataset, { id: t.id, at: t.meetingAt });
+  el.setAttribute('aria-label', t.aria);
+  el.querySelector('.mt-who').innerHTML = `${esc(t.first)}<span class="mt-shop">${esc(t.who.slice(t.first.length))}</span>`;
+  el.querySelector('.mt-at').textContent = t.at;
+}
+// "in 50 min" counts down without a change on the list.
+setInterval(paintMigration, 60_000);
+$('mtoast-x').onclick = async () => {
+  // Read the meeting before the repaint: hiding it can paint the next meeting of the day into the same toast.
+  const { id, at } = $('mtoast').dataset;
+  toastClosing = `${id}|${at}`;
+  paintToast();
+  try { await migration.closeToast(Number(id), at); }
+  catch (err) { add('event', `Meeting reminder not closed: ${err.message}`); }
+  toastClosing = null;
+  paintToast();
+};
+function paintNeedbar() {
+  const n = openItems().length, b = messageButton(openMessages()), msg = $('msg-btn');
+  paintCount($('req-btn'), n, n ? `Requests, ${n} open` : 'Requests, nothing open');
+  paintCount(msg, b?.count ?? 0, b?.aria ?? 'Messages, nothing open');
+  msg.classList.toggle('need-urgent', !!b?.urgent);
+  paintToday();
+}
+function setPop(next) {
+  const was = popOpen;
+  if (next === was) return;
+  popOpen = next;
+  document.body.classList.toggle('pop-open', !!next);
+  $('needbar').classList.toggle('any-open', !!next);
+  for (const [name, p] of Object.entries(POPS)) {
+    p.el.hidden = name !== next;
+    p.btn.setAttribute('aria-expanded', String(name === next));
+    p.btn.classList.toggle('is-open', name === next);
+  }
+  // Tab stays in the buttons and the popup while the page behind them is dimmed.
+  for (const el of [$('work'), $('chat'), $('pane'), $('doneline'), $('mtoast'), document.querySelector('.h-left'), document.querySelector('.c-head .tools')]) el.inert = !!next;
+  if (next) {
+    panel(false); showMenu(false);
+    if (next === 'messages') fitDraft();
+    POPS[next].el.focus({ preventScroll: true });
+    if (next === 'today') today.focus();
+    if (next === 'migration') migration.show();
+    return;
+  }
+  if (was === 'today') today.closed();
+  if (was === 'migration') migration.closed();
+  othersOpen = false; msgOthersOpen = false;
+  renderRequests(); renderMessages();
+  const back = was && POPS[was].btn;
+  if (back && !back.hidden && !noHover.matches) back.focus({ preventScroll: true });
+}
+const togglePop = name => setPop(popOpen === name ? null : name);
+$('req-btn').onclick = () => togglePop('requests');
+$('msg-btn').onclick = () => togglePop('messages');
+$('today-btn').onclick = () => togglePop('today');
+$('mig-btn').onclick = () => togglePop('migration');
+const migration = makeMigrationPop({ $, fetch: (...a) => window.fetch(...a), paint: paintMigration });
+const today = makeTodayPop({
+  $, fetch: (...a) => window.fetch(...a), paint: paintToday, closePop: () => setPop(null),
+  holdMic: on => { holding = on; if (on) bargeIn(); },
+  // The request's listed conversation if it has one, else what Jarvis recorded about it.
+  openConversation: id => { const r = requests.find(x => x.id === id); setPop(null); openPane(r ? openIdOf(r) : `req:${id}`); },
+});
+for (const b of document.querySelectorAll('.pop-close')) b.onclick = () => setPop(null);
+const typing = el => el?.matches?.('input, textarea, select, [contenteditable]');
+const modelPicker = makeModelPicker({
+  pill: $('model-pill'), sheet: $('model-sheet'), body: $('model-body'), err: $('model-err'), closeBtn: $('model-close'),
+  post: next => fetch('/api/brain/model', { method: 'POST', body: JSON.stringify(next) }),
+});
+const overlayOpen = () => modelPicker.isOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('shell').hidden || !$('newpick').hidden || !$('menu').hidden;
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (viewer.classList.contains('open')) return viewer.onclick();
+    if (modelPicker.isOpen) return modelPicker.open(false);
+    if (!$('shell').hidden) { $('shell').hidden = true; return; }
+    if (!$('audit').hidden) return closeAudit();
+    if (!$('newpick').hidden) return showPick(false);
+    if (!$('menu').hidden) { showMenu(false); return moreBtn.focus(); }
+    if (popOpen) return setPop(null);
+    if (document.body.classList.contains('panel-open')) return panel(false);
+    if (report.id) return $('pane-back').click();
+    if (pane.id) return closePane();
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey || typing(e.target) || overlayOpen()) return;
+  if (e.key === 'n' || e.key === 'N') {
+    const first = openItems()[0];
+    if (first) { e.preventDefault(); select(first.key); setPop('requests'); }
+  } else if (e.key === 'm' || e.key === 'M') {
+    if (openMessages().length) { e.preventDefault(); setPop('messages'); }
+  } else if (e.key === 't' || e.key === 'T') {
+    e.preventDefault(); setPop('today');
+  } else if (popOpen === 'requests' && /^[1-9]$/.test(e.key)) {
+    const opt = $('req-card').querySelector(`.ask-opt[data-i="${Number(e.key) - 1}"]`);
+    if (opt && !opt.disabled && matchMedia('(min-width: 780px)').matches) { e.preventDefault(); opt.click(); }
+  }
+});
+
+// ---- the shell pane: a real shell on the Mac, the owner's phone only. The daemon refuses every other device (access.ts). ----
+const shellEl = $('shell'), shellOut = $('shell-out'), shellText = $('shell-text'), shellEnded = $('shell-ended');
+let shellScreen = makeScreen(), shellAt = 0, shellStream = null, shellOver = false;
+function shellDraw() {
+  const bottom = shellOut.scrollHeight - shellOut.scrollTop - shellOut.clientHeight < 40;
+  shellOut.textContent = screenText(shellScreen);
+  if (bottom) shellOut.scrollTop = shellOut.scrollHeight;
+}
+function shellEnd(text) {
+  shellOver = true;
+  shellEnded.textContent = text;
+  shellEnded.hidden = false;
+  $('shell-form').hidden = true;
+  $('shell-close').textContent = 'Start a new shell';
+}
+async function shellPost(path, body) {
+  const r = await fetch(`/api/shell/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+  if (r.ok) return r;
+  const { error } = await r.json().catch(() => ({}));
+  throw new Error(error || `The shell answered ${r.status}.`);
+}
+// Output streams on its own request, never through /api/events. A dropped connection (phone locked, app switched) comes back from where it stopped.
+async function shellFollow() {
+  if (shellStream) return;
+  const stop = shellStream = new AbortController();
+  try {
+    while (!shellOver && shellStream === stop) {
+      const r = await rawFetch(`/api/shell/stream?from=${shellAt}`, { signal: stop.signal, headers: { 'x-jarvis-session': uiSession } });
+      if (!r.ok) {
+        const { error } = await r.json().catch(() => ({}));
+        if (r.status === 403 && !/no open app page/.test(error || '')) return shellEnd(error);
+        await new Promise(done => setTimeout(done, 2000));
+        continue;
+      }
+      const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+      let held = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const lines = (held + value).split('\n');
+        held = lines.pop();
+        for (const line of lines) {
+          const e = line ? JSON.parse(line) : {};
+          if (e.out) { feedScreen(shellScreen, e.out); shellAt = e.at; }
+          if (e.ended) shellEnd(e.ended);
+        }
+        shellDraw();
+      }
+      if (!shellOver) await new Promise(done => setTimeout(done, 1000));
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError' && !shellOver) { shellStream = null; await new Promise(done => setTimeout(done, 2000)); return shellFollow(); }
+  } finally { if (shellStream === stop) shellStream = null; }
+}
+async function shellStart() {
+  shellOver = false;
+  shellEnded.hidden = true;
+  $('shell-form').hidden = false;
+  $('shell-close').textContent = 'Close';
+  try {
+    const { started } = await (await shellPost('open')).json();
+    if (started) { shellScreen = makeScreen(); shellAt = 0; shellOut.textContent = ''; }
+    shellFollow();
+    shellText.focus();
+  } catch (err) { shellEnd(err.message); $('shell-close').hidden = true; }
+}
+$('shellbtn').onclick = () => { showMenu(false); shellEl.hidden = false; $('shell-close').hidden = false; shellStart(); };
+$('shell-hide').onclick = () => { shellEl.hidden = true; };
+$('shell-close').onclick = async () => {
+  if (shellOver) return shellStart();
+  try { await shellPost('close'); } catch (err) { shellEnd(err.message); return; }
+  shellEl.hidden = true;
+};
+$('shell-ctrlc').onclick = () => shellPost('interrupt').catch(err => shellEnd(err.message));
+$('shell-form').onsubmit = async e => {
+  e.preventDefault();
+  const text = shellText.value;
+  if (!text.trim()) return;
+  try { await shellPost('input', { text }); shellText.value = ''; shellOut.scrollTop = shellOut.scrollHeight; }
+  catch (err) { shellEnded.textContent = err.message; shellEnded.hidden = false; }
+};
+// Enter is a line break on a phone, so a pasted block stays whole until Run.
+shellText.addEventListener('keydown', e => { if (enterSends(e)) { e.preventDefault(); $('shell-form').requestSubmit(); } });
+
+// ---- audit log: answered questions and decided approvals, read from the store when the panel opens ----
+const auditEl = $('audit'), auditBody = $('audit-body');
+const closeAudit = () => { auditEl.hidden = true; };
+$('audit-close').onclick = closeAudit;
+$('auditbtn').onclick = async () => {
+  showMenu(false);
+  auditBody.innerHTML = '<p class="audit-empty">Reading…</p>';
+  auditEl.hidden = false;
+  try {
+    const r = await fetch('/api/audit');
+    if (!r.ok) throw new Error(`error ${r.status}`);
+    const list = await r.json();
+    auditBody.innerHTML = list.length ? list.map(x => `<div class="audit-row"><div class="audit-top"><span>${esc(x.tag)}</span><span class="ago">${ago(x.at, Date.now())}</span></div><div class="audit-q">${esc(x.question)}</div><div class="audit-a${x.failed ? ' failed' : ''}">${x.by === 'jarvis' ? 'Jarvis steered: ' : ''}${esc(x.answer)}</div></div>`).join('')
+      : '<p class="audit-empty">Nothing answered yet.</p>';
+  } catch (err) { auditBody.innerHTML = `<p class="audit-empty">Could not read the log: ${esc(err.message)}</p>`; }
+};
+
+// ---- audio ----
+let soundOn = localStorage.getItem('sound') !== 'off';
+const player = new Audio();
+// The speaker buttons and voice mode play through this one controller (web/speech.js).
+const speech = makeSpeech({ audio: player, clipUrl: (turn, i) => `/api/speech/${turn}/${i}`, warm: url => rawFetch(url).catch(() => {}), onChange: paintSpeakers });
+function paintSpeakers() {
+  for (const b of items.querySelectorAll('.msg-speak')) {
+    const state = speech.state(Number(b.dataset.turn));
+    if (b.dataset.state === state) continue;
+    b.dataset.state = state; b.innerHTML = SPEAK[state].html; b.title = SPEAK[state].title; b.setAttribute('aria-label', SPEAK[state].title);
+  }
+}
+let lastAudioTurn = null, lastAudioTotal = 0, lastAudioAt = 0;
+let hands = null; // the open hands-free mic, see below
+function showSound() { soundBtn.lastChild.textContent = soundOn ? 'On' : 'Off'; soundBtn.setAttribute('aria-pressed', String(soundOn)); }
+soundBtn.onclick = () => { soundOn = !soundOn; localStorage.setItem('sound', soundOn ? 'on' : 'off'); if (!soundOn) speech.hush(); else unlock(); showSound(); };
+showSound();
+// The menu stays open while the owner flips Alerts or Sound; a tap outside it or Escape closes it.
+const menu = $('menu'), moreBtn = $('morebtn');
+const showMenu = open => { menu.hidden = !open; moreBtn.setAttribute('aria-expanded', String(open)); };
+moreBtn.onclick = () => showMenu(menu.hidden);
+document.addEventListener('click', e => { if (!menu.hidden && !e.target.closest('#more')) showMenu(false); });
+// Mobile browsers only allow playback after a gesture; a silent play on the first tap unlocks it.
+let unlocked = false;
+function unlock() { if (unlocked) return; unlocked = true; if (speech.active()) return; player.src = 'data:audio/mp4;base64,'; player.play().catch(() => {}); }
+document.addEventListener('pointerdown', unlock, { once: true });
+
+// ---- events ----
+function connect() {
+  const es = new EventSource('/api/events');
+  const show = (state, text) => {
+    status.dataset.state = state; status.title = text; status.firstChild.textContent = text;
+    document.body.dataset.conn = state;
+    document.querySelector('.c-head .conn').title = text;
+  };
+  es.onopen = () => show('online', 'online');
+  es.onerror = () => show('reconnecting', 'reconnecting…');
+  es.onmessage = m => {
+    const e = JSON.parse(m.data);
+    if (e.type === 'history') showHistory(e);
+    else if (e.type === 'turn') add(e.role, e.text, e.at, { id: e.turnId, clips: e.clips }, e.quote);
+    else if (e.type === 'event') { (e.asks || []).forEach(a => askData.set(a.id, a)); add('event', e.text, e.at); renderRequests(); }
+    else if (e.type === 'ask') askUpdate(e.ask);
+    else if (e.type === 'working') $('chat-working').hidden = !e.on;
+    else if (e.type === 'fold') addFold(e);
+    else if (e.type === 'approval') setApproval(e.approval);
+    else if (e.type === 'pane') { if (e.id === pane.id) { clearTimeout(pane.timer); pane.timer = setTimeout(() => readPane(pane.gen, false), 0); } } // the open native session's transcript changed
+    else if (e.type === 'work') showWork(e.work);
+    else if (e.type === 'hidden') { hidden = new Set(e.hidden); showWork(work); }
+    else if (e.type === 'requests') showRequests(e.requests);
+    else if (e.type === 'messages') showMessages(e.messages);
+    else if (e.type === 'today') today.show(e.today);
+    else if (e.type === 'migration') migration.show(e.migration);
+    else if (e.type === 'brain') modelPicker.show(e.brain);
+    else if (e.type === 'audio') {
+      lastAudioTurn = e.turnId; lastAudioTotal = e.total; lastAudioAt = Date.now();
+      if (soundOn) speech.live(e.turnId, e.total, e.i);
+    }
+  };
+}
+function showHistory(e) {
+  uiSession = e.session || '';
+  today.show(e.today || []);
+  migration.show(e.migration || { people: [], dealers: [] });
+  modelPicker.show(e.brain);
+  $('chat-working').hidden = !e.busy;
+  items.innerHTML = '';
+  askData.clear(); askErrors.clear(); approvals.clear(); tapped.clear(); approvalErrors.clear();
+  answerLines.clear(); handed.clear();
+  (e.asks || []).forEach(a => askData.set(a.id, a));
+  e.approvals.forEach(a => approvals.set(a.id, a));
+  if (e.hidden) hidden = new Set(e.hidden);
+  if (e.work) showWork(e.work);
+  // The conversation in time order: what was said, the workers handed off and the answers given.
+  // Handed rows and answer lines older than the first line of history are skipped.
+  const lines = e.turns.map(x => ({ at: Date.parse(dbTime(x.created_at)), draw: () => x.role === 'jarvis-work' ? addFold({ id: x.id, ms: x.ms, at: dbTime(x.created_at) }) : add(x.role, x.text, dbTime(x.created_at), { id: x.id, clips: x.clips }, x.quote) }));
+  const first = lines.length ? lines[0].at : 0;
+  for (const r of e.requests || []) lines.push({ at: Date.parse(r.startedAt), draw: () => handedRow(r) });
+  for (const x of e.audit || []) lines.push({ at: Date.parse(x.at), draw: () => answerLine(x.key, x) });
+  drawingHistory = true;
+  lines.filter(l => l.at >= first).sort((a, b) => a.at - b.at).forEach(l => l.draw());
+  drawingHistory = false;
+  paintSpeakers();
+  // Answers and handoffs from before the first line stay off the page, but must not come back as new lines.
+  (e.audit || []).forEach(x => answerLines.add(x.key));
+  requests = e.requests || requests;
+  (e.requests || []).forEach(r => handedSeen.add(r.id));
+  if (e.requests) showRequests(e.requests);
+  renderRequests();
+  showMessages(e.messages || []);
+  (e.approvals || []).forEach(paneCard);
+  toBottom();
+  if (wantItem) showItem(wantItem);
+}
+
+// ---- the work list: conversations and requests merged into one list (the rules are in web/worklist.js) ----
+const onMac = matchMedia('(pointer: fine)').matches;
+const worklist = $('worklist'), railbtn = $('railbtn');
+const STATE = { waiting: 'Waiting on you', idle: 'Idle', working: 'Working', exited: 'Exited' };
+let work = { rows: [], done: [] };
+let requests = [];
+const handedSeen = new Set();
+// Rows the owner hid. The daemon keeps the ids; hiding never stops or deletes anything in Orca.
+let hidden = new Set(), showHidden = false;
+const readSet = k => { try { return new Set(JSON.parse(localStorage.getItem(k) || '[]')); } catch { return new Set(); } };
+const shutGroups = readSet('workGroupsShut');
+// A group closed by hand while something in it waits. Forgotten once nothing waits there.
+const closedWaiting = new Set();
+const reqFolders = { review: false, done: false, prs: new Set() }; // both folders and every PR row start closed on each page load
+const doneOpen = new Set(); // the groups whose Done fold the owner opened; every Done fold starts closed on each page load
+function togglePr(pr) { reqFolders.prs.has(pr) ? reqFolders.prs.delete(pr) : reqFolders.prs.add(pr); renderWork(); }
+function renderWork() {
+  const seen = work.rows.filter(r => !hidden.has(r.id));
+  const waiting = seen.filter(r => r.state === 'waiting').length;
+  const working = seen.filter(r => r.state === 'working').length;
+  $('workcount').textContent = working ? `${working} working` : '';
+  railbtn.setAttribute('aria-label', seen.length ? `Work list, ${seen.length}${waiting ? `, ${waiting} waiting on you` : ''}` : 'Work list');
+  railbtn.toggleAttribute('data-busy', waiting > 0);
+  $('workerr').hidden = !work.error;
+  $('workerr').textContent = work.error ? `${work.error}. Showing the last list.` : '';
+  const merged = mergeWork(work.rows, requests, hidden, showHidden);
+  lastMerged = merged;
+  worklist.innerHTML = workListHtml(merged, { hidden, shut: shutGroups, closedWaiting, folders: reqFolders, reading: term ? `t:${term.name}` : pane.id, now: Date.now(), doneOpen })
+    + (merged.hiddenCount ? `<button type="button" class="showhidden" data-showhidden>${showHidden ? 'Leave out' : 'Show'} ${merged.hiddenCount} hidden</button>` : '');
+  $('doneinfo').textContent = doneLine(requests, Date.now());
+  $('tojarvis').classList.toggle('here', !pane.id && !report.id);
+}
+let lastMerged = null;
+function showWork(w) {
+  work = w;
+  renderWork();
+  showDone();
+  if (pane.id) paneHead();
+  if (term) termHead();
+}
+function showRequests(list) {
+  requests = list || requests;
+  for (const r of requests) {
+    if (!handedSeen.has(r.id)) { handedSeen.add(r.id); handedRow(r); continue; }
+    const b = handed.get(r.id);
+    if (b) b.innerHTML = handedHtml(r);
+  }
+  renderWork();
+}
+setInterval(() => { showRequests(); drawnHtml = ''; renderRequests(); renderMessages(); }, 60_000); // keeps the ages current
+function toggleGroup(g) {
+  const group = lastMerged?.groups.find(x => x.key === g);
+  const open = group && groupOpen(group, shutGroups, closedWaiting);
+  if (open) { shutGroups.add(g); if (group.waiting) closedWaiting.add(g); }
+  else { shutGroups.delete(g); closedWaiting.delete(g); }
+  try { localStorage.setItem('workGroupsShut', JSON.stringify([...shutGroups])); } catch {}
+  renderWork();
+}
+async function hideWorkRow(id, hide) {
+  hide ? hidden.add(id) : hidden.delete(id);
+  renderWork();
+  const r = await fetch('/api/work/hide', { method: 'POST', body: JSON.stringify({ id, hidden: hide }) }).catch(() => null);
+  if (!r?.ok) { hide ? hidden.delete(id) : hidden.add(id); renderWork(); add('event', 'Hide: not saved, try again.'); }
+}
+async function hideRequest(id) {
+  const r = await fetch('/api/requests/hide', { method: 'POST', body: JSON.stringify({ id: Number(id) }) }).catch(() => null);
+  if (!r?.ok) add('event', 'Hide: ' + ((await r?.json().catch(() => ({})))?.error || r?.status || 'no answer from Jarvis'));
+}
+function openRow(id) { if (String(id).startsWith('t:')) openTerm({ name: id.slice(2) }); else openPane(id); panel(false); }
+worklist.addEventListener('click', async e => {
+  if (e.target.closest('a')) return;
+  const g = e.target.closest('.group[data-group]');
+  if (g) return toggleGroup(g.dataset.group);
+  const d = e.target.closest('.dfold[data-done-fold]');
+  if (d) { const k = d.dataset.doneFold; doneOpen.has(k) ? doneOpen.delete(k) : doneOpen.add(k); return renderWork(); }
+  const f = e.target.closest('.folder');
+  if (f) { reqFolders[f.dataset.folder] = f.getAttribute('aria-expanded') !== 'true'; return renderWork(); }
+  const p = e.target.closest('[data-pr]');
+  if (p) return togglePr(p.dataset.pr);
+  const b = e.target.closest('button');
+  if (!b) { const w = e.target.closest('[data-id], [data-row]'); if (w) openRow(w.dataset.id ?? w.dataset.row); return; }
+  if (b.dataset.close) {
+    b.disabled = true;
+    try {
+      const r = await fetch('/api/work/close', { method: 'POST', body: JSON.stringify({ dispatch: b.dataset.close }) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); add('event', 'Close: ' + (j.error || j.result || r.status)); }
+    } finally { b.disabled = false; }
+    return;
+  }
+  if (b.classList.contains('hide')) {
+    // A merged row is one thing to the owner: Hide takes the conversation and the request off together.
+    const { hideRow, hide } = b.dataset, unhide = 'unhide' in b.dataset;
+    b.disabled = true;
+    if (hideRow) await hideWorkRow(hideRow, !unhide);
+    if (hide && !unhide) await hideRequest(hide);
+    return;
+  }
+  if ('showhidden' in b.dataset) { showHidden = !showHidden; return renderWork(); }
+});
+worklist.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-pr]')) { e.preventDefault(); return togglePr(e.target.dataset.pr); }
+  const w = (e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-id], [data-row]') && e.target;
+  if (w) { e.preventDefault(); openRow(w.dataset.id ?? w.dataset.row); }
+});
+
+// ---- an open worker: replaces the conversation in the center, polled about every 3 s from the cursor the daemon returns ----
+const paneEl = $('pane'), paneLines = $('pane-lines'), paneLog = $('pane-log');
+const report = { id: null, gen: 0, fromApp: false, drawer: false }; // the report page, further down
+const pane = { id: null, cursor: null, timer: 0, gen: 0, error: '', warning: '', busy: false };
+const PANE_MAX = 400;
+function openPane(id) {
+  closeTerm();
+  closePane();
+  Object.assign(pane, { id, cursor: null, error: '', warning: '', busy: false, gen: pane.gen + 1, record: id.startsWith('req:'), detail: null });
+  paneLines.innerHTML = '<div class="empty">Reading…</div>';
+  paneEl.hidden = false;
+  document.body.classList.add('pane-open');
+  paneHead();
+  renderWork();
+  readPane(pane.gen, true);
+}
+function closePane() {
+  if (report.id) { hideReport(); history.replaceState(null, '', location.pathname + location.search); }
+  clearTimeout(pane.timer);
+  paneCards.clear();
+  $('steer-cards').innerHTML = '';
+  $('steer-text').value = '';
+  pane.id = null; pane.gen++;
+  paneEl.hidden = true;
+  document.body.classList.remove('pane-open');
+  renderWork();
+  if (pinned) toBottom();
+}
+function paneHead() {
+  const r = work.rows.find(x => x.id === pane.id);
+  if (r) $('pane-title').textContent = r.title;
+  if (pane.detail) $('pane-title').textContent = pane.detail.title;
+  const native = r?.native; // a background Claude Code session (daemon/native.ts), not an Orca worker
+  const bits = r ? [r.label, r.pr, r.state === 'idle' && r.note ? r.note : STATE[r.state], r.worktree].filter(Boolean).map(esc) : pane.record ? ['Read-only'] : ['Not in the work list any more'];
+  // A question shows above the steer box instead; any other note (a prompt in Orca) stays here.
+  if (r && r.note && r.state !== 'idle' && !(r.steer === 'auto' && r.state === 'waiting')) bits.push(esc(r.note));
+  // A native worker also says what claude reports: its state, and what it waits for.
+  if (native) bits.push(...[native.state, native.waitingFor].filter(Boolean).map(esc));
+  $('pane-sub').innerHTML = bits.map(b => `<span>${b}</span>`).join('') + (pane.error ? `<span class="err">${esc(pane.error)}</span>` : '');
+  const stopBtn = $('pane-stop');
+  stopBtn.hidden = !r || r.kind !== 'worker' || r.state === 'exited';
+  $('pane-stop-label').textContent = r?.sideChat ? 'Close' : 'Stop';
+  // Open (`claude attach`) cannot reach an interactive session's own terminal; Desktop can take it over.
+  const interactive = native?.kind === 'interactive';
+  $('pane-open').hidden = !(onMac && (r?.terminal || (native && !interactive)));
+  $('pane-open').title = $('pane-open').ariaLabel = native ? 'Open in Terminal' : 'Open in Orca';
+  $('pane-desktop').hidden = !(onMac && native);
+  // The message box: straight to the session, except another Run's chat-tab worker, which needs an Approve card.
+  const steer = r ? r.steer : 'none';
+  $('steer-row').hidden = steer === 'none';
+  $('steer-text').placeholder = steer === 'card' ? 'Message (needs Approve)' : r?.state === 'waiting' && r.note && !native ? 'Answer it' : native ? 'Message' : 'Steer this session';
+  // A native worker's pending permission card shows inside the pane too, with its Allow and Deny.
+  const pc = native && permissionCard(r);
+  if (pc?.approval) { paneCards.add(pc.approval.id); paneCard(pc.approval); }
+  $('steer-hint').innerHTML = !r ? ''
+    : pane.warning ? esc(pane.warning)
+    : native?.state === 'blocked' ? 'Waiting on a permission prompt. Answer it on the card.'
+    : native?.waitingFor === 'Open in the Claude desktop app' ? 'This session is open in the Claude desktop app. A message here takes it back into Jarvis.'
+    : native?.waitingFor === 'Idle, resumes on a message' ? 'Idle for an hour, so its process was ended. A message here resumes it.'
+    : (steer === 'auto' || steer === 'type') && r.state === 'waiting' && r.note && r.note !== 'Waiting at a prompt in Orca' ? `<b>Asks:</b> ${esc(r.note)}`
+    : r.note === 'Waiting at a prompt in Orca' && steer !== 'none' ? 'It is showing a permission prompt. Send the option number to answer it.'
+    : steer === 'card' ? 'Goes out only after you tap Approve on the card.'
+    : steer === 'none' ? 'This worker has exited.' : '';
+  $('pane-working').hidden = !(pane.busy || r?.state === 'working');
+  // Waiting on the owner, with a question to answer: a tinted line links to it. A native worker waits on its permission card.
+  const waitAsk = r?.state === 'waiting' && r.dispatch ? openItems().find(x => x.ask?.dispatch === r.dispatch) ?? (native && permissionCard(r)) : undefined;
+  $('wait-box').hidden = !waitAsk;
+  $('wait-box').firstElementChild.textContent = waitAsk?.approval ? 'This worker is waiting on a permission prompt' : 'This session is waiting on you';
+  $('wait-open').textContent = waitAsk?.approval ? 'Open the card' : 'Open the question';
+  $('wait-open').onclick = () => { if (waitAsk) { select(waitAsk.key); setPop('requests'); } };
+}
+/** The pending permission card of a native worker's row. native.ts stores the worker's short id in args.worker. */
+function permissionCard(r) {
+  return openItems().find(x => x.approval?.action === 'worker-permission' && [r.id, r.native.id].includes(parseArgs(x.approval).worker));
+}
+// Cards the steer box or Stop proposed, shown in the pane too so the owner can approve without leaving it.
+const paneCards = new Set();
+function paneCard(a) {
+  if (!a || !paneCards.has(a.id)) return;
+  let el = $('steer-cards').querySelector(`[data-pane-card="${a.id}"]`);
+  if (!el) { el = document.createElement('div'); el.className = 'approval'; el.dataset.paneCard = a.id; $('steer-cards').appendChild(el); }
+  // Once tapped, a card never shows its buttons again: "Working…" until the result, then the result or the failure.
+  const open = a.status === 'pending' && !tapped.has(a.id);
+  el.innerHTML = approvalHtml(a, approvalTag(a.action, parseArgs(a)), open)
+    + (open ? '' : a.status === 'pending' || a.status === 'approved' ? '<div class="outcome working">Working…</div>'
+      : `<div class="outcome"><span class="pill ${esc(a.status)}">${esc(a.status)}</span>${a.decided_by ? 'by ' + esc(a.decided_by) : ''}${a.result ? ': ' + esc(a.result) : ''}</div>`);
+}
+$('steer-cards').addEventListener('click', decideClick);
+async function workPost(path, body) {
+  const r = await fetch(path, { method: 'POST', body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (j.approval) { paneCards.add(j.approval.id); setApproval(j.approval); }
+  return { ok: r.ok, j };
+}
+$('pane-open').onclick = async () => {
+  const b = $('pane-open');
+  b.disabled = true;
+  try {
+    const r = await fetch('/api/work/open', { method: 'POST', body: JSON.stringify({ id: pane.id }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); pane.error = `${b.title}: ` + (j.error || j.result || r.status); paneHead(); }
+  } finally { b.disabled = false; }
+};
+// Desktop: the daemon stops the background session and reopens it in the Claude desktop app (native.desktop).
+$('pane-desktop').onclick = async () => {
+  const b = $('pane-desktop');
+  b.disabled = true;
+  try {
+    const r = await fetch('/api/work/desktop', { method: 'POST', body: JSON.stringify({ id: pane.id }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); pane.error = 'Open in the Claude desktop app: ' + (j.error || j.result || r.status); paneHead(); }
+  } finally { b.disabled = false; }
+};
+$('steer').onsubmit = async e => {
+  e.preventDefault();
+  const box = $('steer-text'), go = $('steer').querySelector('.go'), text = box.value.trim();
+  if (!text || !pane.id) return box.focus();
+  go.disabled = true;
+  try {
+    const { ok, j } = await workPost('/api/work/steer', { id: pane.id, text });
+    if (!ok) { pane.error = j.error || 'Not sent'; return paneHead(); }
+    box.value = ''; box.style.height = '';
+    pane.error = '';
+    pane.warning = j.warning || '';
+    // Shown until the same words come back from the session, which takes a few seconds.
+    if (!j.approval) paneAppend([{ role: 'user pending', text }]);
+    if (j.done === 'resumed') pane.busy = true;
+    paneHead();
+    clearTimeout(pane.timer);
+    pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
+  } catch (err) { pane.error = 'Not sent: ' + err.message; paneHead(); }
+  finally { go.disabled = false; }
+};
+$('steer-text').addEventListener('keydown', e => { if (enterSends(e)) { e.preventDefault(); $('steer').requestSubmit(); } });
+$('steer-text').addEventListener('input', e => { const b = e.target; b.style.height = 'auto'; b.style.height = Math.min(b.scrollHeight, innerHeight * 0.3) + 'px'; });
+$('pane-stop').onclick = async () => {
+  const r = work.rows.find(x => x.id === pane.id);
+  if (!r) return;
+  $('pane-stop').disabled = true;
+  try {
+    const { ok, j } = await workPost('/api/work/stop', { id: r.id });
+    if (!ok) { pane.error = j.error || (j.approval && j.approval.result) || 'Not stopped'; paneHead(); }
+  } finally { $('pane-stop').disabled = false; }
+};
+async function readPane(gen, first) {
+  let j, again = 3000;
+  try {
+    const r = await fetch(`/api/work/${encodeURIComponent(pane.id)}/read` + (pane.cursor ? '?cursor=' + encodeURIComponent(pane.cursor) : ''));
+    j = await r.json().catch(() => ({}));
+    if (gen !== pane.gen) return;
+    if (r.status === 404) { pane.error = j.error || 'Gone'; paneHead(); return; } // finished: stop polling
+    if (j.reset) { pane.cursor = null; paneLines.innerHTML = ''; again = 0; }
+    else {
+      pane.error = j.error || j.failure || '';
+      pane.busy = !!j.busy;
+      if (first) paneLines.innerHTML = '';
+      if (j.detail) { pane.detail = j.detail; paneLines.querySelector('.rdetail')?.remove(); paneLines.querySelector('.empty')?.remove(); paneLines.insertAdjacentHTML('afterbegin', requestDetailHtml(j.detail)); }
+      paneAppend(j.lines || []);
+      // A record reads from its top, and a closed conversation has nothing new to wait for.
+      if (first && pane.record) paneLog.scrollTop = 0;
+      if (pane.record && !j.more) { paneHead(); return; }
+      if (j.cursor) pane.cursor = j.cursor;
+      if (j.more) again = 0;
+      if (first && !paneLines.children.length && !j.more) paneLines.innerHTML = '<div class="empty">Nothing in this transcript yet.</div>';
+    }
+  } catch (err) { if (gen !== pane.gen) return; pane.error = 'Reconnecting'; }
+  paneHead();
+  pane.timer = setTimeout(() => readPane(gen, false), again);
+}
+function paneAppend(lines) {
+  if (!lines.length) return;
+  paneLines.querySelector('.empty')?.remove();
+  const atBottom = paneLog.scrollHeight - paneLog.scrollTop - paneLog.clientHeight < 120;
+  for (const l of lines) {
+    if (l.role === 'user') for (const p of paneLines.querySelectorAll('.pending')) if (p.textContent === l.text) p.remove();
+    if (l.role === 'tool') { addToolRow(l.text); continue; }
+    const d = document.createElement('div');
+    d.className = 'pl ' + l.role;
+    if (l.kind === 'preamble') { d.className = 'pl fold brief'; d.innerHTML = briefFoldHtml(l.text); }
+    else if (l.kind === 'wake') { d.className = 'pl wake'; d.textContent = 'Jarvis sent a message'; }
+    else if (l.kind === 'event') { d.className = 'pl wake'; d.textContent = l.text; } // what jarvisd did to the session, such as a resume
+    else if (l.role === 'agent') { d.classList.add('md'); d.innerHTML = markdown(l.text, shot); }
+    else d.textContent = l.text;
+    const tag = paneTag(l);
+    if (tag) { d.classList.add('said'); if (l.failed) d.classList.add('failed'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
+    if (l.clipped) d.insertAdjacentHTML('beforeend', '<span class="clipped" title="Orca or Jarvis shortened this text">clipped</span>');
+    paneLines.appendChild(d);
+  }
+  while (paneLines.children.length > PANE_MAX) (paneLines.firstChild.matches('.rdetail') ? paneLines.children[1] : paneLines.firstChild).remove();
+  if (atBottom) paneLog.scrollTop = paneLog.scrollHeight;
+}
+// Tool rows between two messages share one fold, which keeps growing while the worker keeps working.
+function addToolRow(text) {
+  let run = paneLines.lastElementChild;
+  if (!run?.classList.contains('tool-run')) {
+    run = document.createElement('div');
+    run.className = 'fold tool-run';
+    run.innerHTML = toolRunHtml();
+    paneLines.appendChild(run);
+  }
+  const calls = run.querySelector('.fold-calls'), row = document.createElement('div');
+  row.className = 'pl tool'; row.textContent = text; row.title = text;
+  calls.appendChild(row);
+  run.querySelector('.t').textContent = toolRunSummary([...calls.children].map(c => c.textContent));
+}
+paneLines.addEventListener('click', e => {
+  const b = e.target.closest('.fold-toggle');
+  if (!b) return;
+  const open = b.getAttribute('aria-expanded') !== 'true';
+  b.setAttribute('aria-expanded', String(open));
+  b.nextElementSibling.hidden = !open;
+});
+$('pane-back').onclick = () => {
+  if (term) return closeTerm();
+  if (!report.id) return closePane();
+  // Opened from a link in the app, Back is the browser's. Opened straight from an address, there is nothing to go back to.
+  if (report.fromApp) history.back(); else location.hash = '';
+};
+
+// ---- a worker's report, or a document from data/reports: fills the center like a worker's pane, at #report/<id>,
+// #reports or #reports/<path>, so the browser's back button and a reload both work. report.id is the address's key. ----
+const reportEl = $('report');
+function hideReport() {
+  report.id = null; report.gen++;
+  reportEl.hidden = true;
+  reportEl.innerHTML = '';
+  $('pane-back-label').textContent = 'Jarvis';
+  $('pane-back').setAttribute('aria-label', 'Back to Jarvis');
+}
+function showReportPage(key, fromApp, title, drawer) {
+  if (report.id) hideReport();
+  closePane();
+  const gen = ++report.gen;
+  Object.assign(report, { id: key, fromApp, drawer });
+  reportEl.hidden = false;
+  reportEl.scrollTop = 0;
+  reportEl.innerHTML = '<div class="empty">Reading…</div>';
+  $('pane-title').textContent = title;
+  $('pane-sub').innerHTML = '';
+  $('pane-open').hidden = $('pane-desktop').hidden = $('pane-stop').hidden = true;
+  $('pane-back-label').textContent = 'Back';
+  $('pane-back').setAttribute('aria-label', 'Back');
+  document.body.classList.add('pane-open');
+  panel(false);
+  renderWork();
+  return gen;
+}
+async function fillReport(gen, url, html, fallback) {
+  const r = await fetch(url).catch(() => null);
+  const j = await r?.json().catch(() => ({}));
+  if (gen !== report.gen) return;
+  if (r?.ok) reportEl.innerHTML = html(j);
+  else reportEl.innerHTML = `<div class="empty">${esc(r ? j?.error || fallback : 'Jarvis did not answer. Go back and open it again.')}</div>`;
+}
+function openReport(id, fromApp) {
+  const gen = showReportPage(`report:${id}`, fromApp, 'Report', true);
+  return fillReport(gen, `/api/requests/${id}/report`, j => reportHtml(j, { markdown, shot }), 'This report could not be read.');
+}
+function openDoc(path, fromApp) {
+  if (!path) {
+    const gen = showReportPage('reports', fromApp, 'Reports', false);
+    return fillReport(gen, '/api/reports', docListHtml, 'The reports could not be listed.');
+  }
+  const gen = showReportPage(`reports:${path}`, fromApp, 'Report', false);
+  return fillReport(gen, `/api/reports/file?path=${encodeURIComponent(path)}`, j => docHtml(j, { markdown, shot }), 'This report could not be read.');
+}
+function reportRoute(fromApp) {
+  const id = Number(/^#report\/(\d+)$/.exec(location.hash)?.[1]), doc = docRoute(location.hash);
+  if (id) { if (`report:${id}` !== report.id) openReport(id, fromApp); return; }
+  if (doc !== undefined) { if ((doc ? `reports:${doc}` : 'reports') !== report.id) openDoc(doc, fromApp); return; }
+  if (!report.id) return;
+  const drawer = report.drawer;
+  hideReport();
+  closePane();
+  if (drawer && !wide.matches) panel(true); // on a phone the list is a drawer, and Back from a worker's report means back to it
+}
+$('reportsbtn').onclick = () => { showMenu(false); location.hash = docHref(''); };
+// A [report: path] card in the chat shows the file name at first, then the document's own title from the list.
+let docTitles = null, docTitlesAt = 0;
+async function titleCards(el) {
+  const cards = [...el.querySelectorAll('.rcard[data-report]')];
+  if (!cards.length) return;
+  if (!docTitles || Date.now() - docTitlesAt > 30_000) {
+    docTitlesAt = Date.now();
+    docTitles = fetch('/api/reports').then(r => r.ok ? r.json() : []).then(list => new Map(list.map(d => [d.path, d.title]))).catch(() => new Map());
+  }
+  const titles = await docTitles;
+  for (const c of cards) { const t = titles.get(c.dataset.report); if (t) c.querySelector('.rcard-t').textContent = t; }
+}
+addEventListener('hashchange', () => reportRoute(true));
+const allSections = () => [...reportEl.querySelectorAll('details')];
+reportEl.addEventListener('click', e => {
+  if (!e.target.closest('.rp-all')) return;
+  const open = !allSections().every(d => d.open);
+  allSections().forEach(d => { d.open = open; });
+  if (!open) reportEl.scrollTop = 0;
+});
+// toggle does not bubble, so this listens on the way down. Any section opened or closed by hand keeps the button's words true.
+reportEl.addEventListener('toggle', () => {
+  const b = reportEl.querySelector('.rp-all');
+  if (!b) return;
+  const open = allSections().every(d => d.open);
+  b.textContent = open ? 'Collapse all' : 'Expand all';
+  b.setAttribute('aria-pressed', String(open));
+}, true);
+
+// The work list's icon: hides the column from 780 px, slides it in from the left below that.
+const wide = matchMedia('(min-width: 780px)');
+const panel = open => document.body.classList.toggle('panel-open', open);
+const collapse = on => { document.body.classList.toggle('rail-closed', on); try { localStorage.setItem('workCollapsed', on ? '1' : ''); } catch {} };
+try { if (localStorage.getItem('workCollapsed')) document.body.classList.add('rail-closed'); } catch {}
+railbtn.onclick = () => wide.matches ? collapse(!document.body.classList.contains('rail-closed')) : panel(!document.body.classList.contains('panel-open'));
+// On a phone a sideways swipe does the same. touchcancel forgets it: iOS sends that when its own back gesture takes over.
+let swipeFrom = null;
+const swipeBlocked = () => popOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('shell').hidden || !$('newpick').hidden || !getSelection().isCollapsed;
+document.addEventListener('touchstart', e => {
+  swipeFrom = e.touches.length === 1 && !wide.matches && !swipeBlocked() && !e.target.closest?.(SWIPE_IGNORE) ? { startX: e.touches[0].clientX, startY: e.touches[0].clientY } : null;
+}, { passive: true });
+document.addEventListener('touchend', e => {
+  if (!swipeFrom || e.changedTouches.length !== 1) return;
+  const act = swipeAction({ ...swipeFrom, endX: e.changedTouches[0].clientX, endY: e.changedTouches[0].clientY }, document.body.classList.contains('panel-open'));
+  swipeFrom = null;
+  if (act) panel(act === 'open');
+}, { passive: true });
+document.addEventListener('touchcancel', () => { swipeFrom = null; }, { passive: true });
+// Back to the main conversation from a worker, from anywhere in the list.
+$('tojarvis').onclick = () => { closePane(); panel(false); };
+reportRoute(false);
+$('scrim').onclick = () => { panel(false); setPop(null); if (modelPicker.isOpen) modelPicker.open(false); };
+// ---- a project terminal (web/terminal.js, daemon/terminal.ts): fills the center. Back leaves it running, End kills it. ----
+const termEl = $('term'), termHost = $('term-host'), termIn = $('term-input');
+let term = null, termTitleText = '', termOver = false;
+const HOME = /^\/Users\/[^/]+/;
+function termHead() {
+  const t = term && work.rows.find(r => r.id === `t:${term.name}`)?.tmux;
+  $('pane-title').textContent = t ? `${t.kind === 'codex' ? 'Codex' : 'Terminal'} in ${projectLabel(t.project)}` : termTitleText;
+  // The phone has room for the branch and the session only, as in the mockup.
+  const phone = innerWidth < 780;
+  $('pane-sub').innerHTML = t ? [!phone && t.cwd.replace(HOME, '~'), t.branch, `${phone ? 'tmux' : 'tmux session'} ${t.name}`].filter(Boolean).map(b => `<span>${esc(b)}</span>`).join('') : '';
+  $('term-copy').hidden = !onMac || !term?.name;
+  $('term-end').hidden = !term?.name || termOver;
+}
+function openTerm(o) {
+  closeTerm();
+  closePane();
+  termOver = false;
+  termTitleText = o.title ?? 'Terminal';
+  termEl.hidden = false;
+  termEl.classList.toggle('mac', onMac);
+  document.body.classList.add('pane-open', 'term-open');
+  $('pane-open').hidden = $('pane-desktop').hidden = $('pane-stop').hidden = true;
+  $('pane-back-label').textContent = 'Jarvis';
+  $('term-status').innerHTML = '';
+  term = openTerminal(termHost, {
+    name: o.name ?? null, start: o.start, onMac, esc, session: () => uiSession, pairBox: $('term-pair'),
+    onInfo: () => { termHead(); renderWork(); },
+    onEnded: text => { termOver = true; termHead(); $('term-status').innerHTML = `<span>${esc(text)}</span>`; },
+    onFail: () => { termOver = true; termHead(); },
+    onBack: () => closeTerm(),
+    onCtrl: on => { $('tk-ctrl').classList.toggle('on', on); $('tk-ctrl').setAttribute('aria-pressed', String(on)); },
+    setStatus: parts => { $('term-status').innerHTML = parts.map(p => `<span>${esc(p)}</span>`).join(''); },
+  });
+  termHead();
+  renderWork();
+  (onMac ? termHost : termIn).focus();
+}
+function closeTerm() {
+  if (!term) return;
+  term.close();
+  term = null;
+  termEl.hidden = true;
+  $('term-pair').hidden = true;
+  document.body.classList.remove('term-open');
+  if (!pane.id && !report.id) document.body.classList.remove('pane-open');
+  $('term-copy').hidden = $('term-end').hidden = true;
+  renderWork();
+}
+// The Mac: keys on the focused screen go to the shell. Cmd+[ goes back; Cmd+C, Cmd+V and the rest stay the browser's.
+// Only real key presses: a script in the page cannot dispatch keys into the shell (isTrusted).
+termHost.addEventListener('keydown', e => { if (e.isTrusted && term && !termOver && term.key(e)) { e.preventDefault(); e.stopPropagation(); } });
+termHost.addEventListener('paste', e => { if (!term || !e.isTrusted) return; e.preventDefault(); term.paste(e.clipboardData.getData('text')); });
+termHost.addEventListener('pointerup', () => { if (!onMac) showKeyboard(); else if (!getSelection().toString()) termHost.focus(); });
+// The phone: a tap's mouse events come after pointerup and would move focus to the screen, which closes the keyboard.
+termHost.addEventListener('mousedown', e => { if (!onMac) e.preventDefault(); });
+// The phone: its keyboard types into a hidden box, which empties at each key; the key row adds what a phone lacks.
+termIn.addEventListener('keydown', e => {
+  if (!e.isTrusted || !term || termOver || e.isComposing || e.key === 'Unidentified' || e.key === 'Process') return;
+  if (term.key(e)) { e.preventDefault(); e.stopPropagation(); }
+});
+termIn.addEventListener('input', e => { if (!term || !e.isTrusted || e.isComposing) return; term.text(termIn.value); termIn.value = ''; });
+termIn.addEventListener('compositionend', e => { if (term && e.isTrusted) term.text(e.data); termIn.value = ''; });
+// The phone's keyboard shrinks only the visual viewport; the key row moves up by the part of the layout it hides.
+// The hidden box sits at the top of the terminal (app.css), so the browser has no reason to pan the page to show it.
+let kbd = { inset: 0, open: false };
+function onViewport() {
+  const v = window.visualViewport;
+  kbd = keyboardInset(innerHeight, v.height, v.offsetTop);
+  termEl.style.setProperty('--kb', `${kbd.inset}px`);
+  $('tk-kbd').setAttribute('aria-pressed', String(kbd.open));
+  $('tk-kbd').setAttribute('aria-label', kbd.open ? 'Close the keyboard' : 'Open the keyboard');
+}
+window.visualViewport?.addEventListener('resize', onViewport);
+window.visualViewport?.addEventListener('scroll', onViewport);
+// A focus() on the box that has focus does not bring back a keyboard closed with the back gesture: blur it first.
+function showKeyboard() {
+  if (!term || termOver) return;
+  if (document.activeElement === termIn && !kbd.open) termIn.blur();
+  termIn.focus({ preventScroll: true });
+}
+$('term-keys').addEventListener('pointerdown', e => { if (e.target.closest('button')) e.preventDefault(); }); // focus stays in the box
+$('term-keys').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b || !term || !e.isTrusted) return;
+  if (b.id === 'tk-kbd') return kbd.open ? termIn.blur() : showKeyboard();
+  if (b.id === 'tk-ctrl') term.toggleCtrl();
+  else if (b.id === 'tk-paste') navigator.clipboard?.readText?.().then(t => term?.paste(t)).catch(() => $('term-status').innerHTML = '<span>The browser did not give the clipboard. Long-press and paste instead.</span>');
+  else term.send([{ key: b.dataset.k }]);
+  if (kbd.open && document.activeElement !== termIn) termIn.focus({ preventScroll: true });
+});
+$('term-copy').onclick = async () => {
+  if (!term?.name) return;
+  try { await navigator.clipboard.writeText(`tmux attach -t ${term.name}`); $('term-copy-label').textContent = 'Copied'; }
+  catch { $('term-copy-label').textContent = `tmux attach -t ${term.name}`; }
+  setTimeout(() => { $('term-copy-label').textContent = 'Copy attach command'; }, 1600);
+};
+$('term-end').onclick = async () => {
+  if (!term) return;
+  $('term-end').disabled = true;
+  try { await term.end(); closeTerm(); }
+  catch (err) { $('term-status').innerHTML = `<span>End: ${esc(err.message)}</span>`; }
+  finally { $('term-end').disabled = false; }
+};
+// The phone shows the Mac's one-time pairing code. Its route needs the phone checks, so only this phone gets one.
+$('pairbtn').hidden = onMac;
+$('pairbtn').onclick = async () => {
+  showMenu(false);
+  try {
+    const r = await fetch('/api/term/pair-code', { method: 'POST', body: '{}' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return add('event', `Pair the Mac: ${j.error || r.status}`);
+    add('event', `Pairing code for the Mac's terminal: ${j.code.slice(0, 4)} ${j.code.slice(4)}. Type it on the Mac within 5 minutes; it works once.`);
+  } catch { add('event', 'Pair the Mac: Jarvis did not answer.'); }
+};
+
+// The new-session picker (web/newpick.js): kind, project, worktree, Start. No approval: The owner pressed it.
+// A Claude session is a side chat; its first message is typed in the conversation that opens. Codex and Terminal open a project terminal.
+const np = $('newpick'), npBtn = $('newchat'), npGo = $('np-go'), npGoLabel = $('np-go-label'), npWt = $('np-wt');
+let npRepos = [], npChoice = null, npBusy = false;
+$('np-keys').textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘↵' : 'Ctrl ↵';
+function npRender() {
+  const v = pickView(npChoice);
+  const kinds = KINDS.map(k => ({ value: k.id, label: k.label }));
+  const repos = npRepos.map(r => ({ value: r.path, label: projectLabel(r.name) }));
+  for (const [el, opts, picked] of [[$('np-kind'), kinds, npChoice.kind], [$('np-repo'), repos, npChoice.repo]]) {
+    el.innerHTML = segHtml(opts, picked, esc);
+    el.style.setProperty('--n', opts.length);
+    el.style.setProperty('--i', Math.max(0, opts.findIndex(o => o.value === picked)));
+  }
+  $('np-wt-row').hidden = !v.showWorktree;
+  npWt.checked = npChoice.worktree;
+  np.classList.toggle('wide-go', !v.showWorktree);
+  npGo.disabled = npBusy || !v.canStart;
+  npGo.title = v.why;
+  npGoLabel.textContent = npBusy ? 'Starting…' : v.canStart ? 'Start' : 'Pick a project';
+  $('np-keys').hidden = !v.canStart || npBusy;
+}
+function npPlace() {
+  const b = (npBtn.offsetParent ? npBtn : moreBtn).getBoundingClientRect(), phone = innerWidth < 780;
+  const w = phone ? innerWidth - 24 : 300;
+  const left = phone ? 12 : Math.max(12, Math.min(b.right + 8 - w, innerWidth - w - 12));
+  Object.assign(np.style, { top: `${b.bottom + 10}px`, left: `${left}px`, width: `${w}px` });
+  np.style.setProperty('--tip', `${b.left + b.width / 2 - left}px`);
+}
+function showPick(open) {
+  np.hidden = !open;
+  npBtn.setAttribute('aria-expanded', String(open));
+  if (!open) return void (np.contains(document.activeElement) && npBtn.focus());
+  npPlace();
+  (npGo.disabled ? np.querySelector('[role=radio][tabindex="0"]') : npGo).focus();
+}
+npBtn.onclick = async () => {
+  if (!np.hidden) return showPick(false);
+  showMenu(false);
+  try { npRepos = orderRepos((await (await fetch('/api/work')).json()).repos || []); }
+  catch { return add('event', 'New session: could not read the project list. Try again.'); }
+  npChoice = restore(localStorage.getItem('newSession'), npRepos);
+  npRender();
+  showPick(true);
+};
+// On the phone New session is in the menu (option H of the top area); it opens the same picker.
+$('menu-new').onclick = () => { showMenu(false); npBtn.onclick(); };
+for (const [id, key] of [['np-kind', 'kind'], ['np-repo', 'repo']]) {
+  const group = $(id);
+  const pick = (v, focus) => { npChoice[key] = v; npRender(); if (focus) group.querySelector(`[data-v="${CSS.escape(v)}"]`)?.focus(); };
+  group.onclick = e => { const b = e.target.closest('[role=radio]'); if (b) pick(b.dataset.v, true); };
+  group.onkeydown = e => {
+    const values = [...group.querySelectorAll('[role=radio]')].map(b => b.dataset.v);
+    const next = stepRadio(values, npChoice[key], e.key);
+    if (next) { e.preventDefault(); pick(next, true); }
+  };
+}
+npWt.onchange = () => { npChoice.worktree = npWt.checked; };
+np.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); np.requestSubmit(); }
+  // Tab stays inside while it is open.
+  if (e.key === 'Tab') {
+    const f = [...np.querySelectorAll('[role=radio][tabindex="0"], input, button[type=submit]')].filter(el => !el.disabled && el.offsetParent);
+    const i = f.indexOf(document.activeElement);
+    if (e.shiftKey ? i <= 0 : i === f.length - 1) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0].focus(); }
+  }
+});
+document.addEventListener('pointerdown', e => { if (!np.hidden && !np.contains(e.target) && !npBtn.contains(e.target)) showPick(false); });
+addEventListener('resize', () => { if (!np.hidden) npPlace(); });
+np.onsubmit = async e => {
+  e.preventDefault();
+  if (npBusy || !pickView(npChoice).canStart) return;
+  npBusy = true; npRender();
+  // Terminal and Codex open a tmux session in the center; the terminal module asks for Touch ID first on the Mac.
+  if (npChoice.kind !== 'claude') {
+    localStorage.setItem('newSession', JSON.stringify(npChoice));
+    npBusy = false; showPick(false);
+    const label = projectLabel(npRepos.find(r => r.path === npChoice.repo)?.name ?? '');
+    return openTerm({ start: termStart(npChoice), title: `${npChoice.kind === 'codex' ? 'Codex' : 'Terminal'} in ${label}` });
+  }
+  try {
+    const r = await fetch('/api/work/side-chat', { method: 'POST', body: JSON.stringify(startBody(npChoice)) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return add('event', 'Session did not start: ' + (j.error || j.result || r.status));
+    localStorage.setItem('newSession', JSON.stringify(npChoice));
+    showPick(false);
+    const row = startedRow(j);
+    if (row) openRow(row);
+  } finally { npBusy = false; if (!np.hidden) npRender(); }
+};
+// The newest finished worker, until dismissed. Quiet: no sound, no push, nothing to the brain.
+const doneline = $('doneline');
+const dismissed = new Set(JSON.parse(localStorage.getItem('doneDismissed') || '[]'));
+function showDone() {
+  const d = (work.done || []).find(x => !dismissed.has(x.dispatch));
+  doneline.hidden = !d;
+  if (!d) return;
+  const pr = d.url ? ` · <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.pr)}</a>` : d.pr && !d.subject.includes(d.pr) ? ` · ${esc(d.pr)}` : '';
+  doneline.querySelector('.txt').innerHTML = `<b>Done:</b> ${esc(d.subject)}${pr}`;
+  doneline.querySelector('.txt').title = d.subject;
+  doneline.querySelector('button').onclick = () => { dismissed.add(d.dispatch); localStorage.setItem('doneDismissed', JSON.stringify([...dismissed].slice(-50))); showDone(); };
+}
+
+// ---- attached pictures: uploaded on send, then passed to Jarvis as one [image: path] line each ----
+const IMAGE_OK = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], IMAGE_MAX = 10 * 1024 * 1024;
+const fileIn = $('file'), pending = $('pending');
+let attached = []; // { file, el } in the order the owner added them
+// The plus button. Today it only opens the photo picker; later this becomes the popover with more actions.
+function openAddMenu() { fileIn.click(); }
+$('add').onclick = openAddMenu;
+fileIn.onchange = () => {
+  const files = [...fileIn.files];
+  fileIn.value = '';
+  files.forEach(attach);
+};
+// A picture pasted into the box takes the same path as the picker. Text on the clipboard wins,
+// so a copy that carries both (a spreadsheet range, a rich-text snippet) still pastes as text.
+t.addEventListener('paste', e => {
+  if (pasteText(e, t)) return;
+  const cb = e.clipboardData;
+  if (!cb) return;
+  // items rather than files: some phone browsers expose a pasted photo only as a file item
+  const files = [...cb.items].filter(i => i.kind === 'file' && i.type.startsWith('image/')).map(i => i.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  e.preventDefault();
+  files.forEach(attach);
+});
+for (const box of [$('steer-text')]) box.addEventListener('paste', e => pasteText(e, box));
+function attach(f) {
+  const name = f.name || 'the pasted picture';
+  if (!IMAGE_OK.includes(f.type)) return add('event', `Can't attach ${name}: only png, jpg, webp and gif.`);
+  if (f.size > IMAGE_MAX) return add('event', `Can't attach ${name}: larger than 10 MB.`);
+  const el = document.createElement('div');
+  el.className = 'thumb';
+  el.innerHTML = '<img alt=""><button type="button" aria-label="Remove picture"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>';
+  el.querySelector('img').src = URL.createObjectURL(f);
+  const item = { file: f, el };
+  el.querySelector('button').onclick = () => unattach(item);
+  attached.push(item);
+  pending.append(el);
+  idleLabel();
+}
+function unattach(item) {
+  URL.revokeObjectURL(item.el.querySelector('img').src);
+  item.el.remove();
+  attached = attached.filter(a => a !== item);
+  idleLabel();
+}
+
+// ---- text ----
+let sending = false;
+async function sendText() {
+  const text = t.value.trim();
+  if ((!text && !attached.length) || sending) return;
+  sending = true;
+  try {
+    // Upload all of them before sending anything, so a failed upload keeps the text and every picture in the box.
+    const lines = [];
+    for (const { file } of attached) {
+      const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type }, body: file });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return add('event', `Picture not sent: ${j.error || r.status}`);
+      lines.push(`[image: ${j.path}]`);
+    }
+    t.value = '';
+    [...attached].forEach(unattach);
+    const reply = replyTo?.id;
+    cancelReply();
+    await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: [text, ...lines].filter(Boolean).join('\n'), replyTo: reply }) });
+  } catch (err) { add('event', 'Send failed: ' + err.message); }
+  finally { sending = false; idleLabel(); fit(); }
+}
+$('f').onsubmit = e => { e.preventDefault(); sendText(); };
+t.onkeydown = e => { if (enterSends(e)) { e.preventDefault(); sendText().then(idleLabel); } };
+
+// ---- the pill's two right-hand buttons: the mic dictates, the wave starts hands-free or, with something to send, sends ----
+const HOLD_MS = 300;
+const MIC = { audio: { echoCancellation: true, noiseSuppression: true } };
+const bar = $('bar'), wave = $('wave');
+const DICTATE = 'Dictate: hold to talk, or tap to start and tap again to send';
+let rec, chunks = [], stream, pressedAt = 0, holding = false, latched = false;
+const hasSend = () => !!(t.value.trim() || attached.length || hands?.utt); // while hands-free hears the owner, a tap sends what it heard
+const idleLabel = () => {
+  const send = hasSend();
+  wave.classList.toggle('send', send);
+  bar.classList.toggle('has-text', !!t.value);
+  wave.setAttribute('aria-label', send ? 'Send' : hands ? 'Back to the voice bar' : 'Start hands-free');
+  wave.title = send ? 'Send' : 'Hands-free';
+};
+t.addEventListener('input', idleLabel);
+// The box grows with what is typed (up to its max-height), since the pill's buttons leave it narrow on a phone.
+const fit = () => { t.style.height = 'auto'; if (t.value) t.style.height = t.scrollHeight + 'px'; };
+t.addEventListener('input', fit);
+function showRec(hint) { mic.classList.add('rec'); mic.setAttribute('aria-label', 'Listening, tap to send'); t.placeholder = hint; }
+// Stops a dictation. `keep` sends the clip to /api/voice; false drops it.
+function stopRec(keep) {
+  latched = false;
+  if (rec && rec.state === 'recording') { rec.keep = keep; rec.stop(); }
+  mic.classList.remove('rec');
+  mic.setAttribute('aria-label', DICTATE);
+  showHands();
+}
+async function startRec() {
+  bargeIn(); // talking over Jarvis stops it
+  try {
+    stream = stream || await navigator.mediaDevices.getUserMedia(MIC);
+  } catch (err) { latched = false; holding = false; mic.classList.remove('rec'); showHands(); add('event', 'Microphone unavailable: ' + err.message); return; }
+  if (!holding && !latched) return; // released, or cancelled, while the permission prompt was open
+  chunks = [];
+  rec = new MediaRecorder(stream);
+  rec.ondataavailable = ev => ev.data.size && chunks.push(ev.data);
+  rec.onstop = () => { if (rec.keep) upload(); };
+  rec.start();
+}
+// Hold the mic to talk and release to send, as before. A short tap starts a dictation that the next tap sends.
+async function press(e) {
+  e.preventDefault();
+  if (latched) { stopRec(true); return; }
+  mic.setPointerCapture(e.pointerId); // a drifting thumb keeps recording until it lifts
+  pressedAt = Date.now();
+  holding = true;
+  setTimeout(() => { if (holding) showRec('Listening… release to send'); }, HOLD_MS);
+  await startRec();
+}
+function release(e) {
+  e && e.preventDefault();
+  if (!holding) return;
+  holding = false;
+  if (Date.now() - pressedAt < HOLD_MS) { latched = true; showRec('Listening… tap the mic to send'); return; }
+  stopRec(true);
+}
+async function upload() {
+  const blob = new Blob(chunks, { type: rec.mimeType });
+  if (blob.size < 2000) return;
+  mic.classList.add('busy');
+  try {
+    // A dictation while the reply strip is open answers that message. Text in the box goes in front of the words
+    // (web/dictate.js), and the box clears only once the daemon has sent the message.
+    const reply = replyTo?.id, typed = t.value;
+    const q = new URLSearchParams();
+    if (reply) q.set('replyTo', reply);
+    if (typed.trim()) q.set('typed', typed);
+    const r = await fetch(String(q) ? `/api/voice?${q}` : '/api/voice', { method: 'POST', body: blob });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    if (!j.text) add('event', "Didn't catch that.");
+    else {
+      if (typed.trim()) { t.value = boxAfterSend(t.value, typed); idleLabel(); fit(); }
+      if (replyTo?.id === reply) cancelReply();
+    }
+  } catch (err) { add('event', 'Voice upload failed: ' + err.message); }
+  mic.classList.remove('busy');
+}
+mic.addEventListener('pointerdown', press);
+mic.addEventListener('pointerup', release);
+mic.addEventListener('pointercancel', release);
+mic.addEventListener('contextmenu', e => e.preventDefault());
+// Keyboard Enter or Space on the mic: the first starts a dictation, the second sends it.
+mic.addEventListener('click', e => {
+  if (e.detail !== 0) return;
+  if (latched) return stopRec(true);
+  latched = true; showRec('Listening… press again to send'); startRec();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && latched) stopRec(false); }); // Escape drops a dictation
+wave.addEventListener('click', () => {
+  if (hasSend()) { if (hands?.utt) finishClip(hands); sendText().then(idleLabel); return; }
+  keyboardView = false;
+  if (!handsWanted) { handsWanted = true; localStorage.setItem('hands', 'on'); handsOn(); }
+  showHands();
+});
+
+// the owner started talking. If Jarvis is mid-reply (playing, queued, or between two sentences), it stops and the
+// rest of that reply stays text only.
+function bargeIn() {
+  if (!speech.active() && Date.now() - lastAudioAt > 3000) return;
+  if (lastAudioTurn !== null) speech.hold(lastAudioTurn, lastAudioTotal);
+  speech.hush();
+}
+
+// ---- hands-free: the mic stays open and speech is picked up without holding the button ----
+// web/listen.js cuts the mic into utterances; each one goes to /api/voice?mode=listen, where the daemon checks it
+// with Silero VAD and the wake word (daemon/listen.ts). Holding the button still works and skips the wake word.
+const WORKLET = `registerProcessor('tap', class extends AudioWorkletProcessor {
+  process(inputs) { const c = inputs[0][0]; if (c) this.port.postMessage(c.slice(0)); return true; }
+});`;
+let handsWanted = localStorage.getItem('hands') === 'on';
+let keyboardView = false; // the keyboard button: hands-free keeps listening while the pill shows the text box
+let voiceNote = '', voiceNoteTimer = 0; // a short line in place of the voice label, for example "Not for Jarvis"
+const voiceLabel = $('voice-label'), voiceState = $('voice-state');
+const speaking = () => speech.active() || !player.paused;
+function showHands() {
+  bar.dataset.mode = handsWanted && !keyboardView ? 'voice' : 'type';
+  bar.classList.toggle('hands', handsWanted);
+  const state = !hands ? 'Starting…'
+    : hands.ctx.state !== 'running' ? 'Tap to start listening'
+    : hands.utt ? 'Hearing you, tap to send'
+    : speaking() ? 'Speaking' : 'Listening';
+  voiceLabel.textContent = voiceNote || state;
+  voiceState.dataset.state = !hands ? 'idle' : hands.utt ? 'heard' : speaking() ? 'speaking' : 'listening';
+  t.placeholder = voiceNote || (!hands ? 'Message Jarvis' : hands.ctx.state === 'running' ? 'Listening… or type' : 'Tap anywhere to start listening');
+  if (mic.classList.contains('rec')) t.placeholder = latched ? 'Listening… tap the mic to send' : 'Listening… release to send';
+  idleLabel();
+}
+async function handsOn() {
+  if (hands) return;
+  try {
+    const { client = {} } = await fetch('/api/listen/config').then(r => r.json()).catch(() => ({}));
+    const cfg = { ...DEFAULTS, ...client };
+    stream = stream || await navigator.mediaDevices.getUserMedia(MIC);
+    const ctx = new AudioContext();
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' })));
+    const node = new AudioWorkletNode(ctx, 'tap');
+    ctx.createMediaStreamSource(stream).connect(node).connect(ctx.destination); // the tap outputs silence
+    const size = Math.round(ctx.sampleRate * cfg.frameMs / 1000);
+    // The ring keeps the pre-roll plus the frames the detector needs before it says 'start'.
+    const keep = Math.ceil((cfg.preRollMs + Math.max(cfg.minSpeechMs, cfg.bargeInMs)) / cfg.frameMs);
+    hands = { ctx, node, cfg, seg: makeSegmenter(cfg), frame: new Float32Array(size), fill: 0, ring: [], keep, utt: null, barge: false };
+    node.port.onmessage = e => feed(hands, e.data);
+    ctx.onstatechange = showHands;
+    stream.getAudioTracks()[0].onended = () => handsOff('Hands-free stopped: the microphone was closed.');
+    // A phone that locks its screen closes the mic; keep the screen on while listening.
+    hands.lock = await navigator.wakeLock?.request('screen').catch(() => null);
+  } catch (err) {
+    add('event', 'Hands-free unavailable: ' + err.message);
+    handsWanted = false; localStorage.setItem('hands', 'off');
+    handsOff();
+  }
+  showHands();
+}
+function handsOff(why) {
+  if (why && hands?.utt) finishClip(hands); // the mic closed under a long dictation: what it heard still goes
+  if (hands) {
+    hands.node.port.onmessage = null;
+    hands.ctx.close().catch(() => {});
+    hands.lock?.release().catch(() => {});
+    hands = null;
+  }
+  if (stream && !holding) { stream.getTracks().forEach(x => x.stop()); stream = null; }
+  if (why) { add('event', why); handsWanted = false; localStorage.setItem('hands', 'off'); }
+  showHands();
+}
+function feed(h, block) {
+  for (let i = 0; i < block.length;) {
+    const n = Math.min(block.length - i, h.frame.length - h.fill);
+    h.frame.set(block.subarray(i, i + n), h.fill);
+    h.fill += n; i += n;
+    if (h.fill === h.frame.length) { frame(h, h.frame.slice()); h.fill = 0; }
+  }
+}
+function frame(h, f) {
+  if (holding || latched) { h.seg.reset(); h.utt = null; h.ring.length = 0; return; } // a dictation has the mic
+  const playing = !player.paused;
+  const ev = h.seg.push(levelDb(f), { playing });
+  if (h.utt) h.utt.push(f);
+  else { h.ring.push(f); if (h.ring.length > h.keep) h.ring.shift(); }
+  if (ev === 'start') {
+    h.utt = h.ring.splice(0);
+    h.barge = playing;
+    bargeIn();
+    showHands();
+  } else if (ev === 'end') finishClip(h);
+}
+// the owner stopped, or tapped Send, or the mic closed: the clip goes up and the next speech starts a new one.
+function finishClip(h) {
+  const clip = h.utt;
+  h.utt = null;
+  h.seg.reset();
+  showHands();
+  sendClip(clip, h.ctx.sampleRate, h.barge);
+}
+async function sendClip(frames, rate, barge) {
+  const all = new Float32Array(frames.reduce((n, f) => n + f.length, 0));
+  frames.reduce((o, f) => (all.set(f, o), o + f.length), 0);
+  mic.classList.add('busy');
+  try {
+    const r = await fetch(`/api/voice?mode=listen&barge=${barge ? 1 : 0}`, { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: encodeWav(all, rate) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    // Clips not meant for Jarvis leave no trace in the chat; the placeholder says why for a moment.
+    if (!j.kept && hands && j.why === 'no wake word') { voiceNote = 'Not for Jarvis (no wake word)'; showHands(); clearTimeout(voiceNoteTimer); voiceNoteTimer = setTimeout(() => { voiceNote = ''; showHands(); }, 2000); }
+  } catch (err) { add('event', 'Voice upload failed: ' + err.message); }
+  mic.classList.remove('busy');
+}
+$('hands-end').onclick = () => {
+  handsWanted = false; keyboardView = false;
+  localStorage.setItem('hands', 'off');
+  handsOff();
+};
+$('keys').onclick = () => { keyboardView = true; showHands(); t.focus(); };
+voiceState.onclick = () => { if (hands?.utt) finishClip(hands); else if (hands && hands.ctx.state !== 'running') hands.ctx.resume(); };
+// The label follows Jarvis's voice: Speaking while a reply plays, Listening otherwise.
+for (const ev of ['play', 'pause', 'ended']) player.addEventListener(ev, () => showHands());
+// Browsers start audio only after a gesture: a remembered "on" opens the mic now and resumes on the first tap.
+document.addEventListener('pointerdown', () => hands?.ctx.state === 'suspended' && hands.ctx.resume(), true);
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || !hands) return;
+  if (hands.ctx.state !== 'running') hands.ctx.resume().catch(() => {});
+  if (!hands.lock || hands.lock.released) hands.lock = await navigator.wakeLock?.request('screen').catch(() => null);
+});
+showHands();
+if (handsWanted) handsOn();
+
+renderRequests();
+renderMessages();
+connect();
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+// ---- push alerts: Jarvis notifies this device about unanswered asks and urgent news when the app is closed ----
+let wantItem = new URLSearchParams(location.search).get('item');
+if (wantItem) history.replaceState(null, '', '/');
+// A tapped notification opens /?item=<message id>. An open ask or email opens in its popup; an event line is scrolled to and marked.
+function showItem(id) {
+  if (id.startsWith('gmail:')) {
+    wantItem = null;
+    if (openMessages().some(m => m.id === id)) { selectMessage(id); setPop('messages'); }
+    return;
+  }
+  if (askData.has(id)) {
+    wantItem = null;
+    if (askData.get(id).status !== 'answered') { select(`ask:${id}`); setPop('requests'); }
+    return;
+  }
+  const el = [...items.querySelectorAll('.event')].reverse().find(x => x.textContent.includes(`message_id=${id} `));
+  if (!el) return;
+  wantItem = null;
+  items.querySelectorAll('.focus').forEach(x => x.classList.remove('focus'));
+  el.classList.add('focus');
+  const head = el.closest('.fold')?.querySelector('.fold-head');
+  if (head?.getAttribute('aria-expanded') === 'false') toggleFold(head);
+  pinned = false;
+  setPop(null);
+  el.scrollIntoView({ block: 'center' });
+}
+const alertsBtn = $('alerts');
+const pushReady = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const pushSub = async () => (await navigator.serviceWorker.ready).pushManager.getSubscription();
+const postSub = sub => fetch('/api/push/subscribe', { method: 'POST', body: JSON.stringify(sub) });
+async function showAlerts() {
+  const sub = await pushSub();
+  alertsBtn.lastChild.textContent = sub ? 'On' : 'Off';
+  alertsBtn.setAttribute('aria-pressed', String(!!sub));
+  return sub;
+}
+alertsBtn.onclick = async () => {
+  try {
+    const sub = await pushSub();
+    if (sub) {
+      await fetch('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint: sub.endpoint }) });
+      await sub.unsubscribe();
+    } else {
+      if (await Notification.requestPermission() !== 'granted') return add('event', 'Alerts need notification permission. Allow it in the browser settings for this site.');
+      const { publicKey } = await (await fetch('/api/push/key')).json();
+      const reg = await navigator.serviceWorker.ready;
+      const fresh = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(atob(publicKey.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)) });
+      if (!(await postSub(fresh)).ok) throw new Error('the daemon refused the subscription');
+      fetch('/api/push/test', { method: 'POST' });
+    }
+  } catch (err) { add('event', 'Alerts: ' + err.message); }
+  showAlerts();
+};
+if (pushReady) {
+  alertsBtn.hidden = false;
+  // Re-send an existing subscription on every load, so the daemon has it even after its database was reset.
+  showAlerts().then(sub => sub && postSub(sub)).catch(() => {});
+  navigator.serviceWorker.addEventListener('message', e => { if (e.data?.type === 'item') showItem(e.data.id); });
+}
+</script>
+</body>
+</html>

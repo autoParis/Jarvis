@@ -1,0 +1,56 @@
+#!/usr/bin/env node
+// The approval gate CLI the brain calls. jarvisd holds the rules; this only relays.
+//   jarvis-act propose --action worker-start --args '{"repo":"/abs/path","spec":"..."}' --say "Start 4412 on Opus?"
+//                      [--approves "<what happens if the owner approves>"] [--rests-on "<the fact the proposal rests on>"]
+//   jarvis-act confirm <id>    after the owner says yes (refused unless he spoke after the proposal)
+//   jarvis-act reject <id>     after the owner says no
+//   jarvis-act list            pending proposals
+//   jarvis-act email-done gmail:<id>   the owner will handle that email himself; drops it from the brief
+//   jarvis-act message-add --to <name> --channel <slack|email> --reason <text> --text <draft>
+//                              a card under Messages for something the owner sends himself. Nothing is sent; he taps Done.
+//   jarvis-act reply-add --ref TICKET-1045 --dealership <name> --dealership-id <uuid> --repo <owner/name> --pr <number> --text <exact words>
+//                              a support reply the owner approved. jarvisd sends it once, on its own, when the PR is in production.
+//   jarvis-act reply-list      replies not closed yet
+//   jarvis-act reply-resume <id>   the owner says the manual steps are done, or to try a failed send again
+//   jarvis-act reply-drop <id>     the owner says not to send it
+const [cmd, ...rest] = process.argv.slice(2);
+const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
+const url = process.env.JARVIS_URL ?? 'http://127.0.0.1:7717';
+let body;
+if (cmd === 'email-done') {
+  if (!/^gmail:\w+$/.test(rest[0] ?? '')) { console.error('usage: jarvis-act email-done gmail:<id>'); process.exit(2); }
+  const res = await fetch(`${url}/api/internal/answered`, { method: 'POST', body: JSON.stringify({ id: rest[0], answer: 'left to the owner' }) });
+  console.log(res.ok ? 'ok' : await res.text());
+  process.exit(res.ok ? 0 : 1);
+}
+if (cmd === 'message-add') {
+  const res = await fetch(`${url}/api/internal/messages`, { method: 'POST', body: JSON.stringify({ to: flag('to'), channel: flag('channel'), reason: flag('reason'), text: flag('text') }) });
+  console.log(await res.text());
+  process.exit(res.ok ? 0 : 1);
+}
+if (cmd?.startsWith('reply-')) {
+  const base = `${url}/api/internal/replies`;
+  let req;
+  if (cmd === 'reply-add') req = [base, { method: 'POST', body: JSON.stringify({ ref: flag('ref'), dealership: flag('dealership'), dealershipId: flag('dealership-id'), repo: flag('repo'), pr: flag('pr'), text: flag('text') }) }];
+  else if (cmd === 'reply-list') req = [base];
+  else if ((cmd === 'reply-resume' || cmd === 'reply-drop') && /^\d+$/.test(rest[0] ?? '')) req = [`${base}/${rest[0]}/${cmd.slice(6)}`, { method: 'POST' }];
+  else { console.error('usage: jarvis-act reply-add --ref <TICKET-n> --dealership <name> --dealership-id <uuid> --repo <owner/name> --pr <n> --text <words> | reply-list | reply-resume <id> | reply-drop <id>'); process.exit(2); }
+  const res = await fetch(...req);
+  const text = await res.text();
+  if (res.ok) console.log(text); else console.error(text);
+  process.exit(res.ok ? 0 : 1);
+}
+if (cmd === 'propose') {
+  let args;
+  try { args = JSON.parse(flag('args') ?? '{}'); } catch { console.error('--args must be JSON'); process.exit(2); }
+  const card = flag('approves') || flag('rests-on') ? { approves: flag('approves'), restsOn: flag('rests-on') } : undefined;
+  body = { action: flag('action'), args, say: flag('say'), card };
+} else if (cmd === 'confirm' || cmd === 'reject') {
+  body = { id: Number(rest[0]) };
+} else if (cmd !== 'list') {
+  console.error('usage: jarvis-act propose|confirm|reject|list|email-done|message-add|reply-add|reply-list|reply-resume|reply-drop'); process.exit(2);
+}
+const res = await fetch(`${url}/api/internal/gate/${cmd}`, { method: body ? 'POST' : 'GET', body: body && JSON.stringify(body) });
+const text = await res.text();
+console.log(text);
+process.exit(res.ok ? 0 : 1);

@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+// Prints the human-readable turns of an agent session transcript (Claude Code or Codex jsonl),
+// newest last, without tool calls, tool output or injected instructions.
+//   jarvis-session <transcript.jsonl> [--last 20] [--chars 1500]
+// Find transcripts with: jarvis-orca search "<words>"  (each hit has source.filePath)
+import { readFileSync } from 'node:fs';
+
+const [file, ...rest] = process.argv.slice(2);
+if (!file) { console.error('usage: jarvis-session <transcript.jsonl> [--last N] [--chars N]'); process.exit(2); }
+const opt = (n, d) => { const i = rest.indexOf(`--${n}`); return i >= 0 ? Number(rest[i + 1]) : d; };
+const last = opt('last', 20), chars = opt('chars', 1500);
+
+const text = c => typeof c === 'string' ? c
+  : Array.isArray(c) ? c.filter(b => ['text', 'input_text', 'output_text'].includes(b.type)).map(b => b.text).join('\n') : '';
+// Harness-injected blocks that look like user turns but are not the owner.
+const injected = t => /^\s*(<|# AGENTS\.md|Caveat:|\[Request interrupted)/.test(t);
+
+const turns = [];
+for (const line of readFileSync(file, 'utf8').split('\n')) {
+  if (!line) continue;
+  let e; try { e = JSON.parse(line); } catch { continue; }
+  let role, t;
+  if (e.type === 'user' || e.type === 'assistant') { role = e.type; t = text(e.message?.content); }        // Claude Code
+  else if (e.type === 'response_item' && e.payload?.type === 'message') { role = e.payload.role; t = text(e.payload.content); } // Codex
+  if (!role || !t?.trim() || (role === 'user' && injected(t))) continue;
+  if (role !== 'user' && role !== 'assistant') continue;
+  turns.push(`${role === 'user' ? 'OWNER' : 'AGENT'}: ${t.trim().slice(0, chars)}${t.length > chars ? ' […]' : ''}`);
+}
+console.log(`${turns.length} turns in ${file}; showing the last ${Math.min(last, turns.length)}.\n`);
+console.log(turns.slice(-last).join('\n\n'));

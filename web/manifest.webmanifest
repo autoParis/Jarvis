@@ -1,0 +1,9 @@
+{
+  "name": "Jarvis",
+  "short_name": "Jarvis",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070B0B",
+  "theme_color": "#0A1312",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

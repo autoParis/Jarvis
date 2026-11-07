@@ -1,0 +1,82 @@
+#!/bin/bash
+# First-time setup: asks for the personal settings of this install, writes them to .env (gitignored, mode 600),
+# puts this folder's path in vault/projects/jarvis.md, installs the packages and runs the tests.
+#   bin/setup             ask each value, the current one (or the example) in brackets; Enter keeps it
+#   bin/setup --defaults  write the shown values without asking (for a quick local try)
+# Run it again at any time: the answers in .env become the defaults.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$ROOT/.env"
+DEFAULTS=0
+[ "${1:-}" = "--defaults" ] && DEFAULTS=1
+
+# Read the current answers, else the examples, without running either file as a script.
+current() { # key, file
+  { sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$2" 2>/dev/null || true; } | tail -1
+}
+OUT=""
+ask() { # key, question, [default when .env has no answer yet]
+  local key="$1" q="$2" def v
+  def="$(current "$key" "$ENV_FILE")"
+  [ -z "$def" ] && def="${3:-}"
+  [ -z "$def" ] && def="$(current "$key" "$ROOT/.env.example")"
+  if [ "$DEFAULTS" = 1 ] || [ ! -t 0 ]; then v="$def"
+  else read -r -p "$q [$def]: " v || true; v="${v:-$def}"; fi
+  case "$v" in *\"*|*$'\n'*) echo "A value cannot hold a double quote: $key" >&2; exit 1 ;; esac
+  printf -v "$key" '%s' "$v"
+  OUT+="$key=\"$v\""$'\n'
+}
+
+echo "Jarvis setup. Press Enter to keep the value in brackets."
+ask JARVIS_OWNER_NAME     "Your name, as you sign emails"
+ask JARVIS_COMPANY        "Your company"
+ask JARVIS_COMPANY_ABOUT  "What it does, in one line"
+ask JARVIS_GMAIL_ACCOUNT  "The Gmail account Jarvis reads (gws must be signed in to it)"
+ask JARVIS_OWNER_EMAILS   "All your own email addresses, comma separated" "$JARVIS_GMAIL_ACCOUNT"
+ask JARVIS_GMAIL          "Gmail watcher, on or off"
+ask JARVIS_ALLOWED_LOGINS "Your Tailscale login (the only one let in from the tailnet)"
+ask JARVIS_TERM_ORIGIN    "The app's tailnet URL (https://<host>.<tailnet>.ts.net:7717)"
+ask JARVIS_SHELL_DEVICES  "Your phone's tailnet addresses, comma separated (tailscale status)"
+ask JARVIS_TS_SOCKET      "tailscaled socket, empty for the Tailscale app"
+ask JARVIS_TS_SERVICE     "launchd label of that tailscaled"
+ask JARVIS_VAPID_SUBJECT  "Push contact (mailto:you@...)"
+ask JARVIS_TRUSTED_REPOS  "Your own GitHub repos, owner/name, comma separated"
+ask JARVIS_FBM_REPO       "Local clone for the fbm-client-pause action, empty to skip"
+ask JARVIS_PR_AUDIT_REPO  "Local clone bin/pr-audit reads, empty to skip"
+ask JARVIS_PROD_MCP_URL   "Production MCP URL of your product"
+ask JARVIS_STAGING_MCP_URL "Staging MCP URL of your product"
+ask JARVIS_TICKET_PREFIX  "Support ticket prefix (TICKET in TICKET-1045)"
+ask JARVIS_MIGRATION_SHEET_ID "Google Sheet id bin/sheet-edit may write to"
+
+umask 077
+{ echo "# Written by bin/setup on $(date +%Y-%m-%d). Personal: never commit this file."; printf '%s' "$OUT"; } > "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+echo "Wrote $ENV_FILE"
+
+# The Jarvis project card names this folder, so the brain and the side chat picker find it.
+CARD="$ROOT/vault/projects/jarvis.md"
+if grep -q '__JARVIS_ROOT__' "$CARD"; then
+  ESCAPED="$(printf '%s' "$ROOT" | sed 's/[&|]/\\&/g')"
+  sed -i '' "s|__JARVIS_ROOT__|$ESCAPED|g" "$CARD"
+  echo "Set the repo path in vault/projects/jarvis.md"
+fi
+mkdir -p "$ROOT/data"
+# The people file holds real names and addresses, so git ignores it. Start it from the template.
+if [ ! -f "$ROOT/vault/people.md" ]; then
+  cp "$ROOT/vault/people.example.md" "$ROOT/vault/people.md"
+  echo "Created vault/people.md from vault/people.example.md"
+fi
+
+cd "$ROOT"
+npm install --no-audit --no-fund
+npm test >/dev/null && echo "Tests pass." || { echo "Tests failed: run npm test to see why." >&2; exit 1; }
+
+cat <<NEXT
+
+Next:
+0. Read vault/SETUP.md: what to fill in, with an example of each.
+1. Edit vault/people.md (git ignores it): you, your team, your clients and the known email senders.
+2. Copy vault/projects/example-project.md to one card per repository you work on.
+3. Start it: npm start (http://127.0.0.1:7717), or bin/install-service for a login service plus tailscale serve.
+4. Optional: python3 bin/trust-own-repos.py, with .env loaded (set -a; . ./.env; set +a), to tell Claude Code's auto mode your repos are yours.
+NEXT

@@ -1,0 +1,19 @@
+Worker term_00000000-0000-4000-a000-000000000001 is stopped at a prompt that needs a person (approval or a question) while running task "Posted ad not found, asks for link" (task_000000000003).
+The Dispatch is still open. Answer it with your Orca CLI's `orchestration send --to dispatch:ctx_000000000002 --subject "<topic>" --body "<guidance>"`, retry it, or stop the worker.
+Last output:
+│ "prod|supabase|read-only|lecture|psql|branche|staging|main" | head -30; ls .claude/skills
+ │ 2>/dev/null | head -60; git grep -n -E
+ │ "widget.*(stop|flow).*report|flow_stop|widget_stop|widget-stop" origin/staging -- 'app/api/**'
+ │ 'lib/marketplace/**' | head -15; ls -a | grep -E "^\.env"; ls ~/Repos/acmeapp_nextjs/scripts/db
+ │ | head
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ Hook PreToolUse:Bash requires confirmation for this command:
+ │ This reads or edits a credential file (Tailscale key, Firebase service account, FB passwords).
+ │ Approve for a specific need (e.g. creating a client key) and make sure the command captures the
+ │ value into a variable rather than printing it.
+ settings.json to update hooks
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+ Esc to cancel · Tab to amend
+Full output: orchestration worker-read --dispatch ctx_000000000002

@@ -1,0 +1,47 @@
+#!/usr/bin/env node
+// The Migration contacts list, for the brain. jarvisd holds the rules (daemon/migration.ts); this only relays.
+// It has no command to remove a person or add a dealership: those are the owner's taps in the app.
+//   jarvis-migration add --name "<person>" --dealership "<name as on the list>" --source email|text --from "<where: chat, an email from X>" [--status todo|contacted|meeting|migrated] [--at <meeting time>] [--note "<text>"]
+//   jarvis-migration list                         everyone, as JSON, with ids and each status change's time
+//   jarvis-migration dealers                      the dealership names to pick from
+//   jarvis-migration set-status <id> --status todo|contacted|meeting|migrated [--at <meeting time>]
+//   jarvis-migration meeting <id> --at <meeting time>   moves a meeting already set
+//   jarvis-migration note <id> --text "<the whole note>"   replaces the note
+//   jarvis-migration import-dealers --file <path.json>   replaces the sheet's dealership list; people rows are not touched
+// A meeting time is ISO with its zone, Eastern for the owner: 2026-11-07T10:00-05:00 (EST) or 2026-06-02T10:00-04:00 (EDT).
+import { readFileSync } from 'node:fs';
+
+const [cmd, ...rest] = process.argv.slice(2);
+const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
+const base = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/migration`;
+const usage = 'usage: jarvis-migration add --name <text> --dealership <name> --source email|text --from <where> [--status <s>] [--at <time>] [--note <text>] | list | dealers | set-status <id> --status <s> [--at <time>] | meeting <id> --at <time> | note <id> --text <text> | import-dealers --file <path>';
+const fail = m => { console.error(m ?? usage); process.exit(2); };
+const id = rest[0];
+let req;
+if ((cmd === 'list' || cmd === 'dealers') && !rest.length) req = [base];
+else if (cmd === 'add') req = [base, { name: flag('name'), dealership: flag('dealership'), source: flag('source'), status: flag('status'), meetingAt: flag('at'), note: flag('note'), from: flag('from') }];
+else if (cmd === 'import-dealers') {
+  const file = flag('file');
+  if (!file) fail();
+  let body;
+  try { body = JSON.parse(readFileSync(file, 'utf8')); } catch (e) { fail(`cannot read ${file} as JSON: ${e.message}`); }
+  req = [`${base}/dealers`, body];
+} else if (!/^\d+$/.test(id ?? '')) fail();
+else if (cmd === 'set-status') req = [`${base}/${id}/status`, { status: flag('status'), meetingAt: flag('at') }];
+else if (cmd === 'meeting') { if (!flag('at')) fail(); req = [`${base}/${id}/meeting`, { meetingAt: flag('at') }]; }
+else if (cmd === 'note') { if (flag('text') === undefined) fail(); req = [`${base}/${id}/note`, { note: flag('text') }]; }
+else fail();
+try {
+  const res = await fetch(req[0], req[1] ? { method: 'POST', body: JSON.stringify(req[1]) } : undefined);
+  const answer = await res.json().catch(() => ({}));
+  // The brain gets what it asked about: the people for list, the names for dealers, the one row otherwise.
+  const shown = answer.error ? { error: answer.error }
+    : cmd === 'list' ? answer.migration.people
+    : cmd === 'dealers' ? answer.migration.dealers.map(d => d.onSheet ? d.name : `${d.name} (not on the sheet)`)
+    : answer.person ? { ...answer.person, ...(answer.existing ? { existing: true } : {}) } : answer.imported ?? answer;
+  (res.ok ? console.log : console.error)(JSON.stringify(shown));
+  process.exit(res.ok ? 0 : 1);
+} catch (e) {
+  console.error(`jarvisd unreachable: ${e.cause?.code ?? e}`);
+  process.exit(1);
+}

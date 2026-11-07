@@ -1,0 +1,26 @@
+#!/usr/bin/env node
+// The hook that lets one support reply out (daemon/replyworker.ts). The send worker runs in dontAsk mode with the reply
+// tool on no allowlist, so this script's "allow" is the only thing that permits the call. If it crashes or is missing, the
+// call is denied. It allows the exact stored words once: the claim file means a second call from the same worker is refused.
+//   reply-guard <spec file>    spec: { tool, input: { reference, dealership_id, content }, claim }
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const decide = (decision, reason) => {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: reason } }));
+  process.exit(0);
+};
+try {
+  const event = JSON.parse(readFileSync(0, 'utf8'));
+  const spec = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+  const given = event.tool_input ?? {};
+  if (event.tool_name !== spec.tool) decide('deny', `REPLY_GUARD_REFUSED wrong tool ${event.tool_name}`);
+  const names = Object.keys(spec.input);
+  // A status, or any other extra argument, is not what the owner approved.
+  if (Object.keys(given).length !== names.length) decide('deny', 'REPLY_GUARD_REFUSED the arguments are not the stored ones');
+  for (const n of names) if (given[n] !== spec.input[n]) decide('deny', `REPLY_GUARD_REFUSED ${n} differs from the stored one`);
+  try { writeFileSync(spec.claim, `${new Date().toISOString()}\n`, { flag: 'wx' }); }
+  catch { decide('deny', 'REPLY_GUARD_REFUSED this reply already had its one call'); }
+  decide('allow', 'the exact stored reply, first call');
+} catch (e) {
+  decide('deny', `REPLY_GUARD_REFUSED ${e}`);
+}

@@ -1,0 +1,38 @@
+#!/usr/bin/env node
+// The Today list, for the brain. jarvisd holds the rules; this only relays. It has no command to release, drop, accept or run: those are the owner's taps.
+//   jarvis-today add --words "<the owner's exact words for this item>" [--go]
+//   jarvis-today list
+//   jarvis-today workup <id> --json '{"kind":"task","title":"...","reading":"...","questions":[{"q":"...","options":["..."],"recommended":0}],"assumptions":["..."],"repo":"/abs","spec":"..."}'
+//                 a story has "story":{"github":"owner/name","title":"...","body":"..."} and "repo" in place of "spec"
+//   jarvis-today draft <id> --repo <abs path> --brief "<your reading>" [--title <title>]   a read-only worker drafts it
+//   jarvis-today answer <id> --question <n> --text "<the owner's answer>"
+//   jarvis-today result <id> --result "<what happened>" --not-proven "<what was not checked>" [--link <url>]
+const [cmd, ...rest] = process.argv.slice(2);
+const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
+const base = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/today`;
+const usage = 'usage: jarvis-today add --words <text> [--go] | list | workup <id> --json <json> | draft <id> --repo <path> --brief <text> [--title <text>] | answer <id> --question <n> --text <text> | result <id> --result <text> --not-proven <text> [--link <url>]';
+const fail = () => { console.error(usage); process.exit(2); };
+const id = rest[0];
+let req;
+if (cmd === 'list' && !rest.length) req = [base];
+else if (cmd === 'add') req = [base, { words: flag('words'), go: rest.includes('--go') }];
+else if (!/^\d+$/.test(id ?? '')) fail();
+else if (cmd === 'workup') {
+  let body;
+  try { body = JSON.parse(flag('json') ?? ''); } catch { console.error('--json must be JSON'); process.exit(2); }
+  req = [`${base}/${id}/workup`, body];
+} else if (cmd === 'draft') req = [`${base}/${id}/draft`, { repo: flag('repo'), brief: flag('brief'), title: flag('title') }];
+else if (cmd === 'answer') req = [`${base}/${id}/answer`, { question: flag('question'), text: flag('text') }];
+else if (cmd === 'result') req = [`${base}/${id}/result`, { result: flag('result'), notProven: flag('not-proven'), link: flag('link') }];
+else fail();
+try {
+  const res = await fetch(req[0], req[1] ? { method: 'POST', body: JSON.stringify(req[1]) } : undefined);
+  const answer = await res.json().catch(() => ({}));
+  // The whole list is for the page. The brain gets what it asked about, or the rows when it asked for the list.
+  const shown = cmd === 'list' ? answer.today : answer.error ? { error: answer.error } : answer.item ?? answer;
+  (res.ok ? console.log : console.error)(JSON.stringify(shown));
+  process.exit(res.ok ? 0 : 1);
+} catch (e) {
+  console.error(`jarvisd unreachable: ${e.cause?.code ?? e}`);
+  process.exit(1);
+}

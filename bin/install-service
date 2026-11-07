@@ -1,0 +1,50 @@
+#!/bin/bash
+# Installs jarvisd as a login service (launchd local.jarvis, 127.0.0.1:7717) that loads .env (run bin/setup first),
+# then serves it on your tailnet with `tailscale serve`. JARVIS_TS_SOCKET in .env points at a userspace tailscaled
+# (for example a personal tailnet kept apart from a work one). Leave it empty to use the Tailscale app.
+# App: the JARVIS_TERM_ORIGIN URL in .env, https://<host>.<tailnet>.ts.net:7717
+# Uninstall: launchctl bootout gui/$(id -u)/local.jarvis; tailscale serve --https=7717 off
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+[ -f "$ROOT/.env" ] || { echo "No .env: run bin/setup first." >&2; exit 1; }
+TS_SOCKET="$(sed -n 's/^JARVIS_TS_SOCKET="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$ROOT/.env" | tail -1)"
+TS_SOCKET="${TS_SOCKET/#\~/$HOME}"
+UID_="$(id -u)"
+mkdir -p "$ROOT/data"
+
+agent() { # label, log file, program args...
+  local label="$1" logf="$2"; shift 2
+  local plist="$HOME/Library/LaunchAgents/$label.plist" args=""
+  for a in "$@"; do args+="    <string>$a</string>"$'\n'; done
+  cat > "$plist" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array>
+$args  </array>
+  <key>WorkingDirectory</key><string>$ROOT</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/Applications/Orca.app/Contents/Resources/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key><string>$HOME</string>
+    <key>LANG</key><string>en_US.UTF-8</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$logf</string>
+  <key>StandardErrorPath</key><string>$logf</string>
+</dict></plist>
+PL
+  launchctl bootout "gui/$UID_/$label" 2>/dev/null || true
+  launchctl bootstrap "gui/$UID_" "$plist"
+}
+
+agent local.jarvis "$ROOT/data/jarvisd.log" \
+  "$(command -v node)" "--env-file-if-exists=$ROOT/.env" --disable-warning=ExperimentalWarning "$ROOT/daemon/main.ts"
+
+TS_BIN="$(command -v tailscale || echo /opt/homebrew/bin/tailscale)"
+[ -x "$TS_BIN" ] || { echo "jarvisd runs on http://127.0.0.1:7717. Tailscale is not installed, so it is not served to the phone."; exit 0; }
+TS="$TS_BIN${TS_SOCKET:+ --socket=$TS_SOCKET}"
+$TS serve --bg --https=7717 http://127.0.0.1:7717
+$TS serve status
