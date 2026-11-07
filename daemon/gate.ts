@@ -9,6 +9,7 @@ import { SIDE_CHAT_PREFIX } from './work.ts';
 import { shownTitle } from './requests.ts';
 import { NAMED_ACTIONS, namedCardArgs, namedCommand, namedCwd, verifyNamed } from './namedactions.ts';
 import { PROD_MCP_CALL, checkProdCall, makeProdMcp, type ProdMcp } from './prodmcp.ts';
+import { PRODUCT_LABEL } from './config.ts';
 import { NATIVE_FOOTER, ROW_PREFIX, type Native } from './native.ts';
 
 /** Appended to every worker spec Jarvis dispatches, so asks arrive short enough to speak. */
@@ -24,7 +25,7 @@ IMAGE: <optional, one absolute path to a .png .jpg .jpeg .webp or .gif>
 OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
 Pass the short choices in one --options flag, separated by commas: --options "Merged,Not yet". Do not repeat the flag, because Orca keeps only the last one. Orca splits on every comma, so write each choice without one. For anything visual, put a screenshot path in IMAGE (under the repo's docs/screens or data/uploads, ~/Desktop, ~/Downloads or ~/orca/workspaces) or a link in CONTEXT. The owner sees the picture on the ask card in the app.
 
-If Claude Code's permission layer refuses a command, do not retry it or route around it: a retry hits the same refusal. Escalate, say the permission layer refused it, and quote the whole command. Jarvis itself can run two on the owner's Approve tap, and his card offers them when your words give every value: \`gh pr close <number> --repo <owner/name> --comment "<why>"\` and, from the FBM repo, \`node functions/scripts/reusable/pause-client.js --client <id> --hours <hours>\`. It can also run one production AcmeApp MCP call on his tap: quote the exact tool name and the whole arguments JSON.
+If Claude Code's permission layer refuses a command, do not retry it or route around it: a retry hits the same refusal. Escalate, say the permission layer refused it, and quote the whole command. Jarvis itself can run two on the owner's Approve tap, and his card offers them when your words give every value: \`gh pr close <number> --repo <owner/name> --comment "<why>"\` and, from the FBM repo, \`node functions/scripts/reusable/pause-client.js --client <id> --hours <hours>\`. It can also run one production ${PRODUCT_LABEL} MCP call on his tap: quote the exact tool name and the whole arguments JSON.
 
 Before each batch of tool calls, write one plain sentence saying what you are about to do. The owner reads your conversation as a chat.`;
 

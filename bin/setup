@@ -46,6 +46,10 @@ ask JARVIS_PR_AUDIT_REPO  "Local clone bin/pr-audit reads, empty to skip"
 ask JARVIS_PROD_MCP_URL   "Production MCP URL of your product"
 ask JARVIS_STAGING_MCP_URL "Staging MCP URL of your product"
 ask JARVIS_TICKET_PREFIX  "Support ticket prefix (TICKET in TICKET-1045)"
+ask JARVIS_PRODUCT_KEY    "Short key of your product (MCP server names, project card name)"
+ask JARVIS_PRODUCT_LABEL  "How the app names your product"
+ask JARVIS_SUPPORT_REPO   "Product repo whose merged PRs close support tickets, owner/name"
+ask JARVIS_SUPPORT_STAFF_SUFFIX "What the support desk adds to a staff name"
 ask JARVIS_MIGRATION_SHEET_ID "Google Sheet id bin/sheet-edit may write to"
 
 umask 077

@@ -41,6 +41,7 @@ import { readChatFile, withEvents, fileCursor } from './transcript.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { withTyped } from '../web/dictate.js';
+import { PRODUCT_KEY, PRODUCT_LABEL } from './config.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.JARVIS_PORT ?? 7717);
@@ -739,7 +740,7 @@ http.createServer(async (req, res) => {
       return r ? send(res, 200, r) : send(res, 404, { error: 'No report is stored for this request.' });
     }
     // ---- Work list ----
-    if (req.method === 'GET' && url === '/api/work') return send(res, 200, { ...mergedWork(), hidden: hiddenIds(), repos: repos() });
+    if (req.method === 'GET' && url === '/api/work') return send(res, 200, { ...mergedWork(), hidden: hiddenIds(), repos: repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL } });
     // Hide or show a row in the app. Only the list of hidden ids changes.
     if (req.method === 'POST' && url === '/api/work/hide') {
       const { id, hidden } = await json(req);

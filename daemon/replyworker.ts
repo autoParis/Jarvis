@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cleanEnv } from './orca.ts';
 import type { SupportReply } from './store.ts';
-import { PROD_MCP_URL } from './config.ts';
+import { PROD_MCP_URL, PRODUCT_KEY } from './config.ts';
 
 // How a support reply reaches production. jarvisd holds no production credential, so a one-shot Claude Code worker makes
 // the call with the owner's own MCP sign-in. The model only makes the call: code reads the exact tool input and the tool's
@@ -66,7 +66,7 @@ const shortText = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 300);
 
 export function makeTicketWorker(o: { dataDir: string; exec?: Exec; server?: string; url?: string }) {
   const exec = o.exec ?? realExec;
-  const server = o.server ?? 'acmeapp-prod';
+  const server = o.server ?? `${PRODUCT_KEY}-prod`;
   const mcp = JSON.stringify({ mcpServers: { [server]: { type: 'http', url: o.url ?? PROD_MCP_URL } } });
   // Only this one server, no settings of the owner's, and dontAsk: anything not explicitly let through is denied.
   const base = ['-p', '--model', MODEL, '--tools', '', '--permission-mode', 'dontAsk', '--strict-mcp-config', '--mcp-config', mcp, '--setting-sources', '',

@@ -14,6 +14,8 @@ const ORDER = ['jarvis', 'acmeapp', 'fbm'];
 /** Projects in the order the owner reads them: Jarvis, AcmeApp, FBM, then any other card by name. */
 export const orderRepos = repos => [...repos].sort((a, b) => ((ORDER.indexOf(a.name) + 1) || 99) - ((ORDER.indexOf(b.name) + 1) || 99) || a.name.localeCompare(b.name));
 export const projectLabel = name => LABELS[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
+/** The product's card name and label from jarvisd (`product` in GET /api/work), so its card sorts second and reads like the others. */
+export function setProduct(p) { if (typeof p?.key === 'string' && typeof p?.label === 'string') { LABELS[p.key] = p.label; ORDER[1] = p.key; } }
 
 const kindOf = id => KINDS.find(k => k.id === id);
 

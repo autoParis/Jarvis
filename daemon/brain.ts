@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { addSteps, finishSteps, type Step } from './worksteps.ts';
 import { DEFAULT_BRAIN_MODEL, type BrainModel } from './brainmodel.ts';
-import { STAGING_MCP_URL } from './config.ts';
+import { STAGING_MCP_URL, PRODUCT_KEY } from './config.ts';
 
 const IDLE_RESET_MS = 55 * 60_000; // the Max-plan prompt cache lives about 1 hour
 const TOKEN_RESET = 150_000;
@@ -32,7 +32,7 @@ export function brainArgs(o: { model: BrainModel; systemPrompt: string; resume?:
     crossSessionInbound: 'accept', dialogExpiry: 'never',
   };
   const tools = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Skill', 'ToolSearch', 'SendMessage', 'ListAgents'];
-  const mcp = { mcpServers: { 'acmeapp-staging': { type: 'http', url: STAGING_MCP_URL } } };
+  const mcp = { mcpServers: { [`${PRODUCT_KEY}-staging`]: { type: 'http', url: STAGING_MCP_URL } } };
   return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--model', o.model.model, '--effort', o.model.effort,
     ...(o.resume ? ['--resume', o.resume] : []),

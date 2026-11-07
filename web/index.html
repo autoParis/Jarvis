@@ -184,7 +184,7 @@ import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
 import { makeModelPicker } from '/modelpicker.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
-import { KINDS, orderRepos, projectLabel, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
+import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
 import { mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml } from '/worklist.js';
 const $ = id => document.getElementById(id);
 // Every POST carries this page's secret from the event stream. jarvisd refuses actions as the owner without it,
@@ -1541,7 +1541,7 @@ function showPick(open) {
 npBtn.onclick = async () => {
   if (!np.hidden) return showPick(false);
   showMenu(false);
-  try { npRepos = orderRepos((await (await fetch('/api/work')).json()).repos || []); }
+  try { const w = await (await fetch('/api/work')).json(); setProduct(w.product); npRepos = orderRepos(w.repos || []); }
   catch { return add('event', 'New session: could not read the project list. Try again.'); }
   npChoice = restore(localStorage.getItem('newSession'), npRepos);
   npRender();

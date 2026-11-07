@@ -1,6 +1,7 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import type { Log } from './log.ts';
+import { PRODUCT_KEY } from './config.ts';
 
 // Project terminals from the new-session picker. Each one is a tmux session, so it
 // has a real pty and tmux draws vim, top and Claude Code. jarvisd never parses escape codes itself: it reads tmux's own
@@ -17,7 +18,7 @@ export type Frame = { cols: number; rows: number; cursor: [number, number] | nul
 export type TermViewer = (f: Frame) => void;
 
 /** Short names for the session: `ev-1` for AcmeApp. */
-const PREFIX: Record<string, string> = { jarvis: 'jv', acmeapp: 'ev', fbm: 'fbm' };
+const PREFIX: Record<string, string> = { jarvis: 'jv', [PRODUCT_KEY]: 'ev', fbm: 'fbm' };
 export const NAME = /^[a-z]{1,8}-\d{1,4}$/;
 export function sessionName(project: string, taken: string[]): string {
   const p = PREFIX[project] ?? (project.toLowerCase().replace(/[^a-z]/g, '').slice(0, 6) || 'term');

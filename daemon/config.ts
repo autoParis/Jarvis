@@ -17,3 +17,12 @@ export const TICKET_PREFIX = (env.JARVIS_TICKET_PREFIX?.trim() || 'TICKET').toUp
 /** The MCP servers of the product the workers act on. Empty means not configured. */
 export const PROD_MCP_URL = env.JARVIS_PROD_MCP_URL?.trim() || 'https://app.example.test/api/mcp';
 export const STAGING_MCP_URL = env.JARVIS_STAGING_MCP_URL?.trim() || 'https://staging.app.example.test/api/mcp';
+/** The product the workers act on. Its MCP servers are `<key>-prod` and `<key>-staging`, its project card is
+ * `vault/projects/<key>.md`, and jarvisd reads its production MCP key from `data/<key>-prod-mcp.key`. */
+const key = (env.JARVIS_PRODUCT_KEY?.trim() || '').toLowerCase();
+export const PRODUCT_KEY = /^[a-z][a-z0-9-]{0,39}$/.test(key) ? key : 'acmeapp';
+export const PRODUCT_LABEL = env.JARVIS_PRODUCT_LABEL?.trim() || 'AcmeApp';
+/** The product repo (owner/name) whose merged PRs the support reply watch follows. */
+export const SUPPORT_REPO = env.JARVIS_SUPPORT_REPO?.trim() || 'example-org/acmeapp_nextjs';
+/** What the support desk appends to a staff member's name in a ticket thread, so their messages never count as the customer's. */
+export const SUPPORT_STAFF_SUFFIX = env.JARVIS_SUPPORT_STAFF_SUFFIX?.trim() || '(support Exampleco)';

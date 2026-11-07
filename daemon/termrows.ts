@@ -1,7 +1,8 @@
 import type { WorkRow } from './work.ts';
 import type { TermInfo } from './terminal.ts';
+import { PRODUCT_KEY, PRODUCT_LABEL } from './config.ts';
 
-const LABELS: Record<string, string> = { jarvis: 'Jarvis', acmeapp: 'AcmeApp', fbm: 'FBM' };
+const LABELS: Record<string, string> = { jarvis: 'Jarvis', [PRODUCT_KEY]: PRODUCT_LABEL, fbm: 'FBM' };
 export const projectName = (p: string) => LABELS[p] ?? (p.charAt(0).toUpperCase() + p.slice(1));
 
 /** Work-list rows for the project terminals: "Terminal in AcmeApp", in the Terminals group, opened with `t:<name>`. */

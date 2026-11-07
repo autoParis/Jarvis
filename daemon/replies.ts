@@ -5,13 +5,13 @@ import { sqlTime } from './push.ts';
 import type { Store, SupportReply } from './store.ts';
 import type { SendResult } from './replyworker.ts';
 import type { Log } from './log.ts';
-import { TICKET_PREFIX } from './config.ts';
+import { TICKET_PREFIX, SUPPORT_REPO, SUPPORT_STAFF_SUFFIX } from './config.ts';
 
 // the owner's rule: a support reply about a code fix goes out only once the fix is in production. He approves the words once,
 // the brain adds them with `jarvis-act reply-add`, and each tick of the ten-minute check decides in code here.
 
 /** The only repo whose production signal has been read and checked. */
-export const LIVE_REPO = 'example-org/acmeapp_nextjs';
+export const LIVE_REPO = SUPPORT_REPO;
 const MANUAL_LABEL = 'manual-steps-needed';
 
 export type Gh = (path: string) => Promise<any>;
@@ -78,7 +78,7 @@ const hasManualLabel = (p: any) => (p.labels ?? []).some((l: any) => l?.name ===
 const OPEN_STATUS = new Set(['reçu', 'en cours', 'received', 'in progress']);
 const CLOSED_STATUS = new Set(['résolu', 'fermé', 'resolved', 'closed']);
 /** How support_ticket_get marks a message that did not come from the customer. */
-const notCustomer = (from: unknown) => from === 'système' || (typeof from === 'string' && from.endsWith(' (support Exampleco)'));
+const notCustomer = (from: unknown) => from === 'système' || (typeof from === 'string' && from.endsWith(` ${SUPPORT_STAFF_SUFFIX}`));
 
 /** Whether the ticket still wants this reply. Throws when it cannot be read as expected. `approvedAt` is UTC, from this database. */
 export function ticketHold(t: any, reference: string, approvedAt: string): string | undefined {

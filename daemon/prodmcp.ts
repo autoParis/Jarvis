@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PROD_MCP_URL, TICKET_PREFIX } from './config.ts';
+import { PROD_MCP_URL, TICKET_PREFIX, PRODUCT_KEY, PRODUCT_LABEL } from './config.ts';
 
 // One call to a production AcmeApp MCP tool, run by jarvisd when the owner taps Approve. Claude Code's permission check refuses
 // workers on these tools whatever the owner said. The card and the call both read the same stored tool and arguments.
@@ -8,10 +8,10 @@ import { PROD_MCP_URL, TICKET_PREFIX } from './config.ts';
 export const PROD_MCP_CALL = 'prod-mcp-call';
 const PROD_URL = PROD_MCP_URL;
 /** jarvisd's own credential, under gitignored data/. The key itself goes in no log, card or result. */
-const KEY_FILE = fileURLToPath(new URL('../data/acmeapp-prod-mcp.key', import.meta.url));
+const KEY_FILE = fileURLToPath(new URL(`../data/${PRODUCT_KEY}-prod-mcp.key`, import.meta.url));
 /** A tool whose name contains one of these is never offered. This is the one refusal list. */
 export const REFUSED_TOOL_WORDS = ['delete'];
-const WORKER_PREFIX = 'mcp__acmeapp-prod__';
+const WORKER_PREFIX = `mcp__${PRODUCT_KEY}-prod__`;
 /** Production's route allows 60 s, so a slower answer is a lost one. */
 const TIMEOUT_MS = 90_000;
 const MAX_PAGES = 20;
@@ -22,9 +22,9 @@ export type ProdOptions = { url?: string; token?: () => string };
 
 /** The bare tool name. A worker quotes it with Claude Code's prefix. Throws on anything refused. */
 export function prodToolName(v: unknown): string {
-  if (typeof v !== 'string') throw new Error('tool is required: a production AcmeApp MCP tool name');
+  if (typeof v !== 'string') throw new Error(`tool is required: a production ${PRODUCT_LABEL} MCP tool name`);
   const tool = v.startsWith(WORKER_PREFIX) ? v.slice(WORKER_PREFIX.length) : v;
-  if (!/^[A-Za-z][\w-]*$/.test(tool)) throw new Error(`tool must be a production AcmeApp MCP tool name, got ${JSON.stringify(v)}`);
+  if (!/^[A-Za-z][\w-]*$/.test(tool)) throw new Error(`tool must be a production ${PRODUCT_LABEL} MCP tool name, got ${JSON.stringify(v)}`);
   const word = REFUSED_TOOL_WORDS.find(w => tool.toLowerCase().includes(w));
   if (word) throw new Error(`${tool} is refused: a tool whose name contains "${word}" never runs from this card. The owner does that at a screen.`);
   return tool;
@@ -57,7 +57,7 @@ export function shownArguments(args: Record<string, unknown>): string {
 
 /** What gets stored and shown. */
 export function prodCard(call: { tool: string; arguments: Record<string, unknown> }, touches: string) {
-  const runs = `On production AcmeApp. jarvisd makes this one call only when you tap Approve.\n\nTool: ${call.tool}\n\nTouches:\n${touches}\n\nArguments, in full:\n${shownArguments(call.arguments)}\n\nThen it reports what production answers.`;
+  const runs = `On production ${PRODUCT_LABEL}. jarvisd makes this one call only when you tap Approve.\n\nTool: ${call.tool}\n\nTouches:\n${touches}\n\nArguments, in full:\n${shownArguments(call.arguments)}\n\nThen it reports what production answers.`;
   return { ...call, touches, runs };
 }
 
@@ -88,7 +88,7 @@ export function makeProdMcp(options: ProdOptions = {}) {
 
   function secret(): string {
     const t = token();
-    if (!t) throw new Error('jarvisd has no production AcmeApp MCP credential yet');
+    if (!t) throw new Error(`jarvisd has no production ${PRODUCT_LABEL} MCP credential yet`);
     return t;
   }
   const scrub = (s: string, t: string) => s.replaceAll(t, '[hidden]');
@@ -174,7 +174,7 @@ export function makeProdMcp(options: ProdOptions = {}) {
     async cardArgs(args: any) {
       const call = checkProdCall(args);
       const known = await tools().catch(e => { throw new Error(`Could not check ${call.tool} against production, so nothing was proposed: ${(e as Error).message}`); });
-      if (!known.includes(call.tool)) throw new Error(`${call.tool} does not exist on the production AcmeApp server for this credential.`);
+      if (!known.includes(call.tool)) throw new Error(`${call.tool} does not exist on the production ${PRODUCT_LABEL} server for this credential.`);
       const where = await touches(call.arguments, known);
       return prodCard(call, where);
     },
