@@ -2,6 +2,10 @@
 // The approval gate CLI the brain calls. jarvisd holds the rules; this only relays.
 //   jarvis-act propose --action worker-start --args '{"repo":"/abs/path","spec":"..."}' --say "Start 4412 on Opus?"
 //                      [--approves "<what happens if the owner approves>"] [--rests-on "<the fact the proposal rests on>"]
+//                      [--owner-asked]   the owner's own message in this turn asks for the work. On the Jarvis repo a
+//                                        worker-start then starts at once, with a Stop notice instead of a card.
+//   jarvis-act revise <id> --args '<the whole new json>' [--say ...] [--approves ...] [--rests-on ...]
+//                              the owner answered the open card with a change: the card shows the new content in place
 //   jarvis-act confirm <id>    after the owner says yes (refused unless he spoke after the proposal)
 //   jarvis-act reject <id>     after the owner says no
 //   jarvis-act list            pending proposals
@@ -44,11 +48,17 @@ if (cmd === 'propose') {
   let args;
   try { args = JSON.parse(flag('args') ?? '{}'); } catch { console.error('--args must be JSON'); process.exit(2); }
   const card = flag('approves') || flag('rests-on') ? { approves: flag('approves'), restsOn: flag('rests-on') } : undefined;
-  body = { action: flag('action'), args, say: flag('say'), card };
+  body = { action: flag('action'), args, say: flag('say'), card, ownerAsked: rest.includes('--owner-asked') };
+} else if (cmd === 'revise') {
+  let args;
+  try { args = JSON.parse(flag('args') ?? ''); } catch { console.error('--args must be the whole new JSON'); process.exit(2); }
+  if (!/^\d+$/.test(rest[0] ?? '')) { console.error('usage: jarvis-act revise <id> --args <json> [--say <q>] [--approves <t>] [--rests-on <t>]'); process.exit(2); }
+  const card = flag('approves') || flag('rests-on') ? { approves: flag('approves'), restsOn: flag('rests-on') } : undefined;
+  body = { id: Number(rest[0]), args, say: flag('say'), card };
 } else if (cmd === 'confirm' || cmd === 'reject') {
   body = { id: Number(rest[0]) };
 } else if (cmd !== 'list') {
-  console.error('usage: jarvis-act propose|confirm|reject|list|email-done|message-add|reply-add|reply-list|reply-resume|reply-drop'); process.exit(2);
+  console.error('usage: jarvis-act propose|revise|confirm|reject|list|email-done|message-add|reply-add|reply-list|reply-resume|reply-drop'); process.exit(2);
 }
 const res = await fetch(`${url}/api/internal/gate/${cmd}`, { method: body ? 'POST' : 'GET', body: body && JSON.stringify(body) });
 const text = await res.text();

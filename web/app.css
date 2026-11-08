@@ -309,6 +309,12 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .pill { display: inline-block; font-size: 12px; font-weight: 600; margin-right: 6px; }
 .pill.done, .pill.approved { color: var(--need-ink); }
 .pill.failed, .pill.unknown { color: var(--bad); }
+.pill.changed { color: var(--need-ink); margin-left: 6px; }
+/* A worker Jarvis started at once: one quiet line, with Stop for 60 seconds. */
+.line.started { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.line.started .started-t { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; color: var(--ink, inherit); }
+.line.started .undo { min-height: 44px; padding: 0 16px; border: 1px solid var(--control); border-radius: var(--r); background: none; color: inherit; font: inherit; font-weight: 600; }
+.line.started .started-why { flex-basis: 100%; overflow-wrap: anywhere; }
 #req-free { display: flex; align-items: flex-end; gap: 4px; min-height: 44px; padding: 3px 3px 3px 12px; border: 1px solid var(--control); border-radius: var(--r); }
 #req-free:focus-within { border-color: var(--muted); }
 #req-free textarea { font-size: 14px; line-height: 20px; min-height: 36px; padding: 8px 0; }
