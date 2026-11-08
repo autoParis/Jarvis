@@ -333,3 +333,18 @@ test('readDelivery lists branches with commits not in master and the worktree ea
   assert.match(d.unmerged.find(b => b.branch === 'in-tree')!.worktree!, /stonefish$/);
   await assert.rejects(readDelivery(join(dir, 'nowhere')));
 });
+
+test('readDelivery counts a branch merged into an archived ref as delivered, and ignores a missing ref', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jarvis-delivery-'));
+  const run = (...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+  const commit = (name: string) => { writeFileSync(join(dir, name), name); run('add', name); run('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', name); };
+  run('init', '-b', 'old');
+  commit('one');
+  run('branch', 'old-work');
+  run('checkout', '--orphan', 'master');
+  commit('fresh');
+  run('branch', 'archive', 'old');
+  assert.deepEqual((await readDelivery(dir, [])).unmerged.map(b => b.branch).sort(), ['archive', 'old', 'old-work']);
+  assert.deepEqual((await readDelivery(dir, ['archive'])).unmerged, []);
+  assert.deepEqual((await readDelivery(dir, ['missing'])).unmerged.map(b => b.branch).sort(), ['archive', 'old', 'old-work']);
+});

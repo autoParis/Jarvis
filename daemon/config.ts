@@ -36,3 +36,5 @@ export const OWNER_ROLE = env.JARVIS_OWNER_ROLE?.trim() || 'who runs';
 export const TEAM = list(env.JARVIS_TEAM);
 export const CLIENT_WORD = env.JARVIS_CLIENT_WORD?.trim() || 'client';
 export const CLIENTS_WORD = env.JARVIS_CLIENTS_WORD?.trim() || 'clients';
+/** Refs whose merged branches count as delivered, besides master, such as an archived history kept only on this Mac. */
+export const DONE_REFS = list(env.JARVIS_DONE_REFS).filter(r => /^[\w./-]+$/.test(r) && !r.startsWith('-'));

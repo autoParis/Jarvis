@@ -1,3 +1,4 @@
+import { DONE_REFS } from './config.ts';
 import { OWNER } from './config.ts';
 import { execFile } from 'node:child_process';
 import { basename } from 'node:path';
@@ -26,8 +27,10 @@ export type Delivery = { master: string; unmerged: { branch: string; sha: string
 const git = (repo: string, ...args: string[]) => new Promise<string>((resolve, reject) =>
   execFile('git', ['-C', repo, ...args], { timeout: 10_000 }, (err, out) => err ? reject(err) : resolve(out.trim())));
 export const masterHead = (repo: string) => git(repo, 'rev-parse', 'master');
-export async function readDelivery(repo: string): Promise<Delivery> {
-  const [master, refs] = await Promise.all([masterHead(repo), git(repo, 'for-each-ref', '--no-merged', 'master', '--format=%(refname:short)%09%(objectname)%09%(worktreepath)', 'refs/heads')]);
+export async function readDelivery(repo: string, done: string[] = DONE_REFS): Promise<Delivery> {
+  // A branch merged into one of DONE_REFS (an archived history kept on this Mac) is delivered too. A missing ref falls back to master only.
+  const list = (done: string[]) => git(repo, 'for-each-ref', '--no-merged', 'master', ...done.flatMap(r => ['--no-merged', r]), '--format=%(refname:short)%09%(objectname)%09%(worktreepath)', 'refs/heads');
+  const [master, refs] = await Promise.all([masterHead(repo), list(done).catch(() => list([]))]);
   return { master, unmerged: refs.split('\n').filter(Boolean).map(l => { const [branch, sha, worktree] = l.split('\t'); return { branch, sha, worktree: worktree || undefined }; }) };
 }
 
