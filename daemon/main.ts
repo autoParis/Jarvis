@@ -9,8 +9,7 @@ import { Brain } from './brain.ts';
 import { changeBrainModel, readBrainModel, MODELS, EFFORTS } from './brainmodel.ts';
 import { makeGate, PRESSED, NO_TASK, WORKER_PERMISSION } from './gate.ts';
 import { makeVoice, sentences, detectLang, byteRange } from './voice.ts';
-import { allowed, makeUiSessions, probeShell, shellRefusal } from './access.ts';
-import { makeShell } from './shell.ts';
+import { allowed, makeUiSessions, probePhone, phoneRefusal } from './access.ts';
 import { makeTerminals } from './terminal.ts';
 import { makeTermGate } from './termgate.ts';
 import { termRoute } from './termroutes.ts';
@@ -496,10 +495,6 @@ function repos(): { name: string; path: string }[] {
 const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled']);
 const ui = makeUiSessions();
 
-// ---- The one-off shell pane: a pty owned here, the owner's phone only (shell.ts, access.ts) ----
-const shell = makeShell({ store, log, env: cleanEnv });
-shell.reapLeftover();
-process.on('SIGTERM', () => { shell.killNow('jarvisd stopped'); process.exit(143); });
 // ---- Project terminals from the new-session picker: tmux sessions, Touch ID on the Mac, the phone checks on the phone (terminal.ts, termgate.ts) ----
 const termGate = makeTermGate({ store, log });
 let termKey = '';
@@ -512,41 +507,9 @@ pollTerms().catch(() => {});
 const termCtx = {
   terms, gate: termGate, log, uiOk: (h: http.IncomingHttpHeaders) => ui.ok(h), repos,
   onChange: () => { pollTerms().catch(() => {}); },
-  phoneRefusal: async (req: http.IncomingMessage) => shellRefusal(await probeShell(req, PORT)),
+  phoneRefusal: async (req: http.IncomingMessage) => phoneRefusal(await probePhone(req, PORT)),
 };
-async function shellRoute(req: http.IncomingMessage, res: http.ServerResponse, url: string) {
-  const probe = await probeShell(req, PORT);
-  const why = ui.ok(req.headers) ? shellRefusal(probe) : 'no open app page';
-  if (why) {
-    log('shell refused', { route: url, why, device: req.headers['x-forwarded-for'] });
-    return send(res, 403, { error: `The shell opens only from ${OWNER}'s phone (${why}).` });
-  }
-  if (req.method === 'GET' && url === '/api/shell/stream') {
-    res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' });
-    const from = Number(new URL(req.url ?? '/', 'http://x').searchParams.get('from')) || 0;
-    const leave = shell.attach(e => {
-      // A phone that cannot keep up reconnects and gets the newest output.
-      if (res.writableLength > 2e6) return void res.destroy();
-      res.write(`${JSON.stringify(e)}\n`);
-      if ('ended' in e) res.end();
-    }, from);
-    const ping = setInterval(() => res.write('{}\n'), 25_000);
-    req.on('close', () => { clearInterval(ping); leave(); });
-    return;
-  }
-  if (req.method !== 'POST') return send(res, 404);
-  if (url === '/api/shell/open') return send(res, 200, shell.open());
-  if (url === '/api/shell/close') return send(res, 200, { closed: shell.close(`${OWNER_CAP} tapped Close`) });
-  if (url === '/api/shell/interrupt') return send(res, shell.interrupt() ? 204 : 409);
-  if (url === '/api/shell/input') {
-    const { text } = await json(req);
-    if (typeof text !== 'string' || !text.trim()) return send(res, 400, { error: 'text is required' });
-    return (await shell.input(text)) ? send(res, 204) : send(res, 409, { error: 'The shell has ended.' });
-  }
-  send(res, 404);
-}
-
-const STATIC: Record<string, string> = { '/': 'index.html', '/markdown.js': 'markdown.js', '/askcard.js': 'askcard.js', '/paste.js': 'paste.js', '/enterkey.js': 'enterkey.js', '/listen.js': 'listen.js', '/requestlist.js': 'requestlist.js', '/worklist.js': 'worklist.js', '/workfold.js': 'workfold.js', '/messages.js': 'messages.js', '/today.js': 'today.js', '/migration.js': 'migration.js', '/shell.js': 'shell.js', '/report.js': 'report.js', '/modelpicker.js': 'modelpicker.js', '/newpick.js': 'newpick.js', '/terminal.js': 'terminal.js', '/swipe.js': 'swipe.js', '/dictate.js': 'dictate.js', '/speech.js': 'speech.js', '/app.css': 'app.css', '/manifest.webmanifest': 'manifest.webmanifest', '/sw.js': 'sw.js', '/icon.svg': 'icon.svg' };
+const STATIC: Record<string, string> = { '/': 'index.html', '/markdown.js': 'markdown.js', '/askcard.js': 'askcard.js', '/paste.js': 'paste.js', '/enterkey.js': 'enterkey.js', '/listen.js': 'listen.js', '/requestlist.js': 'requestlist.js', '/worklist.js': 'worklist.js', '/workfold.js': 'workfold.js', '/messages.js': 'messages.js', '/today.js': 'today.js', '/migration.js': 'migration.js', '/report.js': 'report.js', '/modelpicker.js': 'modelpicker.js', '/newpick.js': 'newpick.js', '/terminal.js': 'terminal.js', '/swipe.js': 'swipe.js', '/dictate.js': 'dictate.js', '/speech.js': 'speech.js', '/app.css': 'app.css', '/manifest.webmanifest': 'manifest.webmanifest', '/sw.js': 'sw.js', '/icon.svg': 'icon.svg' };
 const IMAGE_ROOTS = imageRoots(ROOT);
 const REPORTS_DIR = reportsDir(ROOT);
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.webmanifest': 'application/manifest+json', '.js': 'text/javascript', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.m4a': 'audio/mp4' };
@@ -559,7 +522,6 @@ http.createServer(async (req, res) => {
     return send(res, 401, { error: 'Only the open Jarvis app can do this. Reload the page and try again.' });
   }
   try {
-    if (url.startsWith('/api/shell/')) return await shellRoute(req, res, url);
     if (url.startsWith('/api/term/')) return await termRoute(termCtx, req, res, url);
     // A native worker's hooks (from its settings file) and the brain's jarvis-native commands.
     if (url.startsWith('/api/hooks/') || url.startsWith('/api/internal/native/')) {

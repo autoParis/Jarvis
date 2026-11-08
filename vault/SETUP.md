@@ -47,8 +47,8 @@ Optional settings, not asked by `bin/setup`:
 - `JARVIS_TTS_FR`, `JARVIS_TTS_EN`: the voices, for example `say:Amelie` or `supertonic3:M1`.
 - `JARVIS_WAKE_WORD`: the hands-free wake word.
 
-Note on the shell pane: it opens only from the phone, through a userspace tailscaled that answers on
-`JARVIS_TS_SOCKET`. With the Tailscale app alone, the shell pane refuses every request. The rest of the app works.
+Note on the phone checks: a terminal opens on the phone, and Pair the Mac shows its code, only through a userspace
+tailscaled that answers on `JARVIS_TS_SOCKET`. With the Tailscale app alone, both refuse every request from the phone. The rest of the app works.
 
 ## 3. People: vault/people.md
 
