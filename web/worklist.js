@@ -219,7 +219,8 @@ export function chatDecisionHtml(approvals, turn, tapped = new Set()) {
   return open.map(a => {
     const [yes, no] = approvalButtons(a.action);
     return `<div class="chat-pair" data-approval="${Number(a.id)}">${open.length > 1 ? `<span class="chat-say">${esc(a.say)}</span>` : ''}`
-      + `<button type="button" class="chat-yes">${esc(yes)}</button><button type="button" class="chat-no">${esc(no)}</button></div>`;
+      // Approve is on the right, where the thumb reaches on a phone.
+      + `<button type="button" class="chat-no">${esc(no)}</button><button type="button" class="chat-yes">${esc(yes)}</button></div>`;
   }).join('');
 }
 

@@ -30,8 +30,8 @@
     </div>
     <!-- Option H of the top area: one icon and one count for each need. The desktop keeps the label; the phone shows the icons with round badges. -->
     <div id="needbar">
-      <button type="button" class="need-btn need-req" id="req-btn" aria-expanded="false" aria-controls="pop-requests" aria-label="Requests, nothing open" title="Requests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.6a2.4 2.4 0 0 1 4.7.7c0 1.6-2.4 2.1-2.4 3.6M12 16.8h.01"/></svg><span class="nl">Requests</span><em hidden></em></button>
-      <button type="button" class="need-btn need-msg" id="msg-btn" aria-expanded="false" aria-controls="pop-messages" aria-label="Messages, nothing open" title="Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17h-8.5L6 20.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"/></svg><span class="nl">Messages</span><em hidden></em></button>
+      <button type="button" class="need-btn need-req" id="req-btn" hidden aria-expanded="false" aria-controls="pop-requests" aria-label="Requests, nothing open" title="Requests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.6a2.4 2.4 0 0 1 4.7.7c0 1.6-2.4 2.1-2.4 3.6M12 16.8h.01"/></svg><span class="nl">Requests</span><em hidden></em></button>
+      <button type="button" class="need-btn need-msg" id="msg-btn" hidden aria-expanded="false" aria-controls="pop-messages" aria-label="Messages, nothing open" title="Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17h-8.5L6 20.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"/></svg><span class="nl">Messages</span><em hidden></em></button>
       <button type="button" class="need-btn need-today" id="today-btn" aria-expanded="false" aria-controls="pop-today" aria-label="Today, nothing needs you" title="Today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 7h10M9.5 12h10M9.5 17h10M4.5 7h.01M4.5 12h.01M4.5 17h.01"/></svg><span class="nl">Today</span><em hidden></em></button>
       <button type="button" class="need-btn need-mig" id="mig-btn" aria-expanded="false" aria-controls="pop-migration" aria-label="Leads, nobody to contact" title="Leads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M15 11h6M18 8l3 3-3 3"/></svg><span class="nl">Leads</span><em hidden></em></button>
     </div>
@@ -638,7 +638,8 @@ $('msg-handled').onclick = () => {
   if (m) messageAction('/api/message/handled', { id: m.id }, () => answerLine(`handled:${m.id}`, m.copyOnly ? { tag: `Message to ${m.from}`, answer: 'Done', at: new Date().toISOString() } : { tag: `${m.label} from ${m.from}`, answer: 'You will handle it', at: new Date().toISOString() }));
 };
 
-// ---- the buttons (option H of the top area). All four are always there, so they never move; a count shows only above zero. ----
+// ---- the buttons (option H of the top area). Today and Leads are always there, and a count shows only above zero.
+// Requests and Messages show only while something is open behind them. ----
 const POPS = { requests: { el: $('pop-requests'), btn: $('req-btn') }, messages: { el: $('pop-messages'), btn: $('msg-btn') }, today: { el: $('pop-today'), btn: $('today-btn') }, migration: { el: $('pop-migration'), btn: $('mig-btn') } };
 let popOpen = null;
 function paintCount(btn, n, aria) {
@@ -686,7 +687,11 @@ function paintNeedbar() {
   paintCount($('req-btn'), n, n ? `Requests, ${n} open` : 'Requests, nothing open');
   paintCount(msg, b?.count ?? 0, b?.aria ?? 'Messages, nothing open');
   msg.classList.toggle('need-urgent', !!b?.urgent);
+  $('req-btn').hidden = !n;
+  msg.hidden = !b;
   paintToday();
+  // A popup never stays open under a button that is gone.
+  if (POPS[popOpen]?.btn.hidden) setPop(null);
 }
 function setPop(next) {
   const was = popOpen;
