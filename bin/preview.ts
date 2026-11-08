@@ -489,6 +489,11 @@ http.createServer(async (req, res) => {
     }, 800);
     return send(res, 204);
   }
+  // Continue on phone: the first tap meets a terminal holding the session, the "Stop it and continue" tap succeeds.
+  if (url === '/api/work/phone') {
+    if (!Array.isArray((b as any).stop)) return send(res, 409, { error: 'Another process has this session open: pid 4100, claude --resume … in a terminal.', holders: [{ pid: 4100, what: 'claude --resume 9b765826-… --remote-control=Old (a terminal)' }] });
+    return send(res, 200, { id: (b as any).id, remote: 'Photo sync dry runs', already: false });
+  }
   if (url === '/api/work/stop') {
     const a = { id: 20 + scene.approvals.length, action: 'worker-stop', args: JSON.stringify({ dispatch: b.id }), say: 'Stop this worker?', status: 'pending', after_turn: 0, decided_by: null, owner_text: null, result: null, created_at: ago(0) };
     scene.approvals.push(a);

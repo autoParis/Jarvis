@@ -1,12 +1,13 @@
 import { OWNER_CAP, OWNER } from './config.ts';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { closeSync, constants, existsSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { cleanEnv } from './orca.ts';
 import { classify, type NativeState, type WorkRow } from './work.ts';
 import type { Approval, NativeWorkerRow, Store } from './store.ts';
 import type { Log } from './log.ts';
 import { lastAssistantText } from './transcript.ts';
+import { FRESH_WRITE_MS, holdersIn, lastModel, processTable, sessionName, tailOf, type Holder } from './resume.ts';
 
 // Claude Code background sessions (`claude --bg`) as Jarvis's own workers, with no Orca in the loop (Jarvis 2.0, stage B).
 // jarvisd starts one, the session's hooks post back here over http (a permission prompt becomes an Approve card, each
@@ -46,7 +47,13 @@ export type NativeWorker = {
   resumes: number; last_resume_at: string | null;
   /** Interactive: the named pipe its terminal reads as stdin, so jarvisd can type into it. */
   in_fifo: string | null;
+  /** Continue on phone: the Remote Control name the session runs with. A resume keeps it, and the idle reaper leaves the row alone. */
+  remote: string | null;
 };
+/** What Continue on phone did: the row it runs as, or why not and which processes hold the session. */
+export type PhoneResult = { ok: true; worker: NativeWorker; already?: boolean } | { ok: false; error: string; holders?: Holder[] };
+/** The permission modes an adopted session keeps from its transcript. Anything else (bypassPermissions) becomes default. */
+const KEPT_MODES = new Set(['auto', 'default', 'acceptEdits', 'plan']);
 export type ClaudeRun = { code: number | null; out: string; err: string };
 export type Claude = (args: string[], cwd?: string) => Promise<ClaudeRun>;
 
@@ -210,6 +217,10 @@ export function makeNative(o: {
   killPid?: (pid: number) => void;
   /** Typing into an interactive session's stdin pipe (throws when it cannot). */
   writeFifo?: (fifo: string, bytes: Buffer) => void;
+  /** Continue on phone: `ps -axo pid=,command=` lines, a transcript's last write time and its tail. */
+  processes?: () => Promise<string[]>;
+  written?: (file: string) => number;
+  tail?: (file: string) => string;
 }) {
   const { store, log } = o;
   const claude = o.claude ?? runClaude;
@@ -219,6 +230,11 @@ export function makeNative(o: {
   const alivePgid = o.alivePgid ?? ((pgid: number) => { try { process.kill(pgid, 0); return true; } catch { return false; } });
   const killPid = o.killPid ?? ((pid: number) => { try { process.kill(pid, 'SIGTERM'); } catch {} });
   const typeInto = o.writeFifo ?? writeFifo;
+  const processes = o.processes ?? processTable;
+  const written = o.written ?? ((f: string) => statSync(f).mtimeMs);
+  const tail = o.tail ?? ((f: string) => tailOf(f));
+  // Sessions a Continue on phone press is under way for, so a double tap cannot start two terminals.
+  const phoning = new Set<string>();
   const now = o.now ?? Date.now;
   const iso = () => new Date(now()).toISOString();
   const settingsPath = join(o.dataDir, 'worker-settings.json');
@@ -292,7 +308,7 @@ export function makeNative(o: {
   };
   /** An interactive session's liveness from `status` (busy, waiting, idle) while its process lives; nothing once it is gone. */
   const interactiveState = (a: Agent | undefined, w: NativeWorker): NativeState | undefined =>
-    !a?.pid ? undefined : a.status === 'busy' ? 'working' : a.status === 'waiting' ? 'blocked' : w.outcome ? w.state : w.report ? 'done' : 'working';
+    !a?.pid ? undefined : a.status === 'busy' ? 'working' : a.status === 'waiting' ? 'blocked' : w.remote && a.status === 'idle' ? 'done' : w.outcome ? w.state : w.report ? 'done' : 'working';
 
   /** Polls `claude agents` until `ok(entry)` holds for the worker, or the time is up. */
   async function waitFor(w: NativeWorker, ok: (a: Agent) => boolean, ms: number): Promise<Agent | undefined> {
@@ -403,7 +419,7 @@ export function makeNative(o: {
         failHeld(w.id, `the worker's terminal died before ${OWNER} answered`);
         const resumes = w.resumes + 1;
         const fifo = fifoFor(w.name, resumes);
-        const pgid = spawnPty(['claude', '--resume', w.session_id, '--name', w.name, '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
+        const pgid = spawnPty(['claude', '--resume', w.session_id, '--name', w.name, ...(w.remote ? [`--remote-control=${w.remote}`] : []), '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
           '--settings', settingsPath, ...(nudge ? [NUDGE] : [])], w.cwd, fifo);
         update(w.id, { pgid, in_fifo: fifo, resumes, last_resume_at: iso(), waiting_for: null });
         const seen = await waitFor(row(w.id)!, a => !!a.pid, RESPAWN_WAIT_MS);
@@ -416,6 +432,101 @@ export function makeNative(o: {
         if (!opt.quiet) o.onNotice(row(w.id)!, line);
         return true;
       } finally { resuming.delete(w.id); }
+    },
+
+    /**
+     * Continue on phone: the same session, by its own id, in a native interactive terminal with `--remote-control=<title>`,
+     * so the Claude app reaches it and the work list keeps it as an `n:` row. Never `claude --bg --resume` with flags: on a
+     * background session that keeps saved options, that starts a copy under a new id (approval 434, 2026-11-08, reproduced
+     * on 2.1.316). A session jarvisd already runs is ended first and resumed with the flag. Any other process on the session
+     * (a terminal, the desktop app, an Orca tab, a background host) refuses it and is named, unless its pid is in `stop`:
+     * then it is ended first, because two writers on one session lose a turn. No message goes in, so no turn starts.
+     */
+    async phone(a: { sessionId: string; cwd: string; title: string; transcript?: string; approvalId?: number; stop?: number[] }): Promise<PhoneResult> {
+      const sid = a.sessionId;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sid)) return { ok: false, error: 'This session has no id Jarvis can resume.' };
+      if (phoning.has(sid)) return { ok: false, error: 'Continue on phone is already under way for this session.' };
+      phoning.add(sid);
+      try {
+        await checkVersion();
+        let mine = find(sid);
+        if (mine && mine.session_id !== sid) mine = undefined;
+        const onSession = (list: Agent[]) => list.filter(x => x.sessionId === sid && !!x.pid);
+        let list = await agents();
+        if (mine?.remote && mine.kind === 'interactive' && !!mine.pgid && alivePgid(mine.pgid) && onSession(list).length) return { ok: true, worker: mine, already: true };
+        if (onSession(list).some(x => x.status === 'busy') && mine) return { ok: false, error: 'It is in the middle of a turn. Try again when it is idle, so the turn is not cut off.' };
+        const file = (mine && api.transcriptFile(mine.id)) || a.transcript;
+        if (mine) {
+          // Our own process on it is ended first; it is not a second writer.
+          if (mine.kind === 'interactive') { if (mine.pgid && alivePgid(mine.pgid)) killGroup(mine.pgid); }
+          else if (onSession(list).length) await claude(['stop', mine.id]);
+          alive.delete(mine.id);
+          await waitGone(mine, 10_000);
+          // Its shell and `script` name the session id too, and leave `ps` a moment after the listing.
+          const until = now() + 5_000;
+          try { while (holdersIn(await processes(), sid).length && now() < until) await sleep(TICK_MS); } catch {}
+          list = await agents();
+        } else if (file) {
+          let age = Infinity;
+          try { age = now() - written(file); } catch {}
+          if (age < FRESH_WRITE_MS) return { ok: false, error: 'This session was written to seconds ago. Try again once it settles.' };
+        }
+        const holders = new Map<number, Holder>();
+        // A background session is stopped through its supervisor (`claude stop <id>`), which a bare kill would not tell.
+        const viaStop = new Map<number, string>();
+        for (const x of onSession(list)) {
+          holders.set(x.pid!, { pid: x.pid!, what: `a ${x.kind ?? 'Claude'} session${x.name ? ` named "${x.name}"` : ''}${x.status ? `, ${x.status}` : ''}` });
+          if (x.kind === 'background' && x.id) viaStop.set(x.pid!, x.id);
+        }
+        let table: string[] = [];
+        try { table = await processes(); } catch (e) { return { ok: false, error: `Not continued: could not check who else has this session open (${(e as Error).message}).` }; }
+        for (const h of holdersIn(table, sid)) if (!holders.has(h.pid)) holders.set(h.pid, h);
+        if (holders.size) {
+          const stop = new Set(a.stop ?? []);
+          const others = [...holders.values()].filter(h => !stop.has(h.pid));
+          if (others.length) {
+            log('native phone: refused, another process holds the session', { session: sid, holders: others.map(h => h.pid) });
+            return { ok: false, error: `Another process has this session open: ${others.map(h => `pid ${h.pid}, ${h.what}`).join('; ')}. Two writers would lose a turn.`, holders: others };
+          }
+          for (const h of holders.values()) { const bg = viaStop.get(h.pid); if (bg) await claude(['stop', bg]); else killPid(h.pid); }
+          log('native phone: ended the processes that held the session', { session: sid, pids: [...holders.keys()] });
+          const until = now() + 10_000;
+          const still = async () => onSession(await agents()).length > 0 || holdersIn(await processes(), sid).length > 0;
+          while (await still()) { if (now() >= until) return { ok: false, error: `The process that held it (pid ${[...holders.keys()].join(', ')}) did not end within 10 s. Nothing was started.` }; await sleep(TICK_MS); }
+        }
+        let jsonl = '';
+        try { if (file) jsonl = tail(file); } catch {}
+        const mode = mine?.permission_mode ?? [...jsonl.matchAll(/"permissionMode":"(\w+)"/g)].map(m => m[1]).filter(m => KEPT_MODES.has(m)).pop() ?? 'default';
+        const model = mine?.model ?? lastModel(jsonl) ?? DEFAULT_MODEL;
+        // The Remote Control name: the caller's title, else the session's own name, else its short id.
+        const remote = mine?.remote ?? ((a.title.trim() || sessionName(jsonl) || '').replace(/\s+/g, ' ').trim().slice(0, 80) || sid.slice(0, 8));
+        const id = mine?.id ?? sid.slice(0, 8);
+        if (!mine && row(id)) return { ok: false, error: `Row ${ROW_PREFIX}${id} already belongs to another session.` };
+        const name = mine?.name ?? `${remote.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session'}-${id}`;
+        const cwd = mine?.cwd ?? a.cwd;
+        const resumes = mine ? mine.resumes + 1 : 0;
+        const fifo = fifoFor(name, resumes);
+        const pgid = spawnPty(['claude', '--resume', sid, '--name', name, `--remote-control=${remote}`, '--permission-mode', mode, '--model', model, '--settings', settingsPath], cwd, fifo);
+        const t = iso();
+        if (mine) update(id, { kind: 'interactive', pgid, in_fifo: fifo, resumes, last_resume_at: t, remote, model, permission_mode: mode, state: 'done', waiting_for: null });
+        else {
+          store.addNativeWorker({ id, session_id: sid, name, cwd, approval_id: a.approvalId ?? null, state: 'done', waiting_for: null, report: null, report_at: null, outcome: 'done',
+            transcript: file ?? null, created_at: t, updated_at: t, kind: 'interactive', pgid, repo: cwd, model, permission_mode: mode, resumes, last_resume_at: t, in_fifo: fifo, remote });
+          o.onChange(row(id)!);
+        }
+        const seen = await waitFor(row(id)!, x => !!x.pid, RESPAWN_WAIT_MS);
+        if (!seen) {
+          killGroup(pgid);
+          update(id, { state: 'stopped', waiting_for: 'Continue on phone did not start' });
+          log('native phone: the session was not listed alive', { worker: id, session: sid, pgid });
+          return { ok: false, error: `The session did not come up within ${RESPAWN_WAIT_MS / 1000} s. Nothing else holds it now; try again.` };
+        }
+        alive.add(id);
+        const w = update(id, { state: 'done' });
+        store.insertItem({ source: 'native', external_id: `event:${id}:${now()}`, kind: 'event', dispatch_id: `${ROW_PREFIX}${id}`, body: `Continued on the phone: Remote Control as "${remote}"`, status: 'done' });
+        log('native phone: continued on the phone', { worker: id, session: sid, adopted: !mine, pgid, remote, model, mode, cwd, stopped: [...holders.keys()] });
+        return { ok: true, worker: w };
+      } finally { phoning.delete(sid); }
     },
 
     /** The PermissionRequest http hook. Resolves when the owner taps Allow or Deny. */
@@ -451,7 +562,7 @@ export function makeNative(o: {
       if (!w) { log('hook from an unknown session', { hook: 'Stop', session: body?.session_id ?? null }); return; }
       const text = String(body.last_assistant_message ?? '');
       const outcome = outcomeOf(text);
-      const next = update(w.id, { report: text, report_at: iso(), transcript: body.transcript_path ?? w.transcript, ...(outcome ? { outcome, state: outcome } : {}) });
+      const next = update(w.id, { report: text, report_at: iso(), transcript: body.transcript_path ?? w.transcript, ...(outcome ? { outcome, state: outcome } : w.remote ? { state: 'done' } : {}) });
       log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length });
       o.onReport(next, text, !!outcome);
     },
@@ -496,20 +607,22 @@ export function makeNative(o: {
     },
 
     rows(): WorkRow[] {
-      return api.list().filter(w => w.state !== 'abandoned' && !(['done', 'failed', 'stopped'].includes(w.state) && now() - Date.parse(w.updated_at) > ROW_MAX_AGE_MS)).map(w => {
+      const onPhone = (w: NativeWorker) => !!w.remote && alive.has(w.id) && w.state !== 'stopped';
+      return api.list().filter(w => w.state !== 'abandoned' && !(['done', 'failed', 'stopped'].includes(w.state) && now() - Date.parse(w.updated_at) > ROW_MAX_AGE_MS && !onPhone(w))).map(w => {
         const r: WorkRow = {
           id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(w.name),
           state: w.state === 'blocked' ? 'waiting' : w.state === 'working' || w.state === 'starting' ? 'working' : w.state === 'done' ? 'idle' : 'exited',
           worktree: basename(w.cwd), sideChat: false,
           // An interactive session takes a message in any state: a stopped or failed one is resumed first.
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
-          native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind },
+          native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}) },
         };
         if (w.state === 'blocked' && w.waiting_for) r.note = w.waiting_for;
+        else if (w.state === 'done' && onPhone(w)) r.note = `In the Claude app as "${w.remote}"`;
         else if (w.state === 'done') r.note = `Done ${ago(now() - Date.parse(w.report_at ?? w.updated_at))}`;
         else if (w.state === 'stopped') r.note = w.waiting_for ?? 'Stopped';
         else if (w.state === 'failed') r.note = w.waiting_for ?? 'Failed';
-        if (['done', 'failed', 'stopped'].includes(w.state)) r.endedAt = new Date(Date.parse(w.state === 'done' ? w.report_at ?? w.updated_at : w.updated_at)).toISOString();
+        if (['done', 'failed', 'stopped'].includes(w.state) && !onPhone(w)) r.endedAt = new Date(Date.parse(w.state === 'done' ? w.report_at ?? w.updated_at : w.updated_at)).toISOString();
         return r;
       });
     },
@@ -676,7 +789,8 @@ export function makeNative(o: {
           next = row(w.id) ?? next;
           // The reaper: finished or waiting on an ask, and idle for an hour since its last report, its last resume or that ask
           // (the row's own timestamps, so a jarvisd restart does not reset the hour).
-          if (a?.pid && a.status === 'idle' && next.state !== 'stopped') {
+          // A session on the phone is left running: ending it would take it out of the Claude app.
+          if (a?.pid && a.status === 'idle' && next.state !== 'stopped' && !next.remote) {
             const since = idleFrom(next);
             if (since !== undefined && now() - since >= IDLE_REAP_MS) { api.reap(next); next = row(w.id) ?? next; }
           }

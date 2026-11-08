@@ -76,7 +76,7 @@ Use active voice and simple tenses. Write one idea per sentence. Do not use semi
 
 const AUTOMATIC = new Set(['question']);
 /** Buttons in the work list. Pressing one is the owner's decision, so they run at once, and the brain cannot propose them. */
-export const PRESSED = new Set(['side-chat', 'side-chat-close', 'session-type', 'session-resume', 'prompt-key', 'today-issue', 'today-start', 'today-draft']);
+export const PRESSED = new Set(['side-chat', 'side-chat-close', 'session-type', 'session-resume', 'session-phone', 'prompt-key', 'today-issue', 'today-start', 'today-draft']);
 /** Typing into another session, messaging another Run's worker, sending an email and the named actions run only on the Approve button, never on a relayed yes. */
 /** A background worker's permission prompt, as a card. Only native.ts creates one; main.ts answers it through native.decide. */
 export const WORKER_PERMISSION = 'worker-permission';
@@ -234,6 +234,8 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
       throw new Error('worker-permission cards come from a worker\'s own permission prompt; they cannot be proposed');
     case 'session-resume': // recorded only: resume.ts runs it, with its own checks for a second writer.
       return ['resume', str(args.session, 'session')];
+    case 'session-phone': // recorded only: native.phone runs it (Continue on phone), with the same check for a second writer.
+      return ['native', 'phone', str(args.session, 'session')];
     case 'prompt-key': { // A tap on a terminal menu's option. One digit, no Enter: the digit picks the option by itself.
       const key = str(args.key, 'key');
       if (!/^\d$/.test(key)) throw new Error('key must be one digit');
@@ -594,7 +596,7 @@ export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => 
       const a = store.addApproval({ action, args: JSON.stringify(args), say });
       store.decide(a.id, 'approved', 'button', action.startsWith('session-') ? args.text : undefined);
       log('gate pressed', { run: id.run, approval: a.id, action });
-      if (action === 'session-resume') return a; // The resumer runs it; `recorded` finishes the row with what it did.
+      if (action === 'session-resume' || action === 'session-phone') return a; // The resumer or native.phone runs it; `recorded` finishes the row with what it did.
       return execute(store.approval(a.id)!);
     },
     /** The outcome of a press the gate does not run itself. */

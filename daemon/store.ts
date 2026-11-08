@@ -72,10 +72,12 @@ export type NativeWorkerRow = {
    * when it took one), the flags a resume replays, how often it was resumed, and the named pipe jarvisd types into. */
   repo: string | null; model: string | null; permission_mode: string | null;
   resumes: number; last_resume_at: string | null; in_fifo: string | null;
+  /** Continue on phone (2026-11-08): the Remote Control name the session runs with, so a resume keeps it reachable from the Claude app. */
+  remote: string | null;
 };
 
 /** The native_workers columns a caller may leave out: they default to a background session with nothing to replay. */
-type NativeOptional = 'kind' | 'pgid' | 'repo' | 'model' | 'permission_mode' | 'resumes' | 'last_resume_at' | 'in_fifo';
+type NativeOptional = 'kind' | 'pgid' | 'repo' | 'model' | 'permission_mode' | 'resumes' | 'last_resume_at' | 'in_fifo' | 'remote';
 
 export function openStore(path: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -162,6 +164,8 @@ export function openStore(path: string) {
   // Interactive sessions by default (2026-11-07): what a resume replays, and the pipe jarvisd types into.
   if (!nativeCols.includes('repo')) db.exec(`ALTER TABLE native_workers ADD COLUMN repo TEXT; ALTER TABLE native_workers ADD COLUMN model TEXT; ALTER TABLE native_workers ADD COLUMN permission_mode TEXT;
     ALTER TABLE native_workers ADD COLUMN resumes INTEGER NOT NULL DEFAULT 0; ALTER TABLE native_workers ADD COLUMN last_resume_at TEXT; ALTER TABLE native_workers ADD COLUMN in_fifo TEXT;`);
+  // Continue on phone (2026-11-08): the Remote Control name a resume replays.
+  if (!nativeCols.includes('remote')) db.exec('ALTER TABLE native_workers ADD COLUMN remote TEXT;');
   // Side chats were recorded as requests until 2026-10-30. Hide them; their worker, worktree and session stay.
   db.exec(`UPDATE requests SET hidden_at = datetime('now') WHERE action = 'side-chat' AND hidden_at IS NULL`);
   // Added with web push; older databases get the columns here.
@@ -481,13 +485,13 @@ export function openStore(path: string) {
     },
     addNativeWorker(w: Omit<NativeWorkerRow, NativeOptional> & Partial<Pick<NativeWorkerRow, NativeOptional>>) {
       db.prepare(`INSERT INTO native_workers (id, session_id, name, cwd, approval_id, state, waiting_for, report, report_at, outcome, transcript, created_at, updated_at, kind, pgid,
-        repo, model, permission_mode, resumes, last_resume_at, in_fifo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        repo, model, permission_mode, resumes, last_resume_at, in_fifo, remote) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(w.id, w.session_id, w.name, w.cwd, w.approval_id, w.state, w.waiting_for, w.report, w.report_at, w.outcome, w.transcript, w.created_at, w.updated_at, w.kind ?? 'background', w.pgid ?? null,
-          w.repo ?? null, w.model ?? null, w.permission_mode ?? null, w.resumes ?? 0, w.last_resume_at ?? null, w.in_fifo ?? null);
+          w.repo ?? null, w.model ?? null, w.permission_mode ?? null, w.resumes ?? 0, w.last_resume_at ?? null, w.in_fifo ?? null, w.remote ?? null);
     },
     /** Sets the named columns and moves updated_at. `id`, `name` and `created_at` never change; `cwd` only when the listing names the session's real folder. */
     updateNativeWorker(id: string, f: Partial<Omit<NativeWorkerRow, 'id' | 'name' | 'created_at'>>) {
-      const allowed = ['session_id', 'approval_id', 'state', 'waiting_for', 'report', 'report_at', 'outcome', 'transcript', 'updated_at', 'pgid', 'cwd', 'model', 'permission_mode', 'resumes', 'last_resume_at', 'in_fifo'] as const;
+      const allowed = ['session_id', 'approval_id', 'state', 'waiting_for', 'report', 'report_at', 'outcome', 'transcript', 'updated_at', 'pgid', 'cwd', 'model', 'permission_mode', 'resumes', 'last_resume_at', 'in_fifo', 'kind', 'remote'] as const;
       const cols = allowed.filter(k => f[k] !== undefined);
       if (!cols.length) return;
       db.prepare(`UPDATE native_workers SET ${cols.map(k => `${k} = ?`).join(', ')} WHERE id = ?`).run(...cols.map(k => f[k] as string | number | null), id);

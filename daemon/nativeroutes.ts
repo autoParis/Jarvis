@@ -3,6 +3,7 @@ import { ROW_PREFIX } from './native.ts';
 import type { Store, Item } from './store.ts';
 import type { Log } from './log.ts';
 import type { PeerMessage } from './brain.ts';
+import { findSession } from './resume.ts';
 
 // The http side of native workers (Jarvis 2.0, stage B), kept out of main.ts so it can be tested: the three hooks a
 // background session posts, the brain's reply command, and the routing of a cross-session message the brain answered.
@@ -15,6 +16,8 @@ export type NativeRouteOptions = {
   native: Native; store: Store; log: Log;
   /** An ask card changed (a native question was opened or answered); main.ts broadcasts it. */
   askChanged: (externalId: string) => void;
+  /** Test seam: a session's transcript and folder by its id (resume.ts findSession). */
+  findSession?: (id: string) => { file: string; cwd: string } | undefined;
 };
 
 /** The external id of a worker's question item: one per message, from the worker id and the time it arrived. */
@@ -42,6 +45,20 @@ export async function nativeRoute(o: NativeRouteOptions, method: string, url: st
     return { status: 200, body: { ok: true, worker: `${ROW_PREFIX}${w.id}`, name: w.name } };
   }
   if (url === '/api/internal/native/list') return { status: 200, body: o.native.list() };
+  // Continue on phone for a session the work list does not show (`jarvis-native phone --session <id>`). It never stops another
+  // process: when one holds the session, the error names it, and only the owner's button in the pane can stop it.
+  if (url === '/api/internal/native/phone') {
+    const key = typeof body.session === 'string' ? body.session.trim() : '';
+    if (!key) return { status: 400, body: { error: 'session is required (a session id, or a native worker)' } };
+    const w = findWorker(o.native, key);
+    const found = w?.session_id ? { file: o.native.transcriptFile(w.id), cwd: w.cwd, sessionId: w.session_id } : (() => { const f = (o.findSession ?? findSession)(key); return f && { ...f, sessionId: key }; })();
+    if (!found) return { status: 404, body: { error: `no Claude session ${key} on this Mac` } };
+    // No title: native.phone names it after the session's own name in its transcript.
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    const r = await o.native.phone({ sessionId: found.sessionId, cwd: found.cwd, title, transcript: found.file });
+    if (!r.ok) return { status: 409, body: { error: r.error, holders: r.holders ?? [] } };
+    return { status: 200, body: { ok: true, worker: `${ROW_PREFIX}${r.worker.id}`, remoteControl: r.worker.remote, already: !!r.already } };
+  }
   return undefined;
 }
 

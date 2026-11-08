@@ -32,6 +32,7 @@ test('session ids and models come out of the transcript', () => {
   assert.equal(sessionIdOf(`/home/.codex/sessions/2026/rollout-2026-11-02T10-00-00-${ID}.jsonl`), ID);
   assert.equal(sessionIdOf('/home/.claude/projects/x/nope.jsonl'), undefined);
   assert.equal(lastModel('{"model":"claude-haiku-5-5"}\n{"model":"claude-opus-5-5"}'), 'claude-opus-5-5');
+  assert.equal(lastModel('{"message":{"model":"claude-haiku-5-5","id":"msg_1"}}\n{"tools":[{"model":"claude-opus-5-5","defer_loading":true}]}'), 'claude-haiku-5-5', 'an answer\'s model wins over a tool definition after it');
   assert.deepEqual(resumeArgv(`/home/.codex/sessions/${ID}.jsonl`, ID).slice(0, 3), ['codex', 'exec', 'resume']);
 });
 
