@@ -403,6 +403,19 @@ body.pane-open #chat, body.pane-open #doneline { display: none; }
 /* The time and copy under a message. It sits in the gap below, so showing it moves nothing */
 .msg-foot { position: absolute; top: 100%; right: 0; z-index: 1; height: 22px; display: flex; align-items: center; gap: 6px; opacity: 0; pointer-events: none; transition: opacity .12s; }
 .line:hover .msg-foot, .line:focus-within .msg-foot { opacity: 1; pointer-events: auto; }
+/* Approve and Reject on the Jarvis message that asked for a proposal: small pills under its last line, the same neutral fill
+   and teal border as the Requests card's Approve. Reject is smaller and quieter. They go away once he decides anywhere */
+.chat-decide { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.chat-decide:empty { display: none; }
+.chat-pair { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.chat-say { flex-basis: 100%; font-size: 13px; line-height: 1.35; color: var(--muted); }
+.chat-yes, .chat-no { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; transition: background-color .12s, border-color .12s, color .12s; }
+.chat-yes { height: 32px; padding: 0 16px; background: var(--raised); border: 1px solid var(--need); color: var(--ink); font-size: 14px; font-weight: 600; }
+.chat-no { height: 28px; padding: 0 12px; border: 1px solid var(--line); color: var(--muted); font-size: 13px; font-weight: 500; }
+.chat-yes:hover { background: var(--hover); }
+.chat-no:hover { background: var(--hover); border-color: var(--control); color: var(--ink); }
+.chat-yes:focus-visible, .chat-no:focus-visible { outline: 2px solid var(--need); outline-offset: 2px; }
+@media (hover: none) { .chat-yes { height: 38px; padding: 0 20px; } .chat-no { height: 34px; padding: 0 14px; } }
 .msg-copy, .msg-reply { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 4px; color: var(--muted); transition: background-color .12s, color .12s; }
 .msg-copy:hover, .msg-reply:hover { background: var(--hover); color: var(--ink); }
 .msg-copy svg, .msg-reply svg { width: 14px; height: 14px; }

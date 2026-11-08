@@ -185,7 +185,7 @@ import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js'
 import { makeModelPicker } from '/modelpicker.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
-import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml } from '/worklist.js';
+import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml, chatDecisionHtml } from '/worklist.js';
 // The owner's name and the product label for the detail pane and the picker, once at load (GET /api/work).
 fetch('/api/work').then(r => r.json()).then(w => { setOwner(w.owner); setProduct(w.product); }).catch(() => {});
 const $ = id => document.getElementById(id);
@@ -234,6 +234,8 @@ function add(cls, text, at, speak, quote) {
   const turn = (cls === 'owner' || cls === 'jarvis') && Number.isInteger(speak?.id) ? speak.id : 0;
   if (turn) { line.dataset.turn = turn; line.dataset.at = at; }
   line.append(d);
+  // A message that asked for a proposal carries its Approve and Reject, under its last line and above the time row.
+  if (cls === 'jarvis' && turn) { const c = document.createElement('div'); c.className = 'chat-decide'; c.innerHTML = chatDecisionHtml(approvals.values(), turn, tapped); line.append(c); }
   line.insertAdjacentHTML('beforeend', messageFootHtml(at, cls === 'jarvis' && speak?.clips ? speak : null, turn));
   lineText.set(line, text);
   append(line, cls === 'owner');
@@ -328,6 +330,8 @@ items.addEventListener('click', e => {
   if (reply) return startReply(reply.closest('.line'));
   const quote = e.target.closest('.quote');
   if (quote) return goToQuote(quote);
+  const choice = e.target.closest('.chat-yes, .chat-no');
+  if (choice) return decide(Number(choice.closest('[data-approval]').dataset.approval), choice.classList.contains('chat-yes'));
   const speaker = e.target.closest('.msg-speak');
   if (speaker) return speech.toggle(Number(speaker.dataset.turn), Number(speaker.dataset.clips));
   const b = e.target.closest('.hand');
@@ -519,8 +523,14 @@ function decideClick(e) {
   const id = b && Number(b.closest('[data-approval]').dataset.approval);
   if (id) decide(id, b.classList.contains('yes'));
 }
+/** Redraws the Approve and Reject on the chat message linked to this approval. Empty once it is tapped or decided. */
+function chatDecision(a) {
+  const c = a?.chat_turn && items.querySelector(`.line[data-turn="${Number(a.chat_turn)}"] > .chat-decide`);
+  if (c) c.innerHTML = chatDecisionHtml(approvals.values(), a.chat_turn, tapped);
+}
 function setApproval(a) {
   approvals.set(a.id, a);
+  chatDecision(a);
   if (a.status !== 'pending' && a.decided_by !== 'automatic') {
     const outcome = approvalOutcomeText(a);
     if (outcome) answerLine(`approval:${a.id}`, { tag: approvalTag(a.action, parseArgs(a)), answer: outcome, at: a.decided_at ? dbTime(a.decided_at) : new Date().toISOString(), failed: a.status === 'failed' || a.status === 'unknown' });
@@ -533,7 +543,8 @@ async function decide(id, approve) {
   approvalErrors.delete(id);
   renderRequests(); // the next item takes its place at once; the outcome arrives as a line in the chat
   paneCard(approvals.get(id));
-  const fail = msg => { tapped.delete(id); approvalErrors.set(id, msg); current = `approval:${id}`; renderRequests(); if (!paneCards.has(id)) setPop('requests'); paneCard(approvals.get(id)); };
+  chatDecision(approvals.get(id));
+  const fail = msg => { tapped.delete(id); approvalErrors.set(id, msg); current = `approval:${id}`; renderRequests(); if (!paneCards.has(id)) setPop('requests'); paneCard(approvals.get(id)); chatDecision(approvals.get(id)); };
   try {
     const r = await fetch('/api/approval', { method: 'POST', body: JSON.stringify({ id, approve }) });
     const j = await r.json().catch(() => ({}));

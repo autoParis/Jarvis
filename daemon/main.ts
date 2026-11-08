@@ -43,6 +43,7 @@ import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { withTyped } from '../web/dictate.js';
 import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE } from './config.ts';
+import { makeChatLinks } from './chatlink.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OWNER_NOTE = join(ROOT, 'vault', 'owner.md');
@@ -332,12 +333,15 @@ const brain = new Brain({
   brief,
   model: readBrainModel(store.getState),
 });
+// The proposals of a turn get Approve and Reject on the reply that asks for them (chatlink.ts).
+const chatLinks = makeChatLinks(store);
+const linkReply = (turnId: number | undefined) => { for (const a of chatLinks.replied(turnId)) broadcast({ type: 'approval', approval: a }); };
 brain.on('reply', (raw: string, usage: any, turns: number[]) => {
   store.addTurn({ role: 'jarvis-usage', text: usage.is_error ? 'error' : '', ...usage });
   if (!usage.is_error) store.settleTurns(turns);
-  if (!raw || raw === 'SILENT') return;
+  if (!raw || raw === 'SILENT') return linkReply(undefined);
   const { urgent: isUrgent, text } = urgent(raw);
-  say('jarvis', text);
+  linkReply(say('jarvis', text));
   if (isUrgent) notify({ title: 'Jarvis', body: unmarked(text).trim().slice(0, 180), url: '/', tag: `urgent-${Date.now()}` }, { urgent: true });
 });
 // One stored row per turn, the same way as jarvis-usage. The chat gets only the duration; the steps load when the owner opens the row.
@@ -350,9 +354,9 @@ brain.on('worker', (raw: string, usage: any, peer: PeerMessage | undefined) => {
   store.addTurn({ role: 'jarvis-usage', text: usage.is_error ? 'error' : '', ...usage });
   const r = routeWorkerTurn({ native, store, log }, peer, raw);
   if (r.item) { const card = cardOf(r.item); broadcast({ type: 'event', text: `[native question] ${r.worker!.name}: ${peer!.text}`, at: new Date().toISOString(), asks: card ? [card] : [] }); publishWork(); }
-  if (r.speak) say('jarvis', urgent(raw).text);
+  linkReply(r.speak ? say('jarvis', urgent(raw).text) : undefined);
 });
-brain.on('working', (on: boolean) => broadcast({ type: 'working', on }));
+brain.on('working', (on: boolean) => { if (on) chatLinks.turnStarted(); broadcast({ type: 'working', on }); });
 brain.on('notice', (s: string) => say('jarvis', s));
 brain.on('log', log);
 brain.on('model', () => broadcast({ type: 'brain', brain: brainInfo() }));
@@ -940,7 +944,7 @@ http.createServer(async (req, res) => {
       const op = url.slice('/api/internal/gate/'.length);
       const b = req.method === 'POST' ? await json(req) : {};
       try {
-        if (op === 'propose') return send(res, 200, await gate.propose(b.action, b.args, b.say, b.card));
+        if (op === 'propose') { const a = await gate.propose(b.action, b.args, b.say, b.card); chatLinks.proposed(a); return send(res, 200, a); }
         if (op === 'confirm') return send(res, 200, await gate.confirm(Number(b.id)));
         if (op === 'reject') return send(res, 200, gate.reject(Number(b.id)));
         if (op === 'list') return send(res, 200, store.pendingApprovals());
