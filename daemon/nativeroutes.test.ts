@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openStore } from './store.ts';
+import { openStore, type Item } from './store.ts';
+import { askCard } from './asks.ts';
 import { makeNative, NATIVE_FOOTER, type Claude } from './native.ts';
 import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId, workerMessageKind, NO_OPTIONS_REFUSAL } from './nativeroutes.ts';
 import { buildCommand, isNativeArgs, nativeName, WORKER_PERMISSION, BUTTON_ONLY } from './gate.ts';
@@ -129,6 +130,21 @@ test('a worker notice is a status line with nothing to answer, and an ask with n
   assert.equal(workerMessageKind('QUESTION: merge?\nOPTIONS:\n- merge because tests pass\n- wait because review is open'), 'ask');
   assert.equal(workerMessageKind('Which one? Options: (a) merge (b) wait'), 'ask');
   assert.equal(workerMessageKind('DONE: merged'), 'notice');
+});
+
+test('a one-line ask with OPTIONS after QUESTION on the same line is an ask card, its options split on semicolons', () => {
+  // The live test of 2026-11-08: this exact message went back to the worker with the no-options refusal.
+  const text = 'QUESTION: Test step 3. Did the test work? OPTIONS: yes because one status line and one card showed; no because something else showed';
+  assert.equal(workerMessageKind(text), 'ask');
+  const card = askCard({ id: 0, source: 'native', external_id: 'ask:x:1', kind: 'question', dispatch_id: null, subject: 'Question from x', body: text,
+    options: null, status: 'new', answer: null, created_at: '', pushes: 0, pushed_at: null, meta: null } as Item)!;
+  assert.equal(card.question, 'Test step 3. Did the test work?');
+  assert.doesNotMatch(card.body, /OPTIONS/);
+  assert.equal(card.options.length, 2);
+  assert.deepEqual(card.options.map(o => o.label), ['yes', 'no']);
+  assert.deepEqual(card.options.map(o => o.detail), ['one status line and one card showed', 'something else showed']);
+  // A one-line question with no options is still sent back.
+  assert.equal(workerMessageKind('QUESTION: Did the test work?'), 'no-options');
 });
 
 test('the native worker footer says an ask needs options and a notice is not a question', () => {
