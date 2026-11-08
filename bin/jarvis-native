@@ -4,13 +4,18 @@
 //                       jarvisd respawns the worker if its process was stopped, carries the words in with SendMessage, and
 //                       marks the worker's open question answered. Starting, stopping and abandoning go through jarvis-act.
 //   jarvis-native list   every native worker: id, name, state, report
+//   jarvis-native phone --session <session id or worker> [--title "<Remote Control name>"]
+//                       Continue on phone: jarvisd resumes that same session (never a copy) in its own terminal with
+//                       Remote Control on, so the owner reaches it from the Claude app. It refuses, and names the process,
+//                       when another process has the session open; only the owner's button can stop that process.
 const [cmd, ...rest] = process.argv.slice(2);
 const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
 const url = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/native`;
 let req;
 if (cmd === 'reply' && flag('worker') && flag('text')) req = [`${url}/reply`, { method: 'POST', body: JSON.stringify({ worker: flag('worker'), text: flag('text') }) }];
 else if (cmd === 'list') req = [`${url}/list`, { method: 'POST' }];
-else { console.error('usage: jarvis-native reply --worker <name or n:id> --text <text> | list'); process.exit(2); }
+else if (cmd === 'phone' && flag('session')) req = [`${url}/phone`, { method: 'POST', body: JSON.stringify({ session: flag('session'), title: flag('title') }) }];
+else { console.error('usage: jarvis-native reply --worker <name or n:id> --text <text> | list | phone --session <id> [--title <name>]'); process.exit(2); }
 try {
   const res = await fetch(...req);
   const text = await res.text();

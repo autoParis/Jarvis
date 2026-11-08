@@ -33,7 +33,9 @@ export type WorkRow = {
    */
   steer: 'auto' | 'type' | 'resume' | 'card' | 'none';
   /** Set on a background Claude Code session jarvisd started itself (native.ts). Absent on Orca rows. */
-  native?: { id: string; sessionId: string | null; name: string; state: NativeState; waitingFor: string | null; outcome: 'done' | 'failed' | null; kind?: 'background' | 'interactive' };
+  native?: { id: string; sessionId: string | null; name: string; state: NativeState; waitingFor: string | null; outcome: 'done' | 'failed' | null; kind?: 'background' | 'interactive';
+    /** Continue on phone: the Remote Control name it runs with in the Claude app. */
+    remote?: string };
   /** Set on a project terminal or Codex session from the new-session picker (terminal.ts). */
   tmux?: { name: string; project: string; kind: 'terminal' | 'codex'; cwd: string; branch: string };
 };

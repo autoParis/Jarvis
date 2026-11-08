@@ -23,7 +23,7 @@ import { watchGmail, gws, haiku, readPeople, withRecipients, type EmailMeta } fr
 import { makeWorkPoller, briefLines, githubRepo, isStopNotice, passedStopNotices, duplicateStopNotices, type WorkRow, type Work, type WorkerInfo } from './work.ts';
 import { makeRequests, backfillRequests, requestReport } from './requests.ts';
 import { readSource, chatFile, showReplies, type Read, type ReplyMemo } from './transcript.ts';
-import { makeResumer, type ResumeStart } from './resume.ts';
+import { makeResumer, sessionIdOf, sessionName, tailOf, type ResumeStart } from './resume.ts';
 import { steer, stop } from './steer.ts';
 import { listenConfig, judge } from './listen.ts';
 import { askCard, answerAsk, auditEntries, closeSteeredAsks, type AskCard } from './asks.ts';
@@ -243,6 +243,25 @@ async function resumeRow(row: WorkRow, text: string): Promise<ResumeStart | unde
   if (!r.started) gate.recorded(a.id, 'failed', r.error);
   else gate.recorded(a.id, 'done', r.warning ? `Resumed; the open Orca tab will not see this turn` : 'Resumed');
   return r;
+}
+/** The Claude session behind a work-list row, for Continue on phone: a native row's own, or an Orca row's transcript file. */
+async function phoneTarget(row: WorkRow): Promise<{ sessionId: string; cwd: string; title: string; transcript?: string } | { error: string }> {
+  if (row.tmux) return { error: 'A project terminal has no Claude session to continue.' };
+  if (row.native) {
+    const w = native.get(row.native.id);
+    if (!w?.session_id) return { error: 'This worker has no session id yet.' };
+    return { sessionId: w.session_id, cwd: w.cwd, title: w.remote ?? row.title, transcript: native.transcriptFile(w.id) };
+  }
+  const src = work.source(row.id);
+  const chat = src?.kind === 'chat' ? src : src?.chat;
+  const file = chat && await chatFile(orca, chat, chatFiles);
+  if (!chat || !file) return { error: 'Jarvis could not find this session\'s transcript.' };
+  if (file.includes('/.codex/')) return { error: 'Continue on phone works for Claude sessions. This one is Codex.' };
+  const sessionId = sessionIdOf(file);
+  if (!sessionId) return { error: 'This session has no id Jarvis can resume.' };
+  let title = '';
+  try { title = sessionName(tailOf(file)) ?? ''; } catch {}
+  return { sessionId, cwd: chat.cwd, title: title || row.title, transcript: file };
 }
 // Rows the owner hid from the app. Hiding only changes the view: nothing in Orca is stopped or deleted.
 const hiddenIds = (): string[] => JSON.parse(store.getState('workHidden') ?? '[]');
@@ -529,7 +548,7 @@ function repos(): { name: string; path: string }[] {
 }
 
 // Routes that act as the owner. They need the secret of an open app page (access.ts).
-const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled']);
+const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled']);
 const ui = makeUiSessions();
 
 // ---- Project terminals from the new-session picker: tmux sessions, Touch ID on the Mac, the phone checks on the phone (terminal.ts, termgate.ts) ----
@@ -891,6 +910,22 @@ http.createServer(async (req, res) => {
       if (!row?.native) return send(res, 404, { error: 'Only a native worker can open in the desktop app.' });
       try { await native.desktop(row.native.id); publishWork(); return send(res, 204); }
       catch (e) { return send(res, 502, { error: (e as Error).message }); }
+    }
+    // Continue on phone: the row's own Claude session, resumed as a native interactive row with Remote Control on (native.phone).
+    // `stop` lists the pids of the processes that held it, which the owner chose to end from the refusal in the pane.
+    if (req.method === 'POST' && url === '/api/work/phone') {
+      const { id, stop } = await json(req);
+      const row = mergedWork().rows.find(r => r.id === id);
+      if (!row) return send(res, 404, { error: 'It is not in the work list any more.' });
+      const t = await phoneTarget(row);
+      if ('error' in t) return send(res, 400, { error: t.error });
+      const pids = Array.isArray(stop) ? stop.filter((p: unknown): p is number => Number.isInteger(p) && (p as number) > 1) : [];
+      const a = await gate.pressed('session-phone', { session: t.sessionId, title: t.title, ...(pids.length ? { stop: pids } : {}) }, `Continue "${t.title.slice(0, 60)}" on the phone`);
+      const r = await native.phone({ ...t, approvalId: a.id, stop: pids });
+      gate.recorded(a.id, r.ok ? 'done' : 'failed', r.ok ? (r.already ? 'Already in the Claude app' : `Remote Control as "${r.worker.remote}" (${ROW_PREFIX}${r.worker.id})`) : r.error);
+      publishWork();
+      if (!r.ok) return send(res, 409, { error: r.error, holders: r.holders ?? [] });
+      return send(res, 200, { id: `${ROW_PREFIX}${r.worker.id}`, remote: r.worker.remote, already: !!r.already });
     }
     // ---- Called by bin/jarvis-orca, bin/jarvis-act and bin/jarvis-remind on behalf of the brain ----
     if (req.method === 'POST' && url === '/api/internal/answered') {

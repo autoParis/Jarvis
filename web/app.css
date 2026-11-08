@@ -357,7 +357,7 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .h-chat { flex: 1; }
 body.pane-open .h-chat { display: none; }
 body.pane-open .h-pane { display: flex; }
-body.pane-open #newchat, body:not(.pane-open) #pane-open, body:not(.pane-open) #pane-desktop, body:not(.pane-open) #pane-stop { display: none; }
+body.pane-open #newchat, body:not(.pane-open) #pane-open, body:not(.pane-open) #pane-desktop, body:not(.pane-open) #pane-phone, body:not(.pane-open) #pane-stop { display: none; }
 .tools { display: flex; align-items: center; gap: 2px; margin-left: auto; flex: none; }
 .ib { position: relative; width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--r-s); color: var(--muted); flex: none; transition: background-color .12s, color .12s; }
 .ib:hover { background: var(--hover); color: var(--ink); }
@@ -658,6 +658,9 @@ textarea:focus { outline: none; }
 .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
 #wait-box { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--need-soft); padding: 10px 14px; border-radius: var(--r-s); font-size: 14px; font-weight: 500; margin-bottom: 8px; }
 #wait-box button { color: var(--need-ink); font-weight: 600; min-height: 32px; }
+/* Continue on phone, refused: which process holds the session, and the one tap that stops it. */
+#phone-box { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--need-soft); padding: 10px 14px; border-radius: var(--r-s); font-size: 14px; font-weight: 500; margin-bottom: 8px; overflow-wrap: anywhere; }
+#phone-box button { color: var(--need-ink); font-weight: 600; min-height: 32px; }
 #steer-cards .approval { padding: 12px 14px; margin-bottom: 8px; border: 1px solid var(--control); border-radius: var(--r-s); display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow-y: auto; }
 #steer-cards .say { font-size: 15px; line-height: 1.4; }
 #steer-cards .yes, #steer-cards .no { height: 44px; }
