@@ -102,7 +102,7 @@ test('a worker-start with the title and repo of a pending one is refused until t
   const gate = makeGate(s, id, () => {}, (m, f) => lines.push(`${m} ${JSON.stringify(f)}`));
   const old = await gate.propose('worker-start', { repo: '/r', orca: true, taskTitle: 'Dealer Ten 2 vendeur accounts', spec: 'bad spec' }, 'Start?');
   const fix = { repo: '/r', orca: true, taskTitle: 'Dealer Ten 2 vendeur accounts', spec: 'good spec' };
-  await assert.rejects(gate.propose('worker-start', fix, 'Start?'), new RegExp(`already pending as approval #${old.id}.*jarvis-act reject ${old.id}`));
+  await assert.rejects(gate.propose('worker-start', fix, 'Start?'), new RegExp(`already pending as approval #${old.id}.*jarvis-act revise ${old.id}`));
   await assert.rejects(gate.propose('worker-start', JSON.parse(old.args), 'Start?'), /already pending/);
   // The sidebar would show these the same, so they count as the same.
   await assert.rejects(gate.propose('worker-start', { repo: '/r/', orca: true, taskTitle: 'Request:  dealer ten 2 Vendeur accounts ', spec: 'x' }, 'Start?'), /already pending/);

@@ -19,6 +19,10 @@ export type Approval = {
   card?: string | null;
   /** The Jarvis chat message that asked for this proposal (chatlink.ts). It carries its own Approve and Reject while pending. */
   chat_turn?: number | null;
+  /** When the action ended (finishApproval). Null while pending or running, and on older rows. */
+  finished_at?: string | null;
+  /** When the owner's answer last changed this card in place (revise). Null if never. */
+  revised_at?: string | null;
 };
 
 /** One thing the owner asked Jarvis for: a worker it started for him. Shown in the Requests sidebar (requests.ts). */
@@ -178,6 +182,8 @@ export function openStore(path: string) {
   const approvalCols = (db.prepare('PRAGMA table_info(approvals)').all() as { name: string }[]).map(c => c.name);
   if (!approvalCols.includes('card')) db.exec('ALTER TABLE approvals ADD COLUMN card TEXT;'); // added with the headed approval card
   if (!approvalCols.includes('chat_turn')) db.exec('ALTER TABLE approvals ADD COLUMN chat_turn INTEGER;'); // the chat message with its own Approve (chatlink.ts)
+  if (!approvalCols.includes('finished_at')) db.exec('ALTER TABLE approvals ADD COLUMN finished_at TEXT;'); // when the action ended; the Stop on a start notice counts from it
+  if (!approvalCols.includes('revised_at')) db.exec('ALTER TABLE approvals ADD COLUMN revised_at TEXT;'); // the owner changed the open card in place
 
   // Set when the brain's turn ends without an error, or when the check reports the message lost. Messages from before this column are not in question.
   const turnCols = (db.prepare('PRAGMA table_info(turns)').all() as { name: string }[]).map(c => c.name);
@@ -307,7 +313,12 @@ export function openStore(path: string) {
         .run(status, decidedBy, ownerText ?? null, id).changes === 1;
     },
     finishApproval(id: number, status: string, result: string) {
-      db.prepare('UPDATE approvals SET status = ?, result = ? WHERE id = ?').run(status, result, id);
+      db.prepare(`UPDATE approvals SET status = ?, result = ?, finished_at = datetime('now') WHERE id = ?`).run(status, result, id);
+    },
+    /** Changes a pending card's args, question and lines in place. Returns false if it is no longer pending. */
+    reviseApproval(id: number, a: { args: string; say: string; card?: string | null }): boolean {
+      return db.prepare(`UPDATE approvals SET args = ?, say = ?, card = COALESCE(?, card), revised_at = datetime('now') WHERE id = ? AND status = 'pending'`)
+        .run(a.args, a.say, a.card ?? null, id).changes === 1;
     },
     /**
      * The latest approval for the same action and args that would make a new one a repeat: still pending,

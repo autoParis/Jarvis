@@ -7,7 +7,7 @@ import { openStore, type Item, type Approval } from './store.ts';
 import { watch, ensureIdentity, cleanEnv, orca } from './orca.ts';
 import { Brain, readSavedSession, gateFailed, SESSION_KEY } from './brain.ts';
 import { changeBrainModel, readBrainModel, MODELS, EFFORTS } from './brainmodel.ts';
-import { makeGate, PRESSED, NO_TASK, WORKER_PERMISSION } from './gate.ts';
+import { makeGate, PRESSED, NO_TASK, WORKER_PERMISSION, UNDO_MS } from './gate.ts';
 import { makeVoice, sentences, detectLang, byteRange } from './voice.ts';
 import { allowed, makeUiSessions, probePhone, phoneRefusal } from './access.ts';
 import { makeTerminals } from './terminal.ts';
@@ -177,7 +177,7 @@ const gate = makeGate(store, { run, handle }, a => {
   if (a.status === 'failed' && a.result?.startsWith(NO_TASK) && !existsSync(KILL_FILE)) {
     brain.send(`[gate] Approval #${a.id} (${a.action}): ${a.result} Tell ${OWNER} in one sentence and offer to stop and restart it.`);
   }
-}, log, undefined, undefined, {}, native);
+}, log, undefined, undefined, {}, native, { repo: ROOT, fromOwner: () => brain.answeringOwner }); // brain is set before any proposal arrives
 const resumed = gate.resumeChecks();
 if (resumed) log(`gate: resumed ${resumed} worker start checks`);
 // Can a worker still commit? One notice per new failure: jarvisd restarts after every merge, so a repeat stays quiet.
@@ -548,7 +548,7 @@ function repos(): { name: string; path: string }[] {
 }
 
 // Routes that act as the owner. They need the secret of an open app page (access.ts).
-const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled']);
+const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/approval/undo', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled']);
 const ui = makeUiSessions();
 
 // ---- Project terminals from the new-session picker: tmux sessions, Touch ID on the Mac, the phone checks on the phone (terminal.ts, termgate.ts) ----
@@ -717,6 +717,16 @@ http.createServer(async (req, res) => {
       catch (e) { return send(res, 409, { error: (e as Error).message, approval: store.approval(Number(id)) }); }
       // The kill switch holds here too: this was the one send that woke the brain while data/KILL was on (found 2026-11-07 by a test daemon).
       if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} ${approve ? 'approved' : 'rejected'} #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
+      return send(res, 200, a);
+    }
+    // Stop on a started notice: the owner takes back a worker Jarvis started at once, within UNDO_MS.
+    if (req.method === 'POST' && url === '/api/approval/undo') {
+      const { id } = await json(req);
+      let a: Approval;
+      try { a = await gate.undo(Number(id)); }
+      catch (e) { return send(res, 409, { error: (e as Error).message, approval: store.approval(Number(id)) }); }
+      const queued = a.id === Number(id);
+      if (!existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} pressed Stop on #${id}, the worker you started at once, within ${UNDO_MS / 1000} seconds. ${queued ? 'It stops as soon as its start ends.' : `Stop #${a.id}: ${a.status}${a.result ? `, ${a.result}` : ''}.`} He does not want it as it was. Ask him in one short sentence what to change, unless he already said.`);
       return send(res, 200, a);
     }
     // Send reply in the Messages popup: The owner's Approve for this email, with the words now in the box.
@@ -991,7 +1001,8 @@ http.createServer(async (req, res) => {
       const op = url.slice('/api/internal/gate/'.length);
       const b = req.method === 'POST' ? await json(req) : {};
       try {
-        if (op === 'propose') { const a = await gate.propose(b.action, b.args, b.say, b.card); chatLinks.proposed(a); return send(res, 200, a); }
+        if (op === 'propose') { const a = await gate.propose(b.action, b.args, b.say, b.card, { ownerAsked: b.ownerAsked === true }); chatLinks.proposed(a); return send(res, 200, a); }
+        if (op === 'revise') return send(res, 200, await gate.revise(Number(b.id), b.args, b.say, b.card));
         if (op === 'confirm') return send(res, 200, await gate.confirm(Number(b.id)));
         if (op === 'reject') return send(res, 200, gate.reject(Number(b.id)));
         if (op === 'list') return send(res, 200, store.pendingApprovals());
