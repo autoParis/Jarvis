@@ -179,7 +179,7 @@ import { makeScreen, feed as feedScreen, screenText } from '/shell.js';
 import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
 import { todayButton, makeTodayPop } from '/today.js';
 import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
-import { boxAfterSend } from '/dictate.js';
+import { boxAfterSend, settleBox, withPictures } from '/dictate.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
 import { makeModelPicker } from '/modelpicker.js';
@@ -1654,29 +1654,37 @@ function unattach(item) {
 }
 
 // ---- text ----
-let sending = false;
-async function sendText() {
-  const text = t.value.trim();
-  if ((!text && !attached.length) || sending) return;
+let sending = false, composing = false;
+t.addEventListener('compositionstart', () => { composing = true; });
+t.addEventListener('compositionend', () => { composing = false; });
+// `settle` is for a tap on Send: the phone's dictation can commit its words a moment after the tap, so the send
+// waits for the box to go quiet (settleBox in web/dictate.js). The box is read again after the uploads, and only
+// the text that went out leaves it, so a picture send never wipes dictated words.
+async function sendText(settle = false) {
+  if ((!t.value.trim() && !attached.length) || sending) return;
   sending = true;
   try {
+    if (settle) await settleBox(t, { composing: () => composing });
+    const pics = [...attached];
     // Upload all of them before sending anything, so a failed upload keeps the text and every picture in the box.
     const lines = [];
-    for (const { file } of attached) {
+    for (const { file } of pics) {
       const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type }, body: file });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) return add('event', `Picture not sent: ${j.error || r.status}`);
       lines.push(`[image: ${j.path}]`);
     }
-    t.value = '';
-    [...attached].forEach(unattach);
+    const sent = t.value, message = withPictures(sent, lines);
+    if (!message) return;
+    t.value = boxAfterSend(t.value, sent);
+    pics.forEach(unattach);
     const reply = replyTo?.id;
     cancelReply();
-    await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: [text, ...lines].filter(Boolean).join('\n'), replyTo: reply }) });
+    await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: message, replyTo: reply }) });
   } catch (err) { add('event', 'Send failed: ' + err.message); }
   finally { sending = false; idleLabel(); fit(); }
 }
-$('f').onsubmit = e => { e.preventDefault(); sendText(); };
+$('f').onsubmit = e => { e.preventDefault(); sendText(true); };
 t.onkeydown = e => { if (enterSends(e)) { e.preventDefault(); sendText().then(idleLabel); } };
 
 // ---- the pill's two right-hand buttons: the mic dictates, the wave starts hands-free or, with something to send, sends ----
@@ -1769,7 +1777,7 @@ mic.addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && latched) stopRec(false); }); // Escape drops a dictation
 wave.addEventListener('click', () => {
-  if (hasSend()) { if (hands?.utt) finishClip(hands); sendText().then(idleLabel); return; }
+  if (hasSend()) { if (hands?.utt) finishClip(hands); sendText(true).then(idleLabel); return; }
   keyboardView = false;
   if (!handsWanted) { handsWanted = true; localStorage.setItem('hands', 'on'); handsOn(); }
   showHands();
