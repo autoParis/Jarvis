@@ -366,7 +366,20 @@ async function answerMenu(terminal: string, text: string, request: string): Prom
 }
 
 /** How long the gate looks for a transcript after Orca could not see a worker take its task: startChecks reads, startCheckMs apart. */
-export type StartCheck = { startCheckMs?: number; startChecks?: number };
+export type StartCheck = { startCheckMs?: number; startChecks?: number; readBackMs?: number };
+
+/** Lowercase, without colour codes or whitespace, so a wrapped or indented line still matches. */
+const squash = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\s+/g, '').toLowerCase();
+
+/**
+ * Whether a terminal's last lines show the text that was sent: its first line, up to 40 characters.
+ * Claude Code folds a long paste into "[Pasted text #1 ...]", which also counts.
+ */
+export function showsText(tail: string[], text: string): boolean {
+  const shown = squash(tail.join(''));
+  const want = squash(text.split('\n').find(l => l.trim()) ?? '').slice(0, 40);
+  return want === '' || shown.includes(want) || shown.includes('[pastedtext#');
+}
 
 /** The start of a failed worker-start's result when Claude Code never got the task. main.ts tells the brain on it. */
 export const NO_TASK = 'The task never reached the agent';
@@ -388,7 +401,21 @@ export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => 
     if (!sig) log('gmail has no signature for the default send-as address, sending without one', { item: ext });
     return sig;
   };
-  const startCheckMs = check.startCheckMs ?? 60_000, startChecks = check.startChecks ?? 3;
+  const startCheckMs = check.startCheckMs ?? 60_000, startChecks = check.startChecks ?? 3, readBackMs = check.readBackMs ?? 3_000;
+
+  /**
+   * A terminal-send Orca accepted is done only when the terminal shows the text a moment later. On 2026-11-07 and
+   * 2026-11-08 two sends came back ok with an empty result, and nothing was typed.
+   */
+  async function readBack(terminal: string, text: string): Promise<{ status: string; result: string }> {
+    await new Promise(r => setTimeout(r, readBackMs));
+    const r = await run(['orca', 'terminal', 'read', '--terminal', terminal, '--limit', '200', '--json']);
+    let tail: unknown;
+    try { tail = JSON.parse(r.out).result?.terminal?.tail; } catch {}
+    if (r.ok !== true || !Array.isArray(tail)) return { status: 'unknown', result: `Orca took the text, but Jarvis could not read the terminal back to check it: ${summarize(r.out)}` };
+    if (!showsText(tail, text)) return { status: 'failed', result: `Orca said it typed the text, but ${Math.round(readBackMs / 1000)} seconds later the terminal does not show it. Nothing seems to have gone in.` };
+    return { status: 'done', result: 'Typed it, and the terminal shows it.' };
+  }
   const starts = oneAtATime();
   const checks = new Set<Promise<void>>();
 
@@ -503,10 +530,11 @@ export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => 
       log('gate answering a prompt with separate text and Enter', { ...ids, request });
       ({ status, result } = await answerMenu(args.terminal, args.text, request));
     }
-    if ((a.action === 'session-type' || a.action === 'prompt-key') && status === 'done' && !request && !accepted(r.out)) {
+    if ((a.action === 'session-type' || a.action === 'prompt-key' || a.action === 'terminal-send') && status === 'done' && !request && !accepted(r.out)) {
       status = 'failed';
       result = `Orca did not accept the input: ${r.out.slice(0, 200)}`;
     }
+    if (a.action === 'terminal-send' && status === 'done' && !request) ({ status, result } = await readBack(args.terminal, args.text));
     store.finishApproval(a.id, status, result);
     if (a.action === 'gmail-send' && status !== 'failed') store.markItem(args.item, 'answered', args.text);
     log(`gate ${status}`, { ...ids, result, ...(a.action === 'gmail-send' ? { item: args.item } : {}) });

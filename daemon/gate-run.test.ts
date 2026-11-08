@@ -86,7 +86,7 @@ const accepted = JSON.stringify({ ok: true, result: { send: { accepted: true, by
 async function approveSend(text: string, ...answers: string[]) {
   const s = openStore(':memory:');
   const lines: string[] = [];
-  const gate = makeGate(s, id, () => {}, (m, f) => lines.push(`${m} ${JSON.stringify(f)}`));
+  const gate = makeGate(s, id, () => {}, (m, f) => lines.push(`${m} ${JSON.stringify(f)}`), undefined, undefined, { readBackMs: 0 });
   const before = orca.calls().length;
   const p = await gate.propose('terminal-send', { terminal: 'term_other', text }, 'Answer the prompt?');
   orca.answers(...answers);
@@ -107,10 +107,43 @@ test('a menu refusal answers the prompt with the text, then a separate Enter', a
   assert.match(lines, new RegExp(`gate done .*${REQUEST}`));
 });
 
-test('a send that is not refused for a menu stays one command', async () => {
-  const sent = await approveSend('go', accepted);
+const screen = (...tail: string[]) => JSON.stringify({ ok: true, result: { terminal: { tail } } });
+const RESUME = 'claude --resume 9b765826-0000-4000-8000-000000000001 --remote-control';
+
+test('a terminal-send is done only when the terminal shows the text after the send', async () => {
+  // The text wraps across two lines on a narrow terminal.
+  const seen = await approveSend(RESUME, accepted, screen('$ claude --resume 9b765826-0000-4000', '-8000-000000000001 --remote-control', ''));
+  assert.equal(seen.a.status, 'done');
+  assert.deepEqual(seen.calls, [
+    `terminal send --terminal term_other --text ${RESUME} --enter --json`,
+    'terminal read --terminal term_other --limit 200 --json',
+  ]);
+  assert.match(seen.a.result!, /terminal shows it/);
+});
+
+test('a terminal-send Orca answers with an empty result is failed, not done', async () => {
+  // Approvals 417 and 434: ok true, result {}, and nothing typed.
+  const { a, calls } = await approveSend(RESUME, JSON.stringify({ ok: true, result: {} }));
+  assert.equal(a.status, 'failed');
+  assert.match(a.result!, /did not accept the input/);
+  assert.equal(calls.length, 1);
+});
+
+test('a terminal-send whose text is not on the terminal afterwards is failed, and a read that fails is unknown', async () => {
+  const missing = await approveSend(RESUME, accepted, screen('$ ', ''));
+  assert.equal(missing.a.status, 'failed');
+  assert.match(missing.a.result!, /does not show it/);
+  const unread = await approveSend(RESUME, accepted, JSON.stringify({ ok: false, error: { code: 'terminal_gone', message: 'gone' } }));
+  assert.equal(unread.a.status, 'unknown');
+  assert.match(unread.a.result!, /could not read the terminal back/);
+  const pasted = await approveSend('line one\nline two', accepted, screen('> [Pasted text #1 +2 lines]'));
+  assert.equal(pasted.a.status, 'done');
+});
+
+test('a send that is not refused for a menu stays one send', async () => {
+  const sent = await approveSend('go', accepted, screen('> go'));
   assert.equal(sent.a.status, 'done');
-  assert.equal(sent.calls.length, 1);
+  assert.equal(sent.calls.filter(c => c.startsWith('terminal send')).length, 1);
   const gone = await approveSend('go', JSON.stringify({ ok: false, error: { code: 'terminal_gone', message: 'gone' } }));
   assert.equal(gone.a.status, 'failed');
   assert.equal(gone.calls.length, 1);

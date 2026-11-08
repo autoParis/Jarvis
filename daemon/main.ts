@@ -30,6 +30,7 @@ import { listenConfig, judge } from './listen.ts';
 import { askCard, answerAsk, auditEntries, closeSteeredAsks, type AskCard } from './asks.ts';
 import { gonePromptNotices, fillPromptContexts } from './prompt.ts';
 import { makeCheck, readDelivery, masterHead, CHECK_MS } from './check.ts';
+import { gitSelfCheck, gitNotice } from './gitcheck.ts';
 import { reminderRoute } from './reminders.ts';
 import { makeMessages, emailPush, outboxLine } from './messages.ts';
 import { makeToday, todayRoute, todayBrief, BACKSTOP_MS } from './today.ts';
@@ -177,6 +178,16 @@ const gate = makeGate(store, { run, handle }, a => {
 }, log, undefined, undefined, {}, native);
 const resumed = gate.resumeChecks();
 if (resumed) log(`gate: resumed ${resumed} worker start checks`);
+// Can a worker still commit? One notice per new failure: jarvisd restarts after every merge, so a repeat stays quiet.
+gitSelfCheck(ROOT).then(r => {
+  if (r.ok) { log('git check: a worker can commit'); store.setState('gitCheck', ''); return; }
+  const text = gitNotice(r);
+  log('git check failed', { hook: r.hook, why: r.why });
+  if (store.getState('gitCheck') === text) return;
+  store.setState('gitCheck', text);
+  say('jarvis', text);
+  notify({ title: 'Jarvis', body: text.slice(0, 180), url: '/', tag: 'git-check' });
+}).catch(e => log(`git check: ${e}`));
 // ---- The Messages button: open emails and messages the owner must send himself, kept apart from the requests (messages.ts) ----
 const messages = makeMessages({ store, gate, log, onChange: () => messagesChanged() });
 function messagesChanged() { broadcast({ type: 'messages', messages: messages.list() }); }

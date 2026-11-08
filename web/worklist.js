@@ -155,7 +155,7 @@ export function approvalTag(action, args) {
 }
 
 /** These read back what they did, so their result is worth showing. Other results are ids and raw output. */
-const READS_BACK = new Set(['gh-pr-close', 'fbm-client-pause', 'prod-mcp-call']);
+const READS_BACK = new Set(['gh-pr-close', 'fbm-client-pause', 'prod-mcp-call', 'terminal-send']);
 
 /** The button labels of a pending card. A worker's permission prompt is allowed or denied, not approved. */
 export function approvalButtons(action) {
