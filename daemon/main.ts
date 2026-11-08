@@ -5,7 +5,7 @@ import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore, type Item, type Approval } from './store.ts';
 import { watch, ensureIdentity, cleanEnv, orca } from './orca.ts';
-import { Brain } from './brain.ts';
+import { Brain, readSavedSession, gateFailed, SESSION_KEY } from './brain.ts';
 import { changeBrainModel, readBrainModel, MODELS, EFFORTS } from './brainmodel.ts';
 import { makeGate, PRESSED, NO_TASK, WORKER_PERMISSION } from './gate.ts';
 import { makeVoice, sentences, detectLang, byteRange } from './voice.ts';
@@ -331,6 +331,9 @@ const brain = new Brain({
   systemPrompt: () => 'You are Jarvis. Your working directory is the vault; read CLAUDE.md there first.' + (existsSync(OWNER_NOTE) ? `\n\n${readFileSync(OWNER_NOTE, 'utf8').trim()}` : ''),
   brief,
   model: readBrainModel(store.getState),
+  // A jarvisd restart resumes the same conversation when the reset rule allows it (brain.ts startFirst).
+  saved: readSavedSession(store.getState),
+  save: s => store.setState(SESSION_KEY, s ? JSON.stringify(s) : ''),
 });
 // The proposals of a turn get Approve and Reject on the reply that asks for them (chatlink.ts).
 const chatLinks = makeChatLinks(store);
@@ -372,6 +375,10 @@ brain.on('working', (on: boolean) => { if (on) chatLinks.turnStarted(); broadcas
 brain.on('notice', (s: string) => say('jarvis', s));
 brain.on('log', log);
 brain.on('model', () => broadcast({ type: 'brain', brain: brainInfo() }));
+/** A gate button's outcome: a failure or an unknown result wakes the brain at once, anything else waits for the next turn. */
+function gateNotice(a: Approval, text: string) {
+  if (gateFailed(a.status)) brain.send(text); else brain.hold(text);
+}
 const brainInfo = () => ({ ...brain.status(), models: MODELS, efforts: EFFORTS });
 
 /** the owner's message. `replyTo` is the turn he answers (the reply button or swipe); its quote goes to the brain in front of his words. */
@@ -641,7 +648,7 @@ http.createServer(async (req, res) => {
     if (req.method === 'POST' && url === '/api/ask/answer') {
       const { id, value } = await json(req);
       if (typeof id !== 'string' || typeof value !== 'string') return send(res, 400, { error: 'id and value are required' });
-      const r = await answerAsk({ id, value: value.trim(), run, handle, store, orca, gate, log, native, note: n => { if (!existsSync(KILL_FILE)) brain.send(n); } });
+      const r = await answerAsk({ id, value: value.trim(), run, handle, store, orca, gate, log, native, note: n => { if (!existsSync(KILL_FILE)) brain.hold(n); } });
       askChanged(id);
       if (r.status === 200) work.poll().catch(() => {});
       return send(res, r.status, { error: r.error, ask: cardOf(store.item(id)) });
@@ -653,14 +660,14 @@ http.createServer(async (req, res) => {
         const r = native.decide(Number(id), approve === true);
         const a = store.approval(Number(id))!;
         if (!r.ok) return send(res, 409, { error: r.error, approval: a });
-        if (!existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} ${approve ? 'allowed' : 'denied'} permission #${a.id} with the button; the worker ${approve ? 'goes on' : 'was refused and goes on without it'}. Reply SILENT.`);
+        if (!existsSync(KILL_FILE)) brain.hold(`[gate] ${OWNER} ${approve ? 'allowed' : 'denied'} permission #${a.id} with the button; the worker ${approve ? 'goes on' : 'was refused and goes on without it'}. Reply SILENT.`);
         return send(res, 200, a);
       }
       let a: Approval;
       try { a = await gate.button(Number(id), approve === true); }
       catch (e) { return send(res, 409, { error: (e as Error).message, approval: store.approval(Number(id)) }); }
       // The kill switch holds here too: this was the one send that woke the brain while data/KILL was on (found 2026-11-07 by a test daemon).
-      if (!existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} ${approve ? 'approved' : 'rejected'} #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
+      if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} ${approve ? 'approved' : 'rejected'} #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
       return send(res, 200, a);
     }
     // Send reply in the Messages popup: The owner's Approve for this email, with the words now in the box.
@@ -669,7 +676,7 @@ http.createServer(async (req, res) => {
       if (typeof id !== 'string' || typeof text !== 'string') return send(res, 400, { error: 'id and text are required' });
       const r = await messages.send(id, text);
       const a = r.body.approval;
-      if (a && !existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
+      if (a && !existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
       return send(res, r.status, r.body);
     }
     // I'll handle it in the Messages popup, or Done on a message the owner sends himself.
@@ -677,7 +684,7 @@ http.createServer(async (req, res) => {
       const { id } = await json(req);
       if (typeof id !== 'string') return send(res, 400, { error: 'id is required' });
       const r = messages.handled(id);
-      if (r.status === 200 && !existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} pressed "${id.startsWith('outbox:') ? 'Done' : "I'll handle it"}" on ${id}. It left the brief. Reply SILENT.`);
+      if (r.status === 200 && !existsSync(KILL_FILE)) brain.hold(`[gate] ${OWNER} pressed "${id.startsWith('outbox:') ? 'Done' : "I'll handle it"}" on ${id}. It left the brief. Reply SILENT.`);
       return send(res, r.status, r.body);
     }
     // The microphone in the Today popup: the words become one item, and nothing goes to the chat.
