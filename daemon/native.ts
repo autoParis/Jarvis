@@ -1,3 +1,4 @@
+import { OWNER_CAP, OWNER } from './config.ts';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { closeSync, constants, existsSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -57,7 +58,7 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const RELAY_MODEL = 'claude-haiku-5-5';
 /** The short-lived session that carries a reply in. The worker sees its messages as coming from this name. */
 export const RELAY_NAME = 'jarvis-brain-relay';
-export const DENY_MESSAGE = 'The owner denied it from the Jarvis app';
+export const DENY_MESSAGE = `${OWNER_CAP} denied it from the Jarvis app`;
 /** A done turn without a DONE or FAILED line is reported to the brain once the report is this old. */
 export const SILENT_DONE_MS = 2 * 60_000;
 /** Finished workers leave the work list after this. */
@@ -76,7 +77,7 @@ export const NUDGE = 'Your terminal was restarted by Jarvis. Continue the task f
 export const NATIVE_FOOTER = `
 
 ## You are a Jarvis worker
-You are a Claude Code session started by Jarvis, the owner's assistant. Your coordinator is the Claude Code session named \`jarvis-brain\`; reach it with SendMessage (ListAgents shows it). AskUserQuestion is blocked.
+You are a Claude Code session started by Jarvis, ${OWNER}'s assistant. Your coordinator is the Claude Code session named \`jarvis-brain\`; reach it with SendMessage (ListAgents shows it). AskUserQuestion is blocked.
 
 Ask only what needs a human decision, with SendMessage to jarvis-brain, in this shape:
 STORY: <number and topic, at most 8 words>
@@ -84,11 +85,11 @@ WHERE: <what you are doing, one or two short sentences>
 QUESTION: <one sentence>
 CONTEXT: <optional, at most 3 sentences>
 OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
-Then end your turn. The answer arrives as a message from jarvis-brain or jarvis-brain-relay (The owner's words, carried by jarvisd) and starts a new turn.
+Then end your turn. The answer arrives as a message from jarvis-brain or jarvis-brain-relay (${OWNER}'s words, carried by jarvisd) and starts a new turn.
 
-When the work is finished, your last message of the final turn must start with a line \`DONE: <one sentence>\` (or \`FAILED: <one sentence>\`), followed by the report: what changed, the branch and commit, the PR link if any, what was not proven. That exact text reaches the owner word for word.
+When the work is finished, your last message of the final turn must start with a line \`DONE: <one sentence>\` (or \`FAILED: <one sentence>\`), followed by the report: what changed, the branch and commit, the PR link if any, what was not proven. That exact text reaches ${OWNER} word for word.
 
-If a permission prompt appears, wait; The owner answers it from his app. If the permission layer refuses a command, do not retry or route around it; say so in your report.
+If a permission prompt appears, wait; ${OWNER} answers it from his app. If the permission layer refuses a command, do not retry or route around it; say so in your report.
 
 Before each batch of tool calls, write one plain sentence saying what you are about to do.`;
 
@@ -388,7 +389,7 @@ export function makeNative(o: {
           const times = (resumeTimes.get(w.id) ?? []).filter(t => now() - t < RESUME_WINDOW_MS);
           if (times.length >= RESUME_MAX) {
             resumeTimes.set(w.id, times);
-            failHeld(w.id, "the worker's terminal died before the owner answered");
+            failHeld(w.id, `the worker's terminal died before ${OWNER} answered`);
             const next = update(w.id, { state: 'failed', waiting_for: `Died ${RESUME_MAX} times in ${RESUME_WINDOW_MS / 60_000} minutes; a message resumes it` });
             noticed.add(`${w.id}:failed`);
             log('native worker died too often, not resumed', { worker: w.id, reason, deaths: times.length });
@@ -399,7 +400,7 @@ export function makeNative(o: {
           resumeTimes.set(w.id, times);
         }
         const nudge = unfinished(w);
-        failHeld(w.id, "the worker's terminal died before the owner answered");
+        failHeld(w.id, `the worker's terminal died before ${OWNER} answered`);
         const resumes = w.resumes + 1;
         const fifo = fifoFor(w.name, resumes);
         const pgid = spawnPty(['claude', '--resume', w.session_id, '--name', w.name, '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
@@ -594,7 +595,7 @@ export function makeNative(o: {
       const stuck = new Set<string>();
       for (const a of stale) {
         store.decide(a.id, 'failed', 'automatic');
-        store.finishApproval(a.id, 'failed', 'jarvisd restarted before the owner answered');
+        store.finishApproval(a.id, 'failed', `jarvisd restarted before ${OWNER} answered`);
         const worker = (() => { try { return JSON.parse(a.args).worker as string; } catch { return undefined; } })();
         if (worker && row(worker)?.state === 'blocked') { update(worker, { waiting_for: null, state: 'working' }); stuck.add(worker); }
       }

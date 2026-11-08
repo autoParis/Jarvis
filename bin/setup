@@ -29,6 +29,7 @@ ask() { # key, question, [default when .env has no answer yet]
 
 echo "Jarvis setup. Press Enter to keep the value in brackets."
 ask JARVIS_OWNER_NAME     "Your name, as you sign emails"
+ask JARVIS_OWNER_CALLED "How Jarvis names you in the app and to workers (a first name), empty for \"the owner\""
 ask JARVIS_COMPANY        "Your company"
 ask JARVIS_COMPANY_ABOUT  "What it does, in one line"
 ask JARVIS_GMAIL_ACCOUNT  "The Gmail account Jarvis reads (gws must be signed in to it)"
@@ -51,6 +52,7 @@ ask JARVIS_PRODUCT_LABEL  "How the app names your product"
 ask JARVIS_SUPPORT_REPO   "Product repo whose merged PRs close support tickets, owner/name"
 ask JARVIS_SUPPORT_STAFF_SUFFIX "What the support desk adds to a staff name"
 ask JARVIS_MIGRATION_SHEET_ID "Google Sheet id bin/sheet-edit may write to"
+ask JARVIS_DEALERS_FILE  "Local dealer list to seed the migration list, empty for none"
 
 umask 077
 { echo "# Written by bin/setup on $(date +%Y-%m-%d). Personal: never commit this file."; printf '%s' "$OUT"; } > "$ENV_FILE"

@@ -19,7 +19,7 @@ const url = process.env.JARVIS_URL ?? 'http://127.0.0.1:7717';
 let body;
 if (cmd === 'email-done') {
   if (!/^gmail:\w+$/.test(rest[0] ?? '')) { console.error('usage: jarvis-act email-done gmail:<id>'); process.exit(2); }
-  const res = await fetch(`${url}/api/internal/answered`, { method: 'POST', body: JSON.stringify({ id: rest[0], answer: 'left to the owner' }) });
+  const res = await fetch(`${url}/api/internal/answered`, { method: 'POST', body: JSON.stringify({ id: rest[0], answer: `left to ${process.env.JARVIS_OWNER_CALLED?.trim() || 'the owner'}` }) });
   console.log(res.ok ? 'ok' : await res.text());
   process.exit(res.ok ? 0 : 1);
 }

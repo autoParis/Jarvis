@@ -8,6 +8,7 @@
 // - Meeting set carries the meeting time (meeting_at, UTC). The owner's page cannot set Meeting set without one; the brain may,
 //   and the row then shows "Pick a time". Leaving Meeting set clears it from the row; the log keeps it.
 // - Nothing is written to the sheet. The sheet stays the record.
+import { OWNER } from './config.ts';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
@@ -250,7 +251,7 @@ export function makeMigration(o: { db: DatabaseSync; log: Log; onChange: () => v
       else d = findDealer(text(b?.dealership));
       if (!d) {
         const near = closeTo(text(b?.dealership));
-        return refuse(400, `"${text(b?.dealership)}" is not on the dealership list.${near.length ? ` Close: ${near.join('; ')}.` : ''} Only the owner adds a dealership, from the app.`);
+        return refuse(400, `"${text(b?.dealership)}" is not on the dealership list.${near.length ? ` Close: ${near.join('; ')}.` : ''} Only ${OWNER} adds a dealership, from the app.`);
       }
       const from = by === 'jarvis' ? text(b?.from) : '';
       if (by === 'jarvis' && !from) return refuse(400, '--from is required: where the person came from, such as "an email from Max" or "chat"');

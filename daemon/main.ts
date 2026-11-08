@@ -1,3 +1,4 @@
+import { OWNER_CAP, OWNER } from './config.ts';
 import http from 'node:http';
 import { readFileSync, existsSync, createReadStream, readdirSync, statSync, watch as fsWatch } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
@@ -41,9 +42,10 @@ import { readChatFile, withEvents, fileCursor } from './transcript.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { withTyped } from '../web/dictate.js';
-import { PRODUCT_KEY, PRODUCT_LABEL } from './config.ts';
+import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE } from './config.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const OWNER_NOTE = join(ROOT, 'vault', 'owner.md');
 const PORT = Number(process.env.JARVIS_PORT ?? 7717);
 // Any Orca-managed worktree works; it only hosts the idle identity terminal.
 const HOME_WORKTREE = process.env.JARVIS_HOME_WORKTREE ?? `path:${ROOT}`;
@@ -70,7 +72,7 @@ function broadcast(ev: object) {
 // ---- Migration contacts list: temporary, self-contained (migration.ts; every piece listed in docs/migration/README.md) ----
 const migration = makeMigration({
   db: store.db, log, getState: store.getState, setState: store.setState,
-  seed: () => readDealerFile(join(ROOT, 'docs', 'migration', 'dealerships.json')),
+  seed: () => readDealerFile(DEALERS_FILE || join(ROOT, 'docs', 'migration', 'dealerships.json')),
   onChange: () => broadcast({ type: 'migration', migration: migration.state() }),
 });
 
@@ -137,12 +139,12 @@ const native = makeNative({
     const line = `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) reported ${w.outcome}:\n${text}`;
     store.addTurn({ role: 'event', text: line });
     broadcast({ type: 'event', text: line, at: new Date().toISOString() });
-    if (!existsSync(KILL_FILE)) brain.send(`${line}\n\nThis is its report, word for word. Speak it to the owner if it is an answer or a problem; a plain success is SILENT unless he asked for it. It needs no release.`);
+    if (!existsSync(KILL_FILE)) brain.send(`${line}\n\nThis is its report, word for word. Speak it to ${OWNER} if it is an answer or a problem; a plain success is SILENT unless he asked for it. It needs no release.`);
   },
   onCard: a => {
     broadcast({ type: 'approval', approval: a });
     const args = JSON.parse(a.args);
-    if (a.status === 'pending' && !existsSync(KILL_FILE)) brain.send(`[worker permission] Native worker ${args.name} wants to run ${args.tool}: ${JSON.stringify(String(args.summary).slice(0, 300))}. It waits on approval #${a.id}, a card in the app, and nothing else can answer it. Tell the owner in one sentence to tap Allow or Deny on it.`);
+    if (a.status === 'pending' && !existsSync(KILL_FILE)) brain.send(`[worker permission] Native worker ${args.name} wants to run ${args.tool}: ${JSON.stringify(String(args.summary).slice(0, 300))}. It waits on approval #${a.id}, a card in the app, and nothing else can answer it. Tell ${OWNER} in one sentence to tap Allow or Deny on it.`);
   },
   onNotice: (w, text) => {
     // A worker that ended its turn on a question is waiting on its answer, not silent.
@@ -150,7 +152,7 @@ const native = makeNative({
     const line = `[worker event] ${text} (${ROW_PREFIX}${w.id})`;
     store.addTurn({ role: 'event', text: line });
     broadcast({ type: 'event', text: line, at: new Date().toISOString() });
-    if (!existsSync(KILL_FILE)) brain.send(`${line}\n\nTell the owner in one sentence if it needs him; otherwise SILENT. To send it an instruction: jarvis-native reply --worker ${w.name} --text "<words>".`);
+    if (!existsSync(KILL_FILE)) brain.send(`${line}\n\nTell ${OWNER} in one sentence if it needs him; otherwise SILENT. To send it an instruction: jarvis-native reply --worker ${w.name} --text "<words>".`);
   },
 });
 /** The work list with the native rows, for the app and the brain's brief. */
@@ -170,7 +172,7 @@ const gate = makeGate(store, { run, handle }, a => {
   if (a.action === 'gmail-send') messagesChanged();
   // Only the gate's start check writes this, minutes after Approve, so nothing else would tell the owner.
   if (a.status === 'failed' && a.result?.startsWith(NO_TASK) && !existsSync(KILL_FILE)) {
-    brain.send(`[gate] Approval #${a.id} (${a.action}): ${a.result} Tell the owner in one sentence and offer to stop and restart it.`);
+    brain.send(`[gate] Approval #${a.id} (${a.action}): ${a.result} Tell ${OWNER} in one sentence and offer to stop and restart it.`);
   }
 }, log, undefined, undefined, {}, native);
 const resumed = gate.resumeChecks();
@@ -284,17 +286,17 @@ function brief(): string {
   const workers = store.getState('workers');
   const turns = store.recentTurns(16).filter(t => t.role === 'owner' || t.role === 'jarvis');
   return [
-    `[session start ${new Date().toISOString()}] State brief, built by jarvisd. Do not answer it; reply SILENT unless something below needs the owner now.`,
-    `Run: ${run}. Use jarvis-orca for Orca and jarvis-act for anything that needs the owner's yes.`,
-    items.length ? `Open asks waiting for the owner:\n${items.map(fmtItem).join('\n')}` : 'No open asks.',
+    `[session start ${new Date().toISOString()}] State brief, built by jarvisd. Do not answer it; reply SILENT unless something below needs ${OWNER} now.`,
+    `Run: ${run}. Use jarvis-orca for Orca and jarvis-act for anything that needs ${OWNER}'s yes.`,
+    items.length ? `Open asks waiting for ${OWNER}:\n${items.map(fmtItem).join('\n')}` : 'No open asks.',
     nativeLines(native.list()),
-    emails.length ? `Emails waiting for the owner (last 3 days):\n${emails.map(fmtEmail).join('\n')}` : '',
-    outbox.length ? `Messages the owner still has to send himself (each is a card under Messages until he taps Done):\n${outbox.map(outboxLine).join('\n')}` : '',
+    emails.length ? `Emails waiting for ${OWNER} (last 3 days):\n${emails.map(fmtEmail).join('\n')}` : '',
+    outbox.length ? `Messages ${OWNER} still has to send himself (each is a card under Messages until he taps Done):\n${outbox.map(outboxLine).join('\n')}` : '',
     todayBrief(store.todayItems()),
     migrationBrief(migration.state().people),
     repliesBrief(store.openSupportReplies()),
-    pending.length ? `Proposals waiting for the owner's yes:\n${pending.map(fmtApproval).join('\n')}` : '',
-    workers ? `Workers across the owner's Runs (polled every 30 s):\n${workers.slice(0, 4000)}` : 'No worker snapshot yet. Run jarvis-orca worker-list if the owner asks about workers.',
+    pending.length ? `Proposals waiting for ${OWNER}'s yes:\n${pending.map(fmtApproval).join('\n')}` : '',
+    workers ? `Workers across ${OWNER}'s Runs (polled every 30 s):\n${workers.slice(0, 4000)}` : `No worker snapshot yet. Run jarvis-orca worker-list if ${OWNER} asks about workers.`,
     turns.length ? `Recent conversation:\n${turns.map(t => `${t.role}: ${t.text.slice(0, 400)}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
 }
@@ -325,7 +327,8 @@ const brain = new Brain({
     ORCA_TERMINAL_HANDLE: handle,
   },
   // The full Orca guide (about 16k tokens) is the `orchestration` skill, loaded only when needed.
-  systemPrompt: () => 'You are Jarvis. Your working directory is the vault; read CLAUDE.md there first.',
+  // vault/owner.md is optional and never committed: private facts CLAUDE.md leaves generic (the owner's name, the product's real names).
+  systemPrompt: () => 'You are Jarvis. Your working directory is the vault; read CLAUDE.md there first.' + (existsSync(OWNER_NOTE) ? `\n\n${readFileSync(OWNER_NOTE, 'utf8').trim()}` : ''),
   brief,
   model: readBrainModel(store.getState),
 });
@@ -366,7 +369,7 @@ function fromOwner(text: string, replyTo?: number) {
     return;
   }
   // The prompt rule alone lost to earlier French turns; tag each message with its language.
-  brain.send(`${quote ? `${quoteLine(quote)}\n` : ''}[The owner, in ${detectLang(text.replace(IMAGE_MARKER, ' ')) === 'fr' ? 'French: answer in French' : 'English: answer in English'}] ${text}`, turn);
+  brain.send(`${quote ? `${quoteLine(quote)}\n` : ''}[${OWNER_CAP}, in ${detectLang(text.replace(IMAGE_MARKER, ' ')) === 'fr' ? 'French: answer in French' : 'English: answer in English'}] ${text}`, turn);
 }
 
 // ---- Watcher ----
@@ -445,7 +448,7 @@ const today = makeToday({
   paused: () => existsSync(KILL_FILE),
   onChange: () => broadcast({ type: 'today', today: today.list() }),
   discuss: words => fromOwner(`Let's talk about this one from my Today list: ${words}`),
-  released: i => { if (i.dispatch && !existsSync(KILL_FILE)) brain.send(`[today] the owner released item ${i.id}, dispatch ${i.dispatch}. Close the loop on its worker and branch ("Today list" in CLAUDE.md). Reply SILENT unless something needs him.`); },
+  released: i => { if (i.dispatch && !existsSync(KILL_FILE)) brain.send(`[today] ${OWNER} released item ${i.id}, dispatch ${i.dispatch}. Close the loop on its worker and branch ("Today list" in CLAUDE.md). Reply SILENT unless something needs him.`); },
 });
 setInterval(() => { today.tick().catch(e => log(`today timer: ${e}`)); }, BACKSTOP_MS);
 today.pass('daemon started').catch(e => log(`today pass: ${e}`));
@@ -499,7 +502,7 @@ async function shellRoute(req: http.IncomingMessage, res: http.ServerResponse, u
   const why = ui.ok(req.headers) ? shellRefusal(probe) : 'no open app page';
   if (why) {
     log('shell refused', { route: url, why, device: req.headers['x-forwarded-for'] });
-    return send(res, 403, { error: `The shell opens only from the owner's phone (${why}).` });
+    return send(res, 403, { error: `The shell opens only from ${OWNER}'s phone (${why}).` });
   }
   if (req.method === 'GET' && url === '/api/shell/stream') {
     res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' });
@@ -516,7 +519,7 @@ async function shellRoute(req: http.IncomingMessage, res: http.ServerResponse, u
   }
   if (req.method !== 'POST') return send(res, 404);
   if (url === '/api/shell/open') return send(res, 200, shell.open());
-  if (url === '/api/shell/close') return send(res, 200, { closed: shell.close('The owner tapped Close') });
+  if (url === '/api/shell/close') return send(res, 200, { closed: shell.close(`${OWNER_CAP} tapped Close`) });
   if (url === '/api/shell/interrupt') return send(res, shell.interrupt() ? 204 : 409);
   if (url === '/api/shell/input') {
     const { text } = await json(req);
@@ -671,14 +674,14 @@ http.createServer(async (req, res) => {
         const r = native.decide(Number(id), approve === true);
         const a = store.approval(Number(id))!;
         if (!r.ok) return send(res, 409, { error: r.error, approval: a });
-        if (!existsSync(KILL_FILE)) brain.send(`[gate] the owner ${approve ? 'allowed' : 'denied'} permission #${a.id} with the button; the worker ${approve ? 'goes on' : 'was refused and goes on without it'}. Reply SILENT.`);
+        if (!existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} ${approve ? 'allowed' : 'denied'} permission #${a.id} with the button; the worker ${approve ? 'goes on' : 'was refused and goes on without it'}. Reply SILENT.`);
         return send(res, 200, a);
       }
       let a: Approval;
       try { a = await gate.button(Number(id), approve === true); }
       catch (e) { return send(res, 409, { error: (e as Error).message, approval: store.approval(Number(id)) }); }
       // The kill switch holds here too: this was the one send that woke the brain while data/KILL was on (found 2026-11-07 by a test daemon).
-      if (!existsSync(KILL_FILE)) brain.send(`[gate] the owner ${approve ? 'approved' : 'rejected'} #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
+      if (!existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} ${approve ? 'approved' : 'rejected'} #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
       return send(res, 200, a);
     }
     // Send reply in the Messages popup: The owner's Approve for this email, with the words now in the box.
@@ -687,7 +690,7 @@ http.createServer(async (req, res) => {
       if (typeof id !== 'string' || typeof text !== 'string') return send(res, 400, { error: 'id and text are required' });
       const r = await messages.send(id, text);
       const a = r.body.approval;
-      if (a && !existsSync(KILL_FILE)) brain.send(`[gate] the owner approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
+      if (a && !existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
       return send(res, r.status, r.body);
     }
     // I'll handle it in the Messages popup, or Done on a message the owner sends himself.
@@ -695,7 +698,7 @@ http.createServer(async (req, res) => {
       const { id } = await json(req);
       if (typeof id !== 'string') return send(res, 400, { error: 'id is required' });
       const r = messages.handled(id);
-      if (r.status === 200 && !existsSync(KILL_FILE)) brain.send(`[gate] the owner pressed "${id.startsWith('outbox:') ? 'Done' : "I'll handle it"}" on ${id}. It left the brief. Reply SILENT.`);
+      if (r.status === 200 && !existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} pressed "${id.startsWith('outbox:') ? 'Done' : "I'll handle it"}" on ${id}. It left the brief. Reply SILENT.`);
       return send(res, r.status, r.body);
     }
     // The microphone in the Today popup: the words become one item, and nothing goes to the chat.
@@ -740,7 +743,7 @@ http.createServer(async (req, res) => {
       return r ? send(res, 200, r) : send(res, 404, { error: 'No report is stored for this request.' });
     }
     // ---- Work list ----
-    if (req.method === 'GET' && url === '/api/work') return send(res, 200, { ...mergedWork(), hidden: hiddenIds(), repos: repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL } });
+    if (req.method === 'GET' && url === '/api/work') return send(res, 200, { ...mergedWork(), hidden: hiddenIds(), repos: repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL }, owner: { called: OWNER, cap: OWNER_CAP } });
     // Hide or show a row in the app. Only the list of hidden ids changes.
     if (req.method === 'POST' && url === '/api/work/hide') {
       const { id, hidden } = await json(req);
@@ -827,7 +830,7 @@ http.createServer(async (req, res) => {
         store.decide(a.id, 'approved', 'button', text.trim()); store.finishApproval(a.id, 'done', 'sent');
         const open = store.openItems().filter(i => i.source === 'native' && i.dispatch_id === row.id);
         for (const i of open) { store.markItem(i.external_id, 'answered', text.trim()); askChanged(i.external_id); }
-        if (!existsSync(KILL_FILE)) brain.send(`[work list] the owner sent native worker ${row.native.name} (${row.id}) a message himself from the work list: ${JSON.stringify(text.trim())}.${open.length ? ' That answers its open question.' : ''} Reply SILENT.`);
+        if (!existsSync(KILL_FILE)) brain.send(`[work list] ${OWNER} sent native worker ${row.native.name} (${row.id}) a message himself from the work list: ${JSON.stringify(text.trim())}.${open.length ? ' That answers its open question.' : ''} Reply SILENT.`);
         publishWork();
         work.poll().catch(() => {}); // a request that was Done goes back to Working now, not at the next poll (requests.ts)
         return send(res, 200, { done: 'sent' });

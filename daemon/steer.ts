@@ -1,3 +1,4 @@
+import { OWNER } from './config.ts';
 import type { OrcaResult } from './orca.ts';
 import type { Store, Approval } from './store.ts';
 import type { Gate } from './gate.ts';
@@ -41,7 +42,7 @@ export async function steer(o: {
       if (r?.ok) {
         store.markItem(question.external_id, 'answered', text);
         log('steer: The owner answered an ask from the work list', { ...ids, item: question.external_id });
-        o.note(`[work list] the owner answered ask message_id=${question.external_id} (dispatch ${row.dispatch}, ${JSON.stringify(row.title)}) himself from the work list: ${JSON.stringify(text)}. It is answered; do not reply to it again. Reply SILENT.`);
+        o.note(`[work list] ${OWNER} answered ask message_id=${question.external_id} (dispatch ${row.dispatch}, ${JSON.stringify(row.title)}) himself from the work list: ${JSON.stringify(text)}. It is answered; do not reply to it again. Reply SILENT.`);
         return { status: 200, body: { done: 'replied' } };
       }
       if (r && !r.ok) {
@@ -52,7 +53,7 @@ export async function steer(o: {
       log('steer: no answer from Orca, ask stays replying', { ...ids, item: question.external_id });
       return { status: 502, body: { error: 'Orca gave no answer, so the reply may or may not have gone out. Check before sending it again.' } };
     }
-    const r = await o.orca(['orchestration', 'send', '--run', o.run, '--from', o.handle, '--to', `dispatch:${row.dispatch}`, '--subject', 'From the owner', '--body', text]).catch(() => undefined);
+    const r = await o.orca(['orchestration', 'send', '--run', o.run, '--from', o.handle, '--to', `dispatch:${row.dispatch}`, '--subject', `From ${OWNER}`, '--body', text]).catch(() => undefined);
     if (!r?.ok) {
       log('steer: send failed', { ...ids, error: r?.error?.code ?? 'no answer' });
       return { status: 502, body: { error: r ? `Orca refused it: ${r.error?.message ?? r.error?.code}` : 'Orca gave no answer, so the message may or may not have gone out.' } };
@@ -60,7 +61,7 @@ export async function steer(o: {
     // An escalation is not a question Orca can reply to; The owner's message is the answer.
     for (const e of asks) store.markItem(e.external_id, 'answered', text);
     log('steer: The owner messaged a worker from the work list', ids);
-    o.note(`[work list] the owner sent dispatch ${row.dispatch} (${JSON.stringify(row.title)}) a message himself from the work list: ${JSON.stringify(text)}.${asks.length ? ` That answers ${asks.map(e => e.external_id).join(', ')}.` : ''} Reply SILENT.`);
+    o.note(`[work list] ${OWNER} sent dispatch ${row.dispatch} (${JSON.stringify(row.title)}) a message himself from the work list: ${JSON.stringify(text)}.${asks.length ? ` That answers ${asks.map(e => e.external_id).join(', ')}.` : ''} Reply SILENT.`);
     return { status: 200, body: { done: 'sent' } };
   }
 

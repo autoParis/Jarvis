@@ -1,3 +1,4 @@
+import { OWNER } from './config.ts';
 import { execFile } from 'node:child_process';
 import { cleanEnv } from './orca.ts';
 import { eastern } from './reminders.ts';
@@ -168,7 +169,7 @@ export function makeReplies(o: {
     if (o.paused()) return;
     const owed = store.owedSupportTells();
     if (!owed.length) return;
-    o.wake(owed.map(r => `[check] Support reply, tell the owner in one sentence: ${r.tell}`).join('\n'));
+    o.wake(owed.map(r => `[check] Support reply, tell ${OWNER} in one sentence: ${r.tell}`).join('\n'));
     for (const r of owed) store.setSupportReply(r.id, { tell: null });
   }
 
@@ -196,7 +197,7 @@ export function makeReplies(o: {
 /** The internal routes jarvis-act calls. Adding, resuming and dropping need the owner's message in the running turn. */
 export function replyRoute(store: Store, log: Log, method: string, url: string, b: any, ctx: { fromOwner: () => boolean }): { status: number; body: unknown } | undefined {
   const refused = (error: string, status = 400) => ({ status, body: { error } });
-  const notOwner = 'This needs the owner\'s own message in this turn. Ask him first.';
+  const notOwner = `This needs ${OWNER}'s own message in this turn. Ask him first.`;
   if (method === 'GET' && url === '/api/internal/replies') return { status: 200, body: store.openSupportReplies() };
   if (method === 'POST' && url === '/api/internal/replies') {
     const text = typeof b.text === 'string' ? b.text.trim() : '';
@@ -212,7 +213,7 @@ export function replyRoute(store: Store, log: Log, method: string, url: string, 
     const open = store.openSupportReplies().find(r => r.reference === b.ref);
     if (open) {
       if (open.text === text && open.pr === pr) return { status: 200, body: open };
-      return refused(`${b.ref} already has a reply on the list (id ${open.id}, ${open.status}). Run jarvis-act reply-drop ${open.id} first if the owner changed it.`, 409);
+      return refused(`${b.ref} already has a reply on the list (id ${open.id}, ${open.status}). Run jarvis-act reply-drop ${open.id} first if ${OWNER} changed it.`, 409);
     }
     const r = store.addSupportReply({ reference: b.ref, dealership, dealership_id: b.dealershipId, text, repo: b.repo, pr });
     log('support reply added', { reply: r.id, reference: r.reference, pr });
@@ -231,7 +232,7 @@ export function replyRoute(store: Store, log: Log, method: string, url: string, 
   }
   // Failed means nothing reached the tool. A hold for manual steps ends when the owner says they are done.
   // A ticket or PR hold changed what the owner approved, and unknown may have gone out: those need new words or a look at the ticket.
-  if (r.status !== 'failed' && !(r.status === 'held' && r.hold_kind === 'manual')) return refused(`reply ${r.id} is ${r.status}${r.hold_kind ? ` (${r.hold_kind})` : ''} and cannot resume. Drop it, and add it again if the owner approves new words.`, 409);
+  if (r.status !== 'failed' && !(r.status === 'held' && r.hold_kind === 'manual')) return refused(`reply ${r.id} is ${r.status}${r.hold_kind ? ` (${r.hold_kind})` : ''} and cannot resume. Drop it, and add it again if ${OWNER} approves new words.`, 409);
   store.setSupportReply(r.id, { status: 'waiting', hold_kind: null, outcome: null, tell: null, ...(r.status === 'held' ? { manual_ok: 1 } : {}) });
   log('support reply resumed', { reply: r.id, reference: r.reference, from: r.status });
   return { status: 200, body: store.supportReply(r.id) };

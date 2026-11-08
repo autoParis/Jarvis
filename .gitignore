@@ -20,6 +20,7 @@ docs/audits/
 # The vault holds real people, clients and notes. Only the templates are tracked.
 # bin/setup copies vault/people.example.md to vault/people.md.
 vault/people.md
+vault/owner.md
 vault/notes/*
 !vault/notes/.gitkeep
 !vault/notes/README.md

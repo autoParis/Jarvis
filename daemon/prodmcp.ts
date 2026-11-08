@@ -1,3 +1,4 @@
+import { OWNER_CAP } from './config.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { PROD_MCP_URL, TICKET_PREFIX, PRODUCT_KEY, PRODUCT_LABEL } from './config.ts';
@@ -26,7 +27,7 @@ export function prodToolName(v: unknown): string {
   const tool = v.startsWith(WORKER_PREFIX) ? v.slice(WORKER_PREFIX.length) : v;
   if (!/^[A-Za-z][\w-]*$/.test(tool)) throw new Error(`tool must be a production ${PRODUCT_LABEL} MCP tool name, got ${JSON.stringify(v)}`);
   const word = REFUSED_TOOL_WORDS.find(w => tool.toLowerCase().includes(w));
-  if (word) throw new Error(`${tool} is refused: a tool whose name contains "${word}" never runs from this card. The owner does that at a screen.`);
+  if (word) throw new Error(`${tool} is refused: a tool whose name contains "${word}" never runs from this card. ${OWNER_CAP} does that at a screen.`);
   return tool;
 }
 

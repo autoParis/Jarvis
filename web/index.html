@@ -185,7 +185,9 @@ import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js'
 import { makeModelPicker } from '/modelpicker.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
-import { mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml } from '/worklist.js';
+import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml } from '/worklist.js';
+// The owner's name and the product label for the detail pane and the picker, once at load (GET /api/work).
+fetch('/api/work').then(r => r.json()).then(w => { setOwner(w.owner); setProduct(w.product); }).catch(() => {});
 const $ = id => document.getElementById(id);
 // Every POST carries this page's secret from the event stream. jarvisd refuses actions as the owner without it,
 // so a process on the Mac cannot press Approve or speak for him with a plain request.
@@ -1541,7 +1543,7 @@ function showPick(open) {
 npBtn.onclick = async () => {
   if (!np.hidden) return showPick(false);
   showMenu(false);
-  try { const w = await (await fetch('/api/work')).json(); setProduct(w.product); npRepos = orderRepos(w.repos || []); }
+  try { const w = await (await fetch('/api/work')).json(); setProduct(w.product); setOwner(w.owner); npRepos = orderRepos(w.repos || []); }
   catch { return add('event', 'New session: could not read the project list. Try again.'); }
   npChoice = restore(localStorage.getItem('newSession'), npRepos);
   npRender();

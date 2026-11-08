@@ -39,7 +39,7 @@ case "$cmd" in
     d=""; b=""
     while [ $# -gt 0 ]; do case "$1" in --dispatch) d="$2"; shift 2;; --body) b="$2"; shift 2;; *) shift;; esac; done
     [ -n "$d" ] && [ -n "$b" ] || { echo "usage: jarvis-orca steer --dispatch <id> --body <text>" >&2; exit 2; }
-    out=$(orca orchestration send --run "$JARVIS_RUN" --from "$JARVIS_HANDLE" --to "dispatch:$d" --subject "From the owner" --body "$b" --json) || true
+    out=$(orca orchestration send --run "$JARVIS_RUN" --from "$JARVIS_HANDLE" --to "dispatch:$d" --subject "From ${JARVIS_OWNER_CALLED:-the owner}" --body "$b" --json) || true
     echo "$out"
     echo "$out" | grep -q '"ok": *true' || exit 1
     # This closes any open escalation from that worker; jarvisd marks its card answered and records who said it.

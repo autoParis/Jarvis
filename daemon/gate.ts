@@ -1,3 +1,4 @@
+import { OWNER_CAP, OWNER } from './config.ts';
 import { execFile } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -16,18 +17,18 @@ import { NATIVE_FOOTER, ROW_PREFIX, type Native } from './native.ts';
 export const ASK_FOOTER = `
 
 ## Asking the coordinator
-Your coordinator is Jarvis, who reads your questions aloud to the owner. Ask only what needs a human decision. Phrase every \`orca orchestration ask\` exactly as:
+Your coordinator is Jarvis, who reads your questions aloud to ${OWNER}. Ask only what needs a human decision. Phrase every \`orca orchestration ask\` exactly as:
 STORY: <number and topic, at most 8 words>
 WHERE: <what you are doing, one or two short sentences>
 QUESTION: <one sentence>
 CONTEXT: <optional, at most 3 sentences>
 IMAGE: <optional, one absolute path to a .png .jpg .jpeg .webp or .gif>
 OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
-Pass the short choices in one --options flag, separated by commas: --options "Merged,Not yet". Do not repeat the flag, because Orca keeps only the last one. Orca splits on every comma, so write each choice without one. For anything visual, put a screenshot path in IMAGE (under the repo's docs/screens or data/uploads, ~/Desktop, ~/Downloads or ~/orca/workspaces) or a link in CONTEXT. The owner sees the picture on the ask card in the app.
+Pass the short choices in one --options flag, separated by commas: --options "Merged,Not yet". Do not repeat the flag, because Orca keeps only the last one. Orca splits on every comma, so write each choice without one. For anything visual, put a screenshot path in IMAGE (under the repo's docs/screens or data/uploads, ~/Desktop, ~/Downloads or ~/orca/workspaces) or a link in CONTEXT. ${OWNER_CAP} sees the picture on the ask card in the app.
 
-If Claude Code's permission layer refuses a command, do not retry it or route around it: a retry hits the same refusal. Escalate, say the permission layer refused it, and quote the whole command. Jarvis itself can run two on the owner's Approve tap, and his card offers them when your words give every value: \`gh pr close <number> --repo <owner/name> --comment "<why>"\` and, from the FBM repo, \`node functions/scripts/reusable/pause-client.js --client <id> --hours <hours>\`. It can also run one production ${PRODUCT_LABEL} MCP call on his tap: quote the exact tool name and the whole arguments JSON.
+If Claude Code's permission layer refuses a command, do not retry it or route around it: a retry hits the same refusal. Escalate, say the permission layer refused it, and quote the whole command. Jarvis itself can run two on ${OWNER}'s Approve tap, and his card offers them when your words give every value: \`gh pr close <number> --repo <owner/name> --comment "<why>"\` and, from the FBM repo, \`node functions/scripts/reusable/pause-client.js --client <id> --hours <hours>\`. It can also run one production ${PRODUCT_LABEL} MCP call on his tap: quote the exact tool name and the whole arguments JSON.
 
-Before each batch of tool calls, write one plain sentence saying what you are about to do. The owner reads your conversation as a chat.`;
+Before each batch of tool calls, write one plain sentence saying what you are about to do. ${OWNER_CAP} reads your conversation as a chat.`;
 
 /**
  * Orca's own brief tells every worker "Don't post to Slack, GitHub, or other channels during the run", and Orca is not
@@ -56,8 +57,8 @@ export function cardJson(card: unknown): string | null {
  */
 export const CARD_RULE = `
 
-## How the owner reads your text
-The owner reads your asks, escalations and final report as cards on his phone. Each card must read in seconds. Follow the asd-ste100 skill (\`~/.claude/skills/asd-ste100/SKILL.md\`): STE-flavored mode for sentences, Strict mode for option choices.
+## How ${OWNER} reads your text
+${OWNER_CAP} reads your asks, escalations and final report as cards on his phone. Each card must read in seconds. Follow the asd-ste100 skill (\`~/.claude/skills/asd-ste100/SKILL.md\`): STE-flavored mode for sentences, Strict mode for option choices.
 
 An ask or an escalation uses the fields above. The card shows them under headings, in this order:
 1. STORY is the title line: the story number and the topic.
@@ -93,11 +94,11 @@ export const isNativeArgs = (action: string, args: any) =>
 /** The issue rule for a worker that got no Orca brief. */
 const NATIVE_ISSUE_RULE = ISSUE_RULE.replace('The Orca brief above says not to post to GitHub. One exception: if', 'One exception to not posting on GitHub: if');
 /** A read-only question worker's task. `done` is how it reports: Orca's worker_done, or the native DONE line. */
-const questionSpec = (question: string, done: string) => `Read-only research for the owner. Do not edit, create or delete files, do not commit, do not open or change PRs or issues, do not run anything that changes state.\n\nQuestion: ${question}\n\nUse the repo's own CLAUDE.md and skills. Then ${done} with a summary of at most 4 short sentences that can be read aloud, and put any detail (file paths, links) after a blank line in the same summary.`;
+const questionSpec = (question: string, done: string) => `Read-only research for ${OWNER}. Do not edit, create or delete files, do not commit, do not open or change PRs or issues, do not run anything that changes state.\n\nQuestion: ${question}\n\nUse the repo's own CLAUDE.md and skills. Then ${done} with a summary of at most 4 short sentences that can be read aloud, and put any detail (file paths, links) after a blank line in the same summary.`;
 /** A native side chat: the same session as the Orca one, but it ends with a DONE line instead of worker_done, and asks nothing. */
-export const nativeSideChatSpec = (text: string) => `Side chat with the owner. He started it from the Jarvis app to talk with you directly, apart from his main Jarvis conversation. This is a normal working session: read, edit, run and commit what he asks for.
+export const nativeSideChatSpec = (text: string) => `Side chat with ${OWNER}. He started it from the Jarvis app to talk with you directly, apart from his main Jarvis conversation. This is a normal working session: read, edit, run and commit what he asks for.
 
-He reads and answers you in this conversation from the Jarvis app, so talk to him here, in plain replies; every message of his arrives as a message from another session. Do not ask jarvis-brain anything. When the owner says he is done, end with a line starting DONE: and a one-sentence summary; until then, never write DONE or FAILED.
+He reads and answers you in this conversation from the Jarvis app, so talk to him here, in plain replies; every message of his arrives as a message from another session. Do not ask jarvis-brain anything. When ${OWNER} says he is done, end with a line starting DONE: and a one-sentence summary; until then, never write DONE or FAILED.
 
 ${text.trim() ? `His first message:
 
@@ -118,9 +119,9 @@ const absPath = (v: unknown, name: string): string => {
 const STARTS_WORKER = new Set(['worker-start', 'question', 'side-chat', 'today-start', 'today-draft']);
 
 /** A side chat is a normal working session that the owner talks to in the app or in Orca, outside the Jarvis conversation. */
-export const sideChatSpec = (text: string) => `Side chat with the owner. He started it from the Jarvis app to talk with you directly, apart from his main Jarvis conversation. This is a normal working session: read, edit, run and commit what he asks for.
+export const sideChatSpec = (text: string) => `Side chat with ${OWNER}. He started it from the Jarvis app to talk with you directly, apart from his main Jarvis conversation. This is a normal working session: read, edit, run and commit what he asks for.
 
-He reads and answers you in this conversation, from the Jarvis app or from Orca, so talk to him here. Do not use \`orca orchestration ask\`, and do not send worker_done on your own. When the owner says he is done, send worker_done with a one-sentence summary.
+He reads and answers you in this conversation, from the Jarvis app or from Orca, so talk to him here. Do not use \`orca orchestration ask\`, and do not send worker_done on your own. When ${OWNER} says he is done, send worker_done with a one-sentence summary.
 
 ${text.trim() ? `His first message:
 
@@ -247,7 +248,7 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
       // A message from the owner's steer box to a worker in another Run. Jarvis's own workers are steered without a card.
       const dispatch = str(args.dispatch, 'dispatch');
       if (!/^[\w-]+$/.test(dispatch)) throw new Error(`dispatch ${dispatch} is not an Orca dispatch id`);
-      return ['orca', 'orchestration', 'send', '--from', id.handle, '--to', `dispatch:${dispatch}`, '--subject', 'From the owner', '--body', str(args.text, 'text'), '--json'];
+      return ['orca', 'orchestration', 'send', '--from', id.handle, '--to', `dispatch:${dispatch}`, '--subject', `From ${OWNER}`, '--body', str(args.text, 'text'), '--json'];
     }
     case 'gmail-send': {
       // A reply all to an email jarvisd stored, in its thread. The recipients and subject come from the stored email,
@@ -540,7 +541,7 @@ export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => 
     async checking(): Promise<void> { await Promise.all([...checks]); },
     /** `card` is the proposer's If you approve and It rests on lines, shown under the question. Both are optional. */
     async propose(action: string, args: any, say: string, card?: ApprovalCard): Promise<Approval> {
-      if (PRESSED.has(action)) throw new Error(`${action} runs only from the owner's button in the work list`);
+      if (PRESSED.has(action)) throw new Error(`${action} runs only from ${OWNER}'s button in the work list`);
       if (action === 'gmail-send' && args && typeof args === 'object') {
         // The card shows who it goes to (reply all), filled in from the stored email, never from the brain.
         const sent = store.gmailSendFor(String(args.item));
@@ -580,9 +581,9 @@ export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => 
       const a = store.approval(approvalId);
       if (!a) throw new Error(`no approval ${approvalId}`);
       if (a.status !== 'pending') throw new Error(`approval ${approvalId} is already ${a.status}`);
-      if (BUTTON_ONLY.has(a.action)) throw new Error(`${a.action} runs only when the owner taps Approve in the app. Tell him to tap it.`);
+      if (BUTTON_ONLY.has(a.action)) throw new Error(`${a.action} runs only when ${OWNER} taps Approve in the app. Tell him to tap it.`);
       const msg = store.ownerTurnAfter(a.after_turn);
-      if (!msg) throw new Error('The owner has not said anything since this was proposed. Ask him first.');
+      if (!msg) throw new Error(`${OWNER_CAP} has not said anything since this was proposed. Ask him first.`);
       if (!store.decide(a.id, 'approved', 'voice', msg.text)) throw new Error(`approval ${approvalId} was already decided`);
       return execute(store.approval(a.id)!);
     },

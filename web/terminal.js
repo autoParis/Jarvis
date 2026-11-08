@@ -191,7 +191,7 @@ export function openTerminal(host, o) {
         try {
           const opt = await post('/api/term/pair/options', { code });
           const cred = await navigator.credentials.create({ publicKey: {
-            rp: { id: opt.rpId, name: 'Jarvis' }, user: { id: fromB64u(opt.userId), name: 'owner', displayName: 'The owner' },
+            rp: { id: opt.rpId, name: 'Jarvis' }, user: { id: fromB64u(opt.userId), name: opt.userName ?? 'owner', displayName: opt.displayName ?? 'The owner' },
             challenge: fromB64u(opt.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }], attestation: 'none', timeout: 60_000,
             authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
             excludeCredentials: opt.exclude.map(id => ({ type: 'public-key', id: fromB64u(id) })),

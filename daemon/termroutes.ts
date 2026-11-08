@@ -1,3 +1,4 @@
+import { OWNER } from './config.ts';
 import type http from 'node:http';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
@@ -78,7 +79,7 @@ export async function termRoute(ctx: TermCtx, req: http.IncomingMessage, res: ht
   // ---- pairing the Mac's passkey: the code is read on the phone, typed on the Mac ----
   if (url === '/api/term/pair-code') {
     const why = await ctx.phoneRefusal(req);
-    if (why) return refuse(403, `The pairing code shows only on the owner's phone (${why}).`);
+    if (why) return refuse(403, `The pairing code shows only on ${OWNER}'s phone (${why}).`);
     return send(res, 200, gate.pairCode());
   }
   if (url === '/api/term/pair/options') {
@@ -100,7 +101,7 @@ export async function termRoute(ctx: TermCtx, req: http.IncomingMessage, res: ht
   if (url === '/api/term/unlock') {
     if (body.via === 'phone') {
       const why = await ctx.phoneRefusal(req);
-      if (why) return refuse(403, `Not the owner's phone (${why}). On the Mac, the terminal opens with Touch ID.`);
+      if (why) return refuse(403, `Not ${OWNER}'s phone (${why}). On the Mac, the terminal opens with Touch ID.`);
       return send(res, 200, gate.unlockPhone(target, ui));
     }
     const r = gate.unlockTouchId(body, ui);

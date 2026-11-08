@@ -26,3 +26,13 @@ export const PRODUCT_LABEL = env.JARVIS_PRODUCT_LABEL?.trim() || 'AcmeApp';
 export const SUPPORT_REPO = env.JARVIS_SUPPORT_REPO?.trim() || 'example-org/acmeapp_nextjs';
 /** What the support desk appends to a staff member's name in a ticket thread, so their messages never count as the customer's. */
 export const SUPPORT_STAFF_SUFFIX = env.JARVIS_SUPPORT_STAFF_SUFFIX?.trim() || '(support Exampleco)';
+/** How the app, jarvisd's messages to the brain and the worker briefs name the owner ("Ada"). The default is "the owner". */
+export const OWNER = env.JARVIS_OWNER_CALLED?.trim() || 'the owner';
+export const OWNER_CAP = OWNER.charAt(0).toUpperCase() + OWNER.slice(1);
+/** The dealer list the migration list seeds from once, on the first start. A local file keeps a real list out of the repo. */
+export const DEALERS_FILE = env.JARVIS_DEALERS_FILE?.trim() || '';
+/** Words of the email triage prompt: "<owner name>, <role> <company>", the team's first names, and what the clients are called. */
+export const OWNER_ROLE = env.JARVIS_OWNER_ROLE?.trim() || 'who runs';
+export const TEAM = list(env.JARVIS_TEAM);
+export const CLIENT_WORD = env.JARVIS_CLIENT_WORD?.trim() || 'client';
+export const CLIENTS_WORD = env.JARVIS_CLIENTS_WORD?.trim() || 'clients';

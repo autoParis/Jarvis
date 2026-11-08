@@ -1,6 +1,7 @@
 // What waits behind the Messages button: emails, and messages the owner must send himself (`outbox`). Slack later is one more
 // entry in SOURCES. They never join the Requests list. Send reply in the popup is the owner's Approve for gmail-send, so the
 // same gate records and runs it. An outbox card has no send action: The owner copies it, sends it himself and taps Done.
+import { OWNER_CAP, OWNER } from './config.ts';
 import { randomUUID } from 'node:crypto';
 import type { Item, Store, Approval } from './store.ts';
 import type { Gate } from './gate.ts';
@@ -129,7 +130,7 @@ export function makeMessages(d: { store: Store; gate: Gate; log: (m: string, f?:
       if (busy.has(id) || store.gmailSendFor(id)) return refused(409, 'A reply to it is already going out.');
       if (!list().some(m => m.id === id)) return refused(409, 'That message is no longer open.');
       dropProposals(id);
-      store.markItem(id, 'answered', SOURCES[item.source].sendAction ? 'left to the owner' : 'The owner tapped Done');
+      store.markItem(id, 'answered', SOURCES[item.source].sendAction ? `left to ${OWNER}` : `${OWNER_CAP} tapped Done`);
       log('message left to the owner', { item: id });
       d.onChange();
       return { status: 200, body: { messages: list() } };

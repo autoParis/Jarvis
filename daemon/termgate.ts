@@ -1,5 +1,9 @@
 import { randomBytes, randomInt, createHash, createPublicKey, verify, timingSafeEqual } from 'node:crypto';
 import type { Log } from './log.ts';
+import { OWNER, OWNER_CAP } from './config.ts';
+
+/** The passkey's user name: "owner" by default, else the owner's name in lower case. */
+const USER_NAME = OWNER === 'the owner' ? 'owner' : OWNER.toLowerCase().replace(/\s+/g, '-');
 
 // Who may open, type into and read a project terminal.
 //
@@ -94,7 +98,7 @@ export function makeTermGate({ store, log, origin = TERM_ORIGIN, now = Date.now 
     },
 
     /** Step 1 of pairing on the Mac: the code from the phone buys a registration challenge. Five wrong codes void it. */
-    registerOptions(given: unknown, ui: string): { challenge: string; rpId: string; userId: string; exclude: string[] } | { error: string } {
+    registerOptions(given: unknown, ui: string): { challenge: string; rpId: string; userId: string; userName: string; displayName: string; exclude: string[] } | { error: string } {
       if (!code || code.exp < now()) return { error: 'No pairing code is open. On your phone, open the menu and tap Pair the Mac.' };
       const a = Buffer.from(String(given ?? '').replace(/\D/g, '')), b = Buffer.from(code.value);
       if (a.length !== b.length || !timingSafeEqual(a, b)) {
@@ -102,7 +106,7 @@ export function makeTermGate({ store, log, origin = TERM_ORIGIN, now = Date.now 
         log('terminal pairing refused', { why: 'wrong code' });
         return { error: code ? 'That code is wrong.' : 'Too many wrong codes. Get a new one on the phone.' };
       }
-      return { challenge: challenge('register', ui, null), rpId, userId: b64u(sha256('owner')), exclude: keys().map(k => k.id) };
+      return { challenge: challenge('register', ui, null), rpId, userId: b64u(sha256(USER_NAME)), userName: USER_NAME, displayName: OWNER_CAP, exclude: keys().map(k => k.id) };
     },
 
     /** Step 2: the new passkey. Needs the code again (it is used up here), user verification, and the app's origin and rp id. */

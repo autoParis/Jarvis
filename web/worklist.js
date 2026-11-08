@@ -19,6 +19,9 @@ export const TERM_MARK = '<svg class="g-term" viewBox="0 0 16 16" fill="none" st
 const WORK_STATE = { waiting: 'Waiting on you', idle: 'Idle', working: 'Working', exited: 'Exited' };
 const RANK = { waiting: 0, failed: 1, working: 2, idle: 3, exited: 4 };
 export const DONE_FOLD_MS = 60 * 60_000;
+/** How the detail pane names the owner. jarvisd sends it (`owner` in GET /api/work); the page calls setOwner once at load. */
+let who = { called: 'the owner', cap: 'The owner' };
+export function setOwner(o) { if (typeof o?.called === 'string' && typeof o?.cap === 'string' && o.called) who = { called: o.called, cap: o.cap }; }
 
 /** True when the item goes under the Done fold: its row finished over an hour ago and no open request holds it in view. */
 export function folded(item, now) {
@@ -128,9 +131,9 @@ export function requestDetailHtml(d) {
   const pr = d.pr || d.url ? `<div><dt>PR</dt><dd>${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.pr ?? d.url)}</a>` : esc(d.pr)}</dd></div>` : '';
   const entry = h => `<li class="rd-h${h.failed ? ' bad' : ''}"><div class="rd-at">${esc(formatStamp(h.at))}</div><div class="rd-t">${esc(h.title)}</div>`
     + (h.text ? `<div class="rd-x">${esc(h.text)}</div>` : '')
-    + (h.answer ? `<div class="rd-a"><span>${h.answeredBy === 'jarvis' ? 'Jarvis' : 'The owner'}${h.answeredAt ? `, ${esc(formatStamp(h.answeredAt))}` : ''}</span>${esc(h.answer)}</div>` : '') + '</li>';
+    + (h.answer ? `<div class="rd-a"><span>${h.answeredBy === 'jarvis' ? 'Jarvis' : esc(who.cap)}${h.answeredAt ? `, ${esc(formatStamp(h.answeredAt))}` : ''}</span>${esc(h.answer)}</div>` : '') + '</li>';
   return `<div class="rdetail"><p class="rd-note">${esc(closedNote(d))}</p><dl class="rd-facts">${facts}${pr}</dl>`
-    + (d.words ? `<h3>What the owner asked</h3><div class="rd-x">${esc(d.words)}</div>` : '')
+    + (d.words ? `<h3>What ${esc(who.called)} asked</h3><div class="rd-x">${esc(d.words)}</div>` : '')
     + `<h3>History</h3>${d.history.length ? `<ol class="rd-list">${d.history.map(entry).join('')}</ol>` : '<p class="rd-none">Nothing recorded for this worker.</p>'}`
     + `<h3>Conversation</h3>${d.transcript ? '' : '<p class="rd-none">Its transcript was not found.</p>'}</div>`;
 }

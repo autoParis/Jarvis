@@ -1,3 +1,4 @@
+import { OWNER } from './config.ts';
 import { QUIET_HOURS, sqlTime } from './push.ts';
 import { inCheckHours } from './check.ts';
 import type { Store, Reminder } from './store.ts';
@@ -47,7 +48,7 @@ export function reminderRoute(store: Store, log: Log, method: string, url: strin
     try { due = parseDue(b.due, now); } catch (e) { return { status: 400, body: { error: (e as Error).message } }; }
     const r = store.addReminder(text, sqlTime(due));
     log('reminder added', { reminder: r.id, due_at: r.due_at });
-    return { status: 200, body: { ...shown(r), ...(inCheckHours(due) ? {} : { note: 'Due outside the check hours, so the owner first hears it at the next 8 AM Eastern.' }) } };
+    return { status: 200, body: { ...shown(r), ...(inCheckHours(due) ? {} : { note: `Due outside the check hours, so ${OWNER} first hears it at the next 8 AM Eastern.` }) } };
   }
   const done = method === 'POST' && url.match(/^\/api\/internal\/reminders\/(\d+)\/done$/);
   if (done) {

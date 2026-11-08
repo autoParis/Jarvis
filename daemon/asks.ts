@@ -1,3 +1,4 @@
+import { OWNER_CAP, OWNER } from './config.ts';
 import type { OrcaResult } from './orca.ts';
 import type { Store, Item, Approval } from './store.ts';
 import type { Log } from './log.ts';
@@ -463,7 +464,7 @@ async function answerPrompt(o: AnswerArgs, n: StopNotice, option: PromptOption):
   }
   store.markItem(id, 'answered', option.key);
   log('prompt card: The owner answered a terminal prompt', { ...ids, key: option.key, seenGone: !!after });
-  o.note(`[ask card] the owner tapped ${JSON.stringify(option.label)} on prompt message_id=${id} in the app, and the key went into the worker's terminal. Do not answer it again. Reply SILENT.`);
+  o.note(`[ask card] ${OWNER} tapped ${JSON.stringify(option.label)} on prompt message_id=${id} in the app, and the key went into the worker's terminal. Do not answer it again. Reply SILENT.`);
   return { status: 200 };
 }
 
@@ -483,7 +484,7 @@ export async function answerAsk(o: AnswerArgs): Promise<AnswerResult> {
     const option = n.prompt?.options.find(x => x.key === value);
     if (n.terminal && option) return answerPrompt(o, n, option);
   }
-  const told = `[ask card] the owner tapped ${JSON.stringify(value)} on ask message_id=${id} in the app. It already went to the worker; do not reply to it again. Reply SILENT.`;
+  const told = `[ask card] ${OWNER} tapped ${JSON.stringify(value)} on ask message_id=${id} in the app. It already went to the worker; do not reply to it again. Reply SILENT.`;
 
   // A background Claude worker's question: jarvisd carries the words in itself (native.ts), no Orca reply.
   if (item.source === 'native') {
@@ -513,9 +514,9 @@ export async function answerAsk(o: AnswerArgs): Promise<AnswerResult> {
         return { status: 400, error: `Nothing was proposed: ${card.message}` };
       }
       log('ask card: The owner asked for a named action', { ...ids, action: named.action, approval: card.id });
-      message = `Do not retry the refused step. The owner has it on an Approve card (${namedLabel(named)}), and jarvisd runs it, not you. Leave that step out, finish whatever else you can, and report with worker_done, saying that step went to his card.`;
+      message = `Do not retry the refused step. ${OWNER_CAP} has it on an Approve card (${namedLabel(named)}), and jarvisd runs it, not you. Leave that step out, finish whatever else you can, and report with worker_done, saying that step went to his card.`;
     }
-    const r = await o.orca(['orchestration', 'send', '--run', o.run, '--from', o.handle, '--to', `dispatch:${item.dispatch_id}`, '--subject', 'From the owner', '--body', message]).catch(() => undefined);
+    const r = await o.orca(['orchestration', 'send', '--run', o.run, '--from', o.handle, '--to', `dispatch:${item.dispatch_id}`, '--subject', `From ${OWNER}`, '--body', message]).catch(() => undefined);
     if (!r?.ok) {
       log('ask card: send failed', { ...ids, error: r?.error?.code ?? 'no answer' });
       return { status: 502, error: r ? `Orca refused it: ${r.error?.message ?? r.error?.code}` : 'Orca gave no answer, so the message may or may not have gone out.' };

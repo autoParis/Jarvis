@@ -3,6 +3,7 @@
 // - Nothing outward without a tap. Go only starts a local worker. The issue is filed only by Accept, which the brain cannot call.
 // - The brain's routes can write a work-up or a result. They cannot release, drop, accept or run anything.
 // - A pass decides in code first, so a pass with nothing to do makes no model call.
+import { OWNER_CAP, OWNER } from './config.ts';
 import { cpus, loadavg } from 'node:os';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -117,35 +118,35 @@ const talkItems = (items: TodayRow[]) => items.filter(i => i.kind === 'talk' && 
 export function todayBrief(items: TodayRow[]): string {
   const open = todayOrder(items).filter(i => i.status !== 'released');
   if (!open.length) return '';
-  return [`Today list (${morningLine(open) || 'nothing needs the owner'}). Only his tap closes a row:`,
+  return [`Today list (${morningLine(open) || `nothing needs ${OWNER}`}). Only his tap closes a row:`,
     ...open.slice(0, 20).map(i => `- [today] item=${i.id} ${i.status}${i.kind ? ` ${i.kind}` : ''}${i.go ? ' go' : ''}${i.dispatch ? ` dispatch=${i.dispatch}` : ''} ${JSON.stringify((i.title || i.words).slice(0, 120))}`)].join('\n');
 }
 
 /** The read-only worker that drafts a story, with prove-it in light mode. */
 export function draftSpec(i: TodayRow): string {
-  return `Read-only draft for the owner's Today list. Do not edit, create or delete files, do not commit, do not open or change PRs or issues, do not run anything that changes state.
+  return `Read-only draft for ${OWNER}'s Today list. Do not edit, create or delete files, do not commit, do not open or change PRs or issues, do not run anything that changes state.
 
-The owner's exact words:
+${OWNER_CAP}'s exact words:
 ${i.words}
 ${i.brief ? `\nJarvis's reading:\n${i.brief}\n` : ''}${i.note ? `\nOwner said the last draft was not right:\n${i.note}\n` : ''}
-Run the repo's prove-it skill in light mode on this idea, if the repo has one, then draft it as a story. Report worker_done with these parts in the body: a title; the story text, ready to file as a GitHub issue, written as if your recommended answers stand; each open question with its choices and your recommended answer; your assumptions; what you checked and what was not proven. Jarvis reads this and writes it onto the owner's list. You file nothing.`;
+Run the repo's prove-it skill in light mode on this idea, if the repo has one, then draft it as a story. Report worker_done with these parts in the body: a title; the story text, ready to file as a GitHub issue, written as if your recommended answers stand; each open question with its choices and your recommended answer; your assumptions; what you checked and what was not proven. Jarvis reads this and writes it onto ${OWNER}'s list. You file nothing.`;
 }
 
 /** The worker for a task. The limits repeat in the spec, because Go never covers an outward action. */
 export function runSpec(i: TodayRow): string {
   return `${i.spec}
 
-This comes from the owner's Today list. His exact words:
+This comes from ${OWNER}'s Today list. His exact words:
 ${i.words}
 ${i.note ? `\nYour earlier result was:\n${i.result ?? '(none)'}\n\nOwner tapped Not right and said:\n${i.note}\n` : ''}
-Hard limits: send nothing to anyone, file no issues, open or merge no PRs, push nothing to a remote, change no client data. Do local work and commit on your own branch. If the job needs an outward step, leave it out and say so in your report: The owner decides those.
+Hard limits: send nothing to anyone, file no issues, open or merge no PRs, push nothing to a remote, change no client data. Do local work and commit on your own branch. If the job needs an outward step, leave it out and say so in your report: ${OWNER_CAP} decides those.
 
 Report worker_done. The first paragraph of its body is one or two sentences on what happened. Then one line starting exactly "Not proven:" that says what you did not check. Say "Not proven: nothing" only if that is true.`;
 }
 
 /** Which skill runs an accepted story. Only AcmeApp has pick-and-ship-v3 today; FBM has plain pick-and-ship. */
 export const storySkill = (repo: string) => existsSync(join(repo, '.claude', 'skills', 'pick-and-ship-v3')) ? 'pick-and-ship-v3' : 'pick-and-ship';
-export const storyStartSpec = (n: string, skill: string) => `Run the ${skill} skill on issue #${n} (do not pick a different issue). The owner accepted this story from his Today list. Done when the PR is marked ready with its evidence, or you are blocked.${ISSUE_RULE}`;
+export const storyStartSpec = (n: string, skill: string) => `Run the ${skill} skill on issue #${n} (do not pick a different issue). ${OWNER_CAP} accepted this story from his Today list. Done when the PR is marked ready with its evidence, or you are blocked.${ISSUE_RULE}`;
 
 export const issueUrlIn = (text: string | null | undefined) => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/.exec(text ?? '')?.[0];
 const dispatchIn = (a: Approval): string | undefined => parse<{ dispatchId?: string }>(a.result, {}).dispatchId;
@@ -222,9 +223,9 @@ export function makeToday(o: {
   const passLine = (i: TodayRow) => {
     const head = `- item=${i.id} go=${!!i.go}${i.kind ? ` kind=${i.kind}` : ''} words=${JSON.stringify(i.words)}`;
     if (i.owed === 'draft') return `${head}\n  The draft worker finished. Write its work-up from this report: ${JSON.stringify((i.draft_report ?? '').slice(0, 6000))}`;
-    if (i.owed === 'not-right') return `${head}\n  the owner tapped Not right on your work-up: ${JSON.stringify(i.note)}. Earlier reading: ${JSON.stringify(i.reading ?? '')}`;
-    if (i.owed === 'answers') return `${head}\n  the owner's answers changed the work-up: ${JSON.stringify(parse<Question[]>(i.questions, []).map(q => ({ q: q.q, answer: q.answer ?? q.options[q.recommended] })))}. Redo it. If the approach changed and a worker drafted it, send it back with jarvis-today draft instead of patching.`;
-    if (i.owed === 'do') return `${head}\n  the owner tapped Do it, and this task has no spec yet. Write one from his answers: ${JSON.stringify(parse<Question[]>(i.questions, []).map(q => ({ q: q.q, answer: q.answer ?? q.options[q.recommended] })))}`;
+    if (i.owed === 'not-right') return `${head}\n  ${OWNER} tapped Not right on your work-up: ${JSON.stringify(i.note)}. Earlier reading: ${JSON.stringify(i.reading ?? '')}`;
+    if (i.owed === 'answers') return `${head}\n  ${OWNER}'s answers changed the work-up: ${JSON.stringify(parse<Question[]>(i.questions, []).map(q => ({ q: q.q, answer: q.answer ?? q.options[q.recommended] })))}. Redo it. If the approach changed and a worker drafted it, send it back with jarvis-today draft instead of patching.`;
+    if (i.owed === 'do') return `${head}\n  ${OWNER} tapped Do it, and this task has no spec yet. Write one from his answers: ${JSON.stringify(parse<Question[]>(i.questions, []).map(q => ({ q: q.q, answer: q.answer ?? q.options[q.recommended] })))}`;
     return `${head}${i.tries ? ' (told before, no work-up yet)' : ''}`;
   };
 
@@ -549,7 +550,7 @@ export async function todayRoute(t: Today, method: string, url: string, b: any, 
   if (url === '/api/today/act') return t.act(b);
   if (url === '/api/internal/today') {
     // Go is the owner's yes to start a worker, so the brain can set it only in a turn that holds a message from him.
-    if (b?.go === true && !ctx.fromOwner()) return { status: 409, body: { error: 'Go needs the owner saying so in this turn. Add it without --go.' } };
+    if (b?.go === true && !ctx.fromOwner()) return { status: 409, body: { error: `Go needs ${OWNER} saying so in this turn. Add it without --go.` } };
     return t.add(b);
   }
   const m = /^\/api\/internal\/today\/(\d+)\/(workup|draft|answer|result)$/.exec(url);

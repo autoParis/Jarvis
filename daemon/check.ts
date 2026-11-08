@@ -1,3 +1,4 @@
+import { OWNER } from './config.ts';
 import { execFile } from 'node:child_process';
 import { basename } from 'node:path';
 import type { Store, Item, Request, OwnerTurn } from './store.ts';
@@ -39,7 +40,7 @@ export function inCheckHours(t: number): boolean {
 function lostFindings(turns: OwnerTurn[], now: number, wait: number): Finding[] {
   return turns.flatMap(t => {
     const waited = now - Date.parse(`${t.created_at.replace(' ', 'T')}Z`);
-    return waited >= wait ? [{ key: `lost:${t.id}`, turn: t.id, line: `Message from the owner the brain never answered, sent ${Math.floor(waited / 60_000)} min ago: ${JSON.stringify(t.text.slice(0, 500))}` }] : [];
+    return waited >= wait ? [{ key: `lost:${t.id}`, turn: t.id, line: `Message from ${OWNER} the brain never answered, sent ${Math.floor(waited / 60_000)} min ago: ${JSON.stringify(t.text.slice(0, 500))}` }] : [];
   });
 }
 
@@ -99,7 +100,7 @@ export function makeCheck(o: {
   let running = false;
   const wake = (fresh: Finding[]) => {
     o.log('check woke the brain', { findings: fresh.map(f => f.key) });
-    o.wake(`[check] Found by jarvisd's ten-minute check. Speak only what needs the owner; otherwise reply SILENT.\n${fresh.map(f => `- ${f.line}`).join('\n')}`);
+    o.wake(`[check] Found by jarvisd's ten-minute check. Speak only what needs ${OWNER}; otherwise reply SILENT.\n${fresh.map(f => `- ${f.line}`).join('\n')}`);
   };
   /** Plain SQL, so a tick with nothing due costs no tokens. It needs neither Orca nor git, so it runs before them. */
   const remind = () => {
