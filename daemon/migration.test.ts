@@ -277,7 +277,11 @@ test('option H: four icon buttons in the bar, Leads among them, New session in t
   const bar = page.slice(page.indexOf('<div id="needbar">'), page.indexOf('<div class="tools">'));
   const ids = [...bar.matchAll(/id="([a-z]+-btn)"/g)].map(m => m[1]);
   assert.deepEqual(ids, ['req-btn', 'msg-btn', 'today-btn', 'mig-btn'], 'Requests, Messages, Today, Leads');
-  for (const b of bar.matchAll(/<button [^>]*>/g)) assert.doesNotMatch(b[0], /\bhidden\b/, 'every button stays at zero, so the four never move');
+  for (const b of bar.matchAll(/<button [^>]*>/g)) {
+    const id = b[0].match(/id="([a-z]+-btn)"/)![1];
+    if (id === 'req-btn' || id === 'msg-btn') assert.match(b[0], /\bhidden\b/, `${id} starts hidden: nothing is open before the first data`);
+    else assert.doesNotMatch(b[0], /\bhidden\b/, `${id} stays at zero`);
+  }
   for (const label of ['Requests', 'Messages', 'Today', 'Leads']) assert.match(bar, new RegExp(`<svg [^>]*aria-hidden="true">.*?</svg><span class="nl">${label}</span><em hidden></em>`));
   assert.doesNotMatch(page, /mig-ib|mig-strip|mig-next/, 'the old icon, strip and chip are gone');
   assert.match(page, /<div id="menu" hidden><button id="menu-new" type="button">New session<\/button>/);
@@ -292,6 +296,17 @@ test('option H: four icon buttons in the bar, Leads among them, New session in t
   assert.match(phone, /#newchat \{ display: none; \}[\s\S]*#menu #menu-new \{ display: flex; \}/);
   assert.match(read('./main.ts'), /'\/migration\.js': 'migration\.js'/);
   assert.match(read('./main.ts'), /'\/api\/migration\/add', '\/api\/migration\/act', '\/api\/migration\/dealer', '\/api\/migration\/toast-close'/, 'the page routes need the open-page secret');
+});
+
+test('Requests and Messages hide at zero, and a popup closes when its button goes', () => {
+  const page = read('../web/index.html'), css = read('../web/app.css');
+  const paint = page.slice(page.indexOf('function paintNeedbar()'), page.indexOf('function setPop('));
+  assert.match(paint, /\$\('req-btn'\)\.hidden = !n;/, 'Requests shows only with an open request');
+  assert.match(paint, /msg\.hidden = !b;/, 'Messages shows only with an open message');
+  assert.match(paint, /if \(POPS\[popOpen\]\?\.btn\.hidden\) setPop\(null\);/, 'an open popup closes with its button');
+  assert.doesNotMatch(paint, /today-btn'\)\.hidden|mig-btn'\)\.hidden/, 'Today and Leads stay');
+  // The button's own display would beat the hidden attribute without this rule.
+  assert.match(css, /\.need-btn\[hidden\] \{ display: none; \}/);
 });
 
 test('the brain\'s file says when to add a person, the short confirmation, and lists the CLI', () => {

@@ -76,12 +76,14 @@ body.pop-open #scrim, body.panel-open #scrim, body.sheet-open #scrim { display: 
 .rise { animation: rise .2s ease; }
 
 /* The two buttons: each exists only while something waits behind it. They stay above the dimming */
-/* Option H of the top area: an icon, the label and a round count for each need. Grey at zero, with no count, so the four never move.
+/* Option H of the top area: an icon, the label and a round count for each need. Today and Leads are grey at zero, with no count.
+   Requests and Messages are hidden at zero.
    Teal marks only what waits on the owner (Requests, Messages); Today and Leads count in grey. */
 #needbar { grid-column: 2; display: flex; gap: 4px; }
 body.pop-open #needbar { position: relative; z-index: 31; }
 .need-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 10px; border-radius: var(--r-s); color: var(--muted); font-size: 14px; font-weight: 600; white-space: nowrap; transition: background-color .12s, color .12s, opacity .12s; }
 .need-btn svg { width: 18px; height: 18px; }
+.need-btn[hidden] { display: none; }
 .need-btn.has-count { color: var(--ink); }
 .need-btn:hover, .need-btn.is-open { background: var(--hover); color: var(--ink); }
 .need-btn em { font-style: normal; font-size: 13px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; display: grid; place-items: center; font-variant-numeric: tabular-nums; background: var(--raised); color: var(--ink); }

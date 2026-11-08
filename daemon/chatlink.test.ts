@@ -82,6 +82,7 @@ test('the chat message shows Approve and Reject while pending, and nothing once 
   assert.match(html, new RegExp(`data-approval="${a.id}"`));
   assert.match(html, /class="chat-yes">Approve</);
   assert.match(html, /class="chat-no">Reject</);
+  assert.ok(html.indexOf('chat-no') < html.indexOf('chat-yes'), 'Reject on the left, Approve on the right');
   assert.doesNotMatch(html, /chat-say/, 'one proposal needs no label');
   assert.equal(chatDecisionHtml(pending, turn + 1), '', 'another message gets no buttons');
   // Tapped on this page: gone at once, before the server answers.
