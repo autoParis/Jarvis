@@ -345,11 +345,24 @@ brain.on('worked', (w: { steps: unknown[]; ms: number }) => {
   const id = store.addTurn({ role: 'jarvis-work', text: JSON.stringify(w) });
   broadcast({ type: 'fold', id, ms: w.ms, at: new Date().toISOString() });
 });
-// A turn a worker's SendMessage started: the message becomes an ask card, and the brain's words are spoken as its answer.
+// A turn a worker's SendMessage started. An ask with options becomes an ask card, and the brain's words are spoken as
+// its answer. A notice is a status line in the chat with nothing to answer. An ask with no options goes back to the worker.
 brain.on('worker', (raw: string, usage: any, peer: PeerMessage | undefined) => {
   store.addTurn({ role: 'jarvis-usage', text: usage.is_error ? 'error' : '', ...usage });
   const r = routeWorkerTurn({ native, store, log }, peer, raw);
   if (r.item) { const card = cardOf(r.item); broadcast({ type: 'event', text: `[native question] ${r.worker!.name}: ${peer!.text}`, at: new Date().toISOString(), asks: card ? [card] : [] }); publishWork(); }
+  if (r.notice) {
+    const line = `[worker event] ${r.worker!.name}: ${r.notice}`;
+    store.addTurn({ role: 'event', text: line });
+    broadcast({ type: 'event', text: line, at: new Date().toISOString() });
+    publishWork();
+  }
+  if (r.refusal) {
+    const w = r.worker!;
+    native.reply(w.id, r.refusal, 'jarvis')
+      .then(x => log('native ask without options: sent back', { worker: w.id, ok: x.ok, ...(x.ok ? {} : { error: x.error }) }))
+      .catch(e => log('native ask without options: send back failed', { worker: w.id, error: String(e) }));
+  }
   if (r.speak) say('jarvis', urgent(raw).text);
 });
 brain.on('working', (on: boolean) => broadcast({ type: 'working', on }));

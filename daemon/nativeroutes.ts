@@ -3,6 +3,8 @@ import { ROW_PREFIX } from './native.ts';
 import type { Store, Item } from './store.ts';
 import type { Log } from './log.ts';
 import type { PeerMessage } from './brain.ts';
+import { askCard, fields } from './asks.ts';
+import { OWNER } from './config.ts';
 
 // The http side of native workers (Jarvis 2.0, stage B), kept out of main.ts so it can be tested: the three hooks a
 // background session posts, the brain's reply command, and the routing of a cross-session message the brain answered.
@@ -57,19 +59,61 @@ export function answerOpenAsks(store: Store, worker: string, text: string, by: '
   return open.map(i => i.external_id);
 }
 
+/** What a worker's SendMessage is: an ask with options, a status notice, or an ask with no options (sent back). */
+export type WorkerMessageKind = 'ask' | 'notice' | 'no-options';
+
+/** Sent back to a worker whose ask has no options. Nothing reached the owner. */
+export const NO_OPTIONS_REFUSAL = `Jarvis did not show this message to ${OWNER}. It reads as a question, but it has no options.
+If you need a decision, send it again with an OPTIONS line: recommended first, at most 3, each "<choice> because <reason under 10 words>".
+If it is only a status update, start it with \`NOTICE:\` and ask nothing. It then shows as a status line, with nothing to answer.`;
+
+const LINK = /\bhttps?:\/\/\S+/g;
+
+/**
+ * Sorts a worker's message. A message with options is an ask. A message that asks nothing (a `NOTICE:`, `DONE:` or
+ * `FAILED:` first line, or no QUESTION field and no question mark outside a link) is a notice. Anything else is a
+ * question with no options. The owner could not answer it with a tap, so it goes back to the worker.
+ */
+export function workerMessageKind(text: string): WorkerMessageKind {
+  const body = text.trim();
+  if (/^(notice|done|failed)\s*:/i.test(body)) return 'notice';
+  const probe = { id: 0, source: 'native', external_id: 'probe', kind: 'question', dispatch_id: null, subject: '', body, options: null,
+    status: 'new', answer: null, created_at: '', pushes: 0, pushed_at: null, meta: null } as Item;
+  if (askCard(probe)?.options.length) return 'ask';
+  const asks = Boolean(fields(body).QUESTION) || body.replace(LINK, '').includes('?');
+  return asks ? 'no-options' : 'notice';
+}
+
+/** A notice's text on one line without its `NOTICE:` label, for the worker's pane and the chat. */
+export const noticeLine = (text: string) => text.trim().replace(/^notice\s*:\s*/i, '').replace(/\s+/g, ' ').slice(0, 300);
+
 /**
  * The brain answered a turn that a cross-session message started. Only a session jarvisd started counts
- * (criterion 6): anything else is logged and dropped, so its text never reaches the owner. For a worker, the message
- * becomes a question item (an ask card in the app, `[native question]` in the brief) and the brain's words are spoken.
+ * (criterion 6): anything else is logged and dropped, so its text never reaches the owner. For a worker:
+ * - An ask with options becomes a question item (an ask card in the app, `[native question]` in the brief), and the
+ *   brain's words are spoken.
+ * - A notice becomes a done `event` item (a status line in the worker's pane). It gets no card and nothing is spoken.
+ * - A question with no options makes no item. main.ts sends `refusal` back to the worker.
  */
 export function routeWorkerTurn(o: { native: Pick<Native, 'get' | 'list'>; store: Store; log: Log; now?: () => number },
-  peer: PeerMessage | undefined, text: string): { worker?: NativeWorker; item?: Item; speak: boolean } {
+  peer: PeerMessage | undefined, text: string): { worker?: NativeWorker; item?: Item; notice?: string; refusal?: string; speak: boolean } {
   const w = peer?.from ? findWorker(o.native, peer.from) : undefined;
   if (!peer || !w) {
     o.log('brain ignored a message from a session jarvisd did not start', { from: peer?.from ?? null, chars: peer?.text.length ?? 0 });
     return { speak: false };
   }
   const at = (o.now ?? Date.now)();
+  const kind = workerMessageKind(peer.text);
+  if (kind === 'notice') {
+    const notice = noticeLine(peer.text);
+    o.store.insertItem({ source: 'native', external_id: `notice:${w.id}:${at}`, kind: 'event', dispatch_id: `${ROW_PREFIX}${w.id}`, body: notice, status: 'done' });
+    o.log('native notice from a worker', { worker: w.id, chars: peer.text.length });
+    return { worker: w, notice, speak: false };
+  }
+  if (kind === 'no-options') {
+    o.log('native ask without options sent back to the worker', { worker: w.id, chars: peer.text.length });
+    return { worker: w, refusal: NO_OPTIONS_REFUSAL, speak: false };
+  }
   const item = o.store.insertItem({
     source: 'native', external_id: askId(w.id, at), kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`,
     subject: `Question from ${w.name}`, body: peer.text, status: 'spoken',

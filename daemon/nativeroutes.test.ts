@@ -4,8 +4,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from './store.ts';
-import { makeNative, type Claude } from './native.ts';
-import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId } from './nativeroutes.ts';
+import { makeNative, NATIVE_FOOTER, type Claude } from './native.ts';
+import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId, workerMessageKind, NO_OPTIONS_REFUSAL } from './nativeroutes.ts';
 import { buildCommand, isNativeArgs, nativeName, WORKER_PERMISSION, BUTTON_ONLY } from './gate.ts';
 import { chatLines } from './transcript.ts';
 
@@ -78,10 +78,11 @@ test('a worker\'s message to the brain becomes a question item; a stranger\'s is
   assert.ok(s.logs.some(l => l.startsWith('brain ignored a message from a session jarvisd did not start')));
   const none = routeWorkerTurn({ native: s.native, store: s.store, log: s.log }, undefined, 'x');
   assert.equal(none.speak, false);
-  const r = routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 1000 }, { from: 'probe-1', text: 'QUESTION: merge?' }, 'Probe one asks whether to merge.');
+  const ask = 'QUESTION: merge?\nOPTIONS: merge because tests pass; wait because review is open';
+  const r = routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 1000 }, { from: 'probe-1', text: ask }, 'Probe one asks whether to merge.');
   assert.equal(r.item?.external_id, askId(w.id, 1000));
   assert.equal(r.item?.dispatch_id, `n:${w.id}`);
-  assert.equal(r.item?.body, 'QUESTION: merge?');
+  assert.equal(r.item?.body, ask);
   assert.equal(r.speak, true);
   assert.equal(s.store.openItems().length, 1);
   // The brain's reply through jarvis-native: relayed, and the open question is answered in Jarvis's name.
@@ -96,9 +97,44 @@ test('a worker\'s message to the brain becomes a question item; a stranger\'s is
   const bad = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1' });
   assert.equal(bad?.status, 400);
   // The silent case: the brain said SILENT, so nothing is spoken but the card still exists.
-  const quiet = routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 2000 }, { from: 'probe-1', text: 'status: fine' }, 'SILENT');
+  const quiet = routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 2000 }, { from: 'probe-1', text: 'QUESTION: ship it?\nOPTIONS: ship; hold' }, 'SILENT');
   assert.equal(quiet.speak, false);
   assert.deepEqual(answerOpenAsks(s.store, w.id, 'ok', 'owner'), [askId(w.id, 2000)]);
+});
+
+test('a worker notice is a status line with nothing to answer, and an ask with no options goes back to the worker', async () => {
+  const s = setup();
+  const w = await s.native.start({ name: 'probe-1', cwd: '/tmp', brief: 'x' });
+  const route = (text: string, at: number) => routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => at }, { from: 'probe-1', text }, 'The switch starts now.');
+  // The message from the incident: a plain status, sent through the question channel.
+  const n = route('The switch starts now. jarvisd restarts in 1 minute. You do not need to do anything.', 1000);
+  assert.equal(n.item, undefined);
+  assert.equal(n.speak, false);
+  assert.equal(n.notice, 'The switch starts now. jarvisd restarts in 1 minute. You do not need to do anything.');
+  assert.equal(s.store.openItems().length, 0, 'no ask card');
+  assert.deepEqual(s.store.eventsFor(`n:${w.id}`).map(i => i.body), [n.notice]);
+  assert.equal(route('NOTICE: tests pass, pushing now', 1100).notice, 'tests pass, pushing now');
+  assert.ok(route('Status: see https://example.test/pr?x=1 for the diff', 1200).notice, 'a ? inside a link asks nothing');
+  // A question with no options: no item, nothing spoken, and the refusal tells the worker what to do.
+  const q = route('STORY: 1 merge\nWHERE: tests pass.\nQUESTION: Should I merge?', 1300);
+  assert.equal(q.item, undefined);
+  assert.equal(q.notice, undefined);
+  assert.equal(q.speak, false);
+  assert.equal(q.refusal, NO_OPTIONS_REFUSAL);
+  assert.match(NO_OPTIONS_REFUSAL, /OPTIONS/);
+  assert.match(NO_OPTIONS_REFUSAL, /NOTICE:/);
+  assert.equal(route('Should I merge now?', 1400).refusal, NO_OPTIONS_REFUSAL);
+  assert.equal(s.store.openItems().length, 0);
+  // Options in the body make it an ask, in the headed shape, recommended first.
+  assert.equal(workerMessageKind('QUESTION: merge?\nOPTIONS:\n- merge because tests pass\n- wait because review is open'), 'ask');
+  assert.equal(workerMessageKind('Which one? Options: (a) merge (b) wait'), 'ask');
+  assert.equal(workerMessageKind('DONE: merged'), 'notice');
+});
+
+test('the native worker footer says an ask needs options and a notice is not a question', () => {
+  assert.match(NATIVE_FOOTER, /An ask must have OPTIONS/);
+  assert.match(NATIVE_FOOTER, /A notice is not a question/);
+  assert.match(NATIVE_FOOTER, /NOTICE: <one sentence>/);
 });
 
 test('the gate routes native worker-start, stop and abandon to native.ts and never proposes a permission card', () => {
