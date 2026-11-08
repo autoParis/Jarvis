@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import type { Store, TodayRow, Approval } from './store.ts';
 import { ISSUE_RULE, type Gate } from './gate.ts';
 import { requestReport } from './requests.ts';
+import { ROW_PREFIX } from './native.ts';
 import { QUIET_HOURS, sqlTime } from './push.ts';
 import type { Log } from './log.ts';
 
@@ -101,7 +102,10 @@ export function decidePass(s: { items: TodayRow[]; load: number; cores: number; 
 export function parseReport(subject: string, body: string): { result: string; notProven: string } {
   const m = /^[\s*_#-]*not proven[\s*_]*:[\s*_]*(.*(?:\n(?!\s*\n).*)*)/im.exec(body);
   const rest = m ? body.replace(m[0], '') : body;
-  const first = rest.split(/\n\s*\n/).map(p => p.trim()).find(Boolean) ?? '';
+  const para = rest.split(/\n\s*\n/).map(p => p.trim()).find(Boolean) ?? '';
+  // A native worker's report opens with its `DONE: <one sentence>` line, and that sentence is the result.
+  const done = /^(?:DONE|FAILED):\s*(.+)/.exec(para);
+  const first = done ? done[1].trim() : para;
   return { result: (first || subject || 'The worker reported no result.').slice(0, 600), notProven: m?.[1].trim() || 'The worker did not say what it left unproven.' };
 }
 
@@ -129,7 +133,7 @@ export function draftSpec(i: TodayRow): string {
 ${OWNER_CAP}'s exact words:
 ${i.words}
 ${i.brief ? `\nJarvis's reading:\n${i.brief}\n` : ''}${i.note ? `\nOwner said the last draft was not right:\n${i.note}\n` : ''}
-Run the repo's prove-it skill in light mode on this idea, if the repo has one, then draft it as a story. Report worker_done with these parts in the body: a title; the story text, ready to file as a GitHub issue, written as if your recommended answers stand; each open question with its choices and your recommended answer; your assumptions; what you checked and what was not proven. Jarvis reads this and writes it onto ${OWNER}'s list. You file nothing.`;
+Run the repo's prove-it skill in light mode on this idea, if the repo has one, then draft it as a story. Your final report has these parts after its DONE line: a title; the story text, ready to file as a GitHub issue, written as if your recommended answers stand; each open question with its choices and your recommended answer; your assumptions; what you checked and what was not proven. Jarvis reads this and writes it onto ${OWNER}'s list. You file nothing.`;
 }
 
 /** The worker for a task. The limits repeat in the spec, because Go never covers an outward action. */
@@ -141,7 +145,7 @@ ${i.words}
 ${i.note ? `\nYour earlier result was:\n${i.result ?? '(none)'}\n\nOwner tapped Not right and said:\n${i.note}\n` : ''}
 Hard limits: send nothing to anyone, file no issues, open or merge no PRs, push nothing to a remote, change no client data. Do local work and commit on your own branch. If the job needs an outward step, leave it out and say so in your report: ${OWNER_CAP} decides those.
 
-Report worker_done. The first paragraph of its body is one or two sentences on what happened. Then one line starting exactly "Not proven:" that says what you did not check. Say "Not proven: nothing" only if that is true.`;
+In your final report, the DONE or FAILED line says in one sentence what happened. Then put one line starting exactly "Not proven:" that says what you did not check. Say "Not proven: nothing" only if that is true.`;
 }
 
 /** Which skill runs an accepted story. Only AcmeApp has pick-and-ship-v3 today; FBM has plain pick-and-ship. */
@@ -149,7 +153,11 @@ export const storySkill = (repo: string) => existsSync(join(repo, '.claude', 'sk
 export const storyStartSpec = (n: string, skill: string) => `Run the ${skill} skill on issue #${n} (do not pick a different issue). ${OWNER_CAP} accepted this story from his Today list. Done when the PR is marked ready with its evidence, or you are blocked.${ISSUE_RULE}`;
 
 export const issueUrlIn = (text: string | null | undefined) => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/.exec(text ?? '')?.[0];
-const dispatchIn = (a: Approval): string | undefined => parse<{ dispatchId?: string }>(a.result, {}).dispatchId;
+/** The started worker: Orca's dispatch id, or a native worker's `n:<id>` (gate.ts runNative), which its request also uses. */
+const dispatchIn = (a: Approval): string | undefined => {
+  const r = parse<{ dispatchId?: string; worker?: string }>(a.result, {});
+  return r.dispatchId ?? (typeof r.worker === 'string' && r.worker.startsWith(ROW_PREFIX) ? r.worker : undefined);
+};
 
 function questionsFrom(v: unknown): Question[] | string {
   if (v === undefined || v === null) return [];
@@ -211,7 +219,7 @@ export function makeToday(o: {
         store.setToday(id, { dispatch, reason: null, line: draft ? 'Drafting the story' : 'Running', note: draft ? i.note : null });
         log('today item started', { item: id, dispatch, approval: a.id, draft });
       } else {
-        failItem(id, a.status === 'unknown' ? `Orca lost the answer, so a worker may be running. Check the work list before trying again. ${a.result ?? ''}`.trim() : `The worker did not start: ${a.result ?? 'no reason given'}`);
+        failItem(id, a.status === 'unknown' ? `The start lost its answer, so a worker may be running. Check the work list before trying again. ${a.result ?? ''}`.trim() : `The worker did not start: ${a.result ?? 'no reason given'}`);
         again = true;
       }
     } catch (e) {
@@ -267,6 +275,9 @@ export function makeToday(o: {
       const w = byDispatch.get(i.dispatch), r = store.requestOf(i.dispatch);
       // A later Not right reruns the worker in the same folder. A draft runs in the main checkout, which is not its own.
       if (w?.path && i.phase !== 'draft' && i.worktree !== `path:${w.path}`) { store.setToday(i.id, { worktree: `path:${w.path}` }); }
+      // A native worker's folder is on its own row: its worktree once Claude Code lists it, never the repo's main checkout.
+      const own = i.dispatch.startsWith(ROW_PREFIX) && i.phase !== 'draft' ? store.nativeWorker(i.dispatch.slice(ROW_PREFIX.length))?.cwd : undefined;
+      if (own && own.replace(/\/+$/, '') !== (i.repo ?? '').replace(/\/+$/, '') && i.worktree !== `path:${own}`) store.setToday(i.id, { worktree: `path:${own}` });
       const report = r ? requestReport(store, r.id) : undefined;
       const settled = !!w?.outcome && w.outcome !== 'in_progress';
       // A request the owner hid stops updating, so its worker is read directly. A hidden row must not hold a slot forever.
@@ -330,7 +341,7 @@ export function makeToday(o: {
       const dispatch = dispatchIn(a);
       if (a.status !== 'done' || !dispatch) {
         const lost = a.status !== 'failed';
-        const reason = `Issue #${n} is filed. ${lost ? 'Orca lost the answer, so a worker may be running. Check the work list.' : `The worker did not start, and Accept will try only that again: ${a.result ?? 'no reason given'}`}`;
+        const reason = `Issue #${n} is filed. ${lost ? 'The start lost its answer, so a worker may be running. Check the work list.' : `The worker did not start, and Accept will try only that again: ${a.result ?? 'no reason given'}`}`;
         store.setToday(i.id, { reason, ...(lost ? { issue_state: 'unknown' } : {}) });
         changed();
         return refuse(502, reason);

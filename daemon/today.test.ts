@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { openStore, type TodayRow } from './store.ts';
 import { makeToday, todayRoute, decidePass, buttons, todayOrder, todayView, parseReport, morningLine, todayBrief, draftSpec, runSpec, storyStartSpec, CAP, MAX_TRIES, BACKSTOP_MS, STUCK_MS } from './today.ts';
-import { PRESSED, buildCommand } from './gate.ts';
+import { PRESSED, buildCommand, makeGate } from './gate.ts';
 import { sqlTime } from './push.ts';
 import { todayButton, todayListHtml, detailHtml, answersChanged, shownAnswer } from '../web/today.js';
 
@@ -689,15 +689,69 @@ test('the gate builds the three commands, with the footer on workers and no merg
   const id = { run: 'run_x', handle: 'term_x' };
   const issue = buildCommand('today-issue', { item: 1, repo: 'o/r', title: 'T', body: 'B' }, id);
   assert.deepEqual(issue, ['gh', 'issue', 'create', '--repo', 'o/r', '--title', 'T', '--body', 'B']);
-  const start = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T' }, id);
+  // Orca only when the args say so, since 2026-11-08.
+  const start = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', orca: true }, id);
   assert.ok(start.includes('new-top-level'));
   assert.match(start[start.indexOf('--spec') + 1], /Asking the coordinator/);
-  const again = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:/wt/a', keepOpen: true }, id);
+  const again = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:/wt/a', keepOpen: true, orca: true }, id);
   assert.deepEqual(again.slice(again.indexOf('--worktree'), again.indexOf('--worktree') + 2), ['--worktree', 'path:/wt/a']);
   assert.ok(again.includes('--keep-open'));
-  const draft = buildCommand('today-draft', { repo: REPO, spec: 'S', taskTitle: 'Draft: T' }, id);
+  const draft = buildCommand('today-draft', { repo: REPO, spec: 'S', taskTitle: 'Draft: T', orca: true }, id);
   assert.ok(draft.includes(`path:${REPO}`));
   assert.throws(() => buildCommand('today-draft', { repo: 'relative', spec: 'S', taskTitle: 'T' }, id));
+});
+
+test('Today starts and drafts are native workers by default, and a rerun runs in its first folder', () => {
+  const id = { run: 'run_x', handle: 'term_x' };
+  const start = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T' }, id);
+  assert.deepEqual(start.slice(0, 3), ['native', 'start', REPO]);
+  assert.match(start[3], /## You are a Jarvis worker/);
+  assert.doesNotMatch(start[3], /orca orchestration ask/);
+  const again = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:/wt/a', keepOpen: true }, id);
+  assert.deepEqual(again.slice(0, 3), ['native', 'start', '/wt/a']);
+  assert.throws(() => buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:relative' }, id), /absolute/);
+  const draft = buildCommand('today-draft', { repo: REPO, spec: 'S', taskTitle: 'Draft: T' }, id);
+  assert.deepEqual(draft.slice(0, 3), ['native', 'start', REPO]);
+  // A story's issue rule loses the Orca wording: a native worker has no Orca brief.
+  const story = buildCommand('today-start', { repo: REPO, spec: storyStartSpec('12', 'pick-and-ship'), taskTitle: '#12 T' }, id);
+  assert.match(story[3], /One exception to not posting on GitHub/);
+  assert.doesNotMatch(story[3], /Orca brief above/);
+});
+
+test('with the Orca link off, an Orca start or message is refused before anything runs; native ones still build', () => {
+  const off = { run: '', handle: '' };
+  for (const [action, args] of [
+    ['today-start', { repo: REPO, spec: 'S', taskTitle: 'T', orca: true }],
+    ['today-draft', { repo: REPO, spec: 'S', taskTitle: 'T', orca: true }],
+    ['worker-start', { repo: REPO, spec: 'S', taskTitle: 'T', orca: true }],
+    ['question', { repo: REPO, question: 'Why?', orca: true }],
+    ['side-chat', { repo: REPO, text: 'hi', orca: true }],
+    ['worker-send', { dispatch: 'ctx_1', text: 'hi' }],
+  ] as const) assert.throws(() => buildCommand(action, args, off), /Orca link is off/, action);
+  assert.equal(buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T' }, off)[0], 'native');
+  // A terminal the owner opened in Orca still takes terminal-send.
+  assert.equal(buildCommand('terminal-send', { terminal: 'term_9', text: 'go' }, off)[0], 'orca');
+});
+
+test('terminal-send to a native session types through native.ts, never through Orca', async () => {
+  const id = { run: 'run_x', handle: 'term_x' };
+  assert.deepEqual(buildCommand('terminal-send', { terminal: 'n:abc', text: 'go on' }, id), ['native', 'type', 'n:abc', 'go on']);
+  assert.throws(() => buildCommand('terminal-send', { terminal: 'n:a b', text: 'x' }, id), /not a native worker row/);
+  const store = openStore(':memory:');
+  const typed: [string, string, string][] = [];
+  const native = { start: async () => { throw new Error('no'); }, stop: async () => {}, abandon: async () => {},
+    reply: async (w: string, text: string, by: 'owner' | 'jarvis') => { typed.push([w, text, by]); return { ok: true as const }; } };
+  const gate = makeGate(store, id, () => {}, () => {}, undefined, undefined, {}, native as any);
+  const a = await gate.propose('terminal-send', { terminal: 'n:abc', text: 'go on' }, 'Tell it to go on?');
+  const done = await gate.button(a.id, true);
+  assert.equal(done.status, 'done');
+  assert.deepEqual(typed, [['abc', 'go on', 'owner']]);
+});
+
+test('a native report: its DONE sentence is the result, and Not proven is read the same way', () => {
+  const p = parseReport('w-1', 'DONE: Fixed the date parser.\n- branch fix-1\n\nNot proven: the phone view.');
+  assert.equal(p.result, 'Fixed the date parser.');
+  assert.equal(p.notProven, 'the phone view.');
 });
 
 test('the real CLI relays to the real routes, and has no way to press a button', async () => {
