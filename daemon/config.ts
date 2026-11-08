@@ -38,3 +38,9 @@ export const CLIENT_WORD = env.JARVIS_CLIENT_WORD?.trim() || 'client';
 export const CLIENTS_WORD = env.JARVIS_CLIENTS_WORD?.trim() || 'clients';
 /** Refs whose merged branches count as delivered, besides master, such as an archived history kept only on this Mac. */
 export const DONE_REFS = list(env.JARVIS_DONE_REFS).filter(r => /^[\w./-]+$/.test(r) && !r.startsWith('-'));
+/**
+ * The Orca link: the identity terminal, the Orca Run, the Orca watcher, and the Orca guide and worker snapshot in the brain's
+ * prompt. Off by default since 2026-11-08 (idea 5, step one): workers and Today run native, so Jarvis needs no Orca open.
+ * `JARVIS_ORCA=on` turns it back on, for Orca workers still running or the owner asking for one by name.
+ */
+export const ORCA_LINK = /^(1|on|true|yes)$/i.test(env.JARVIS_ORCA?.trim() ?? '');

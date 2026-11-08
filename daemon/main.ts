@@ -42,11 +42,12 @@ import { readChatFile, withEvents, fileCursor } from './transcript.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { withTyped } from '../web/dictate.js';
-import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE } from './config.ts';
+import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE, ORCA_LINK } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OWNER_NOTE = join(ROOT, 'vault', 'owner.md');
+const ORCA_NOTE = join(ROOT, 'vault', 'orca.md');
 const PORT = Number(process.env.JARVIS_PORT ?? 7717);
 // Any Orca-managed worktree works; it only hosts the idle identity terminal.
 const HOME_WORKTREE = process.env.JARVIS_HOME_WORKTREE ?? `path:${ROOT}`;
@@ -121,9 +122,10 @@ function say(role: string, text: string, quote?: Quote): number {
 }
 
 // ---- Orca identity, gate, brain ----
-const { handle, run } = await ensureIdentity(store, HOME_WORKTREE);
-logIds.run = run;
-log('orca identity', { handle });
+// With the Orca link off (JARVIS_ORCA, config.ts) there is no identity terminal and no Run: the gate refuses an Orca start.
+const { handle, run } = ORCA_LINK ? await ensureIdentity(store, HOME_WORKTREE) : { handle: '', run: '' };
+if (run) logIds.run = run;
+log(ORCA_LINK ? 'orca identity' : 'orca link off: no identity terminal, no Orca watcher', { handle });
 
 // ---- Requests sidebar: one row per worker started for the owner, its status kept by the work poller (requests.ts) ----
 const requests = makeRequests({ store, log, orca, repoOf: githubRepo, onChange: list => broadcast({ type: 'requests', requests: list }) });
@@ -222,6 +224,7 @@ const work = makeWorkPoller({
   onChange: () => publishWork(),
   gone: JSON.parse(store.getState('workGone') ?? '[]'), onGone: ids => store.setState('workGone', JSON.stringify(ids)),
   onPolled: (w, workers, complete) => {
+    orcaPolledAt = Date.now();
     settleStopNotices(w, workers, complete).catch(e => log(`stop notices: ${e}`));
     // With the native rows, so a native request finds its conversation and its live state (Orca's poll lists only its own).
     requests.sync({ ...w, rows: [...w.rows, ...native.rows()] }, workers, complete);
@@ -246,9 +249,20 @@ const hiddenIds = (): string[] => JSON.parse(store.getState('workHidden') ?? '[]
 /** Orca's answer when the worker or its terminal no longer exists. Close and Open then just drop the row. */
 const STALE = /\b(dispatch_inactive|terminal_handle_stale)\b/;
 work.start();
+// When the Orca poll last answered. Its onPolled syncs the requests and Today; with Orca closed, the native poll does it.
+let orcaPolledAt = 0;
+/** After a native poll while Orca is silent: the native requests and the Today rows behind them move on without Orca. */
+async function nativeSync() {
+  if (Date.now() - orcaPolledAt < 90_000) return;
+  const w = work.current();
+  // `complete` false and Orca's requests left out: a silent Orca proves nothing about its own workers.
+  await requests.sync({ ...w, rows: [...w.rows, ...native.rows()] }, [], false, r => r.dispatch_id.startsWith(ROW_PREFIX));
+  today.sync([], false);
+}
+const nativePoll = () => native.poll().then(nativeSync).catch(e => log(`native poll failed: ${e}`));
 // Native workers: `claude agents` every 30 s (native.ts poll), after the Orca poller so the first merged list has both.
-setInterval(() => { native.poll().catch(e => log(`native poll failed: ${e}`)); }, 30_000);
-native.poll().catch(e => log(`native poll failed: ${e}`));
+setInterval(nativePoll, 30_000);
+nativePoll();
 // Transcript files of Orca chat sessions, found once through `orca search`.
 const chatFiles = new Map<string, string>();
 // Which answer each worker's wake-up lines stand for, kept while the daemon runs. A restart works it out again on the next open.
@@ -298,7 +312,8 @@ function brief(): string {
   const turns = store.recentTurns(16).filter(t => t.role === 'owner' || t.role === 'jarvis');
   return [
     `[session start ${new Date().toISOString()}] State brief, built by jarvisd. Do not answer it; reply SILENT unless something below needs ${OWNER} now.`,
-    `Run: ${run}. Use jarvis-orca for Orca and jarvis-act for anything that needs ${OWNER}'s yes.`,
+    ORCA_LINK ? `Orca link on. Run: ${run}. Use jarvis-orca for Orca and jarvis-act for anything that needs ${OWNER}'s yes.`
+      : `Orca link off: no Orca Run, no [orca event] lines, and an Orca start is refused. Use jarvis-act for anything that needs ${OWNER}'s yes.`,
     items.length ? `Open asks waiting for ${OWNER}:\n${items.map(fmtItem).join('\n')}` : 'No open asks.',
     nativeLines(native.list()),
     emails.length ? `Emails waiting for ${OWNER} (last 3 days):\n${emails.map(fmtEmail).join('\n')}` : '',
@@ -307,7 +322,8 @@ function brief(): string {
     migrationBrief(migration.state().people),
     repliesBrief(store.openSupportReplies()),
     pending.length ? `Proposals waiting for ${OWNER}'s yes:\n${pending.map(fmtApproval).join('\n')}` : '',
-    workers ? `Workers across ${OWNER}'s Runs (polled every 30 s):\n${workers.slice(0, 4000)}` : `No worker snapshot yet. Run jarvis-orca worker-list if ${OWNER} asks about workers.`,
+    // The Orca snapshot (up to 4,000 characters) only with the Orca link on; the native workers are listed above either way.
+    !ORCA_LINK ? '' : workers ? `Workers across ${OWNER}'s Runs (polled every 30 s):\n${workers.slice(0, 4000)}` : `No worker snapshot yet. Run jarvis-orca worker-list if ${OWNER} asks about workers.`,
     turns.length ? `Recent conversation:\n${turns.map(t => `${t.role}: ${t.text.slice(0, 400)}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
 }
@@ -334,12 +350,15 @@ const brain = new Brain({
     ...cleanEnv,
     PATH: `${join(ROOT, 'bin')}:${process.env.PATH}`,
     JARVIS_RUN: run, JARVIS_HANDLE: handle, JARVIS_URL: `http://127.0.0.1:${PORT}`,
-    // Plain `orca` commands (and the orca-cli / orchestration skills) act as Jarvis's identity terminal.
-    ORCA_TERMINAL_HANDLE: handle,
+    // Plain `orca` commands (and the orca-cli / orchestration skills) act as Jarvis's identity terminal, when there is one.
+    ...(handle ? { ORCA_TERMINAL_HANDLE: handle } : {}),
   },
   // The full Orca guide (about 16k tokens) is the `orchestration` skill, loaded only when needed.
   // vault/owner.md is optional and never committed: private facts CLAUDE.md leaves generic (the owner's name, the product's real names).
-  systemPrompt: () => 'You are Jarvis. Your working directory is the vault; read CLAUDE.md there first.' + (existsSync(OWNER_NOTE) ? `\n\n${readFileSync(OWNER_NOTE, 'utf8').trim()}` : ''),
+  // vault/orca.md is the Orca part of the guide: in the prompt only with the Orca link on (JARVIS_ORCA).
+  systemPrompt: () => 'You are Jarvis. Your working directory is the vault; read CLAUDE.md there first.'
+    + (ORCA_LINK && existsSync(ORCA_NOTE) ? `\n\n${readFileSync(ORCA_NOTE, 'utf8').trim()}` : '')
+    + (existsSync(OWNER_NOTE) ? `\n\n${readFileSync(OWNER_NOTE, 'utf8').trim()}` : ''),
   brief,
   model: readBrainModel(store.getState),
   // A jarvisd restart resumes the same conversation when the reset rule allows it (brain.ts startFirst).
@@ -406,8 +425,8 @@ function fromOwner(text: string, replyTo?: number) {
   brain.send(`${quote ? `${quoteLine(quote)}\n` : ''}[${OWNER_CAP}, in ${detectLang(text.replace(IMAGE_MARKER, ' ')) === 'fr' ? 'French: answer in French' : 'English: answer in English'}] ${text}`, turn);
 }
 
-// ---- Watcher ----
-watch({
+// ---- Watcher: Orca's asks and reports for the Run, only with the Orca link on ----
+if (ORCA_LINK) watch({
   store, homeWorktree: HOME_WORKTREE, killFile: KILL_FILE, log,
   onItems: items => {
     // A side chat ends every turn without worker_done, on purpose. Orca's stop notice about that is not news, so it never waits on the owner.

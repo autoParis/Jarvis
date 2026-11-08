@@ -158,7 +158,9 @@ test('the gate routes native worker-start, stop and abandon to native.ts and nev
   assert.ok(isNativeArgs('worker-start', {}), 'native by default since 2026-11-06');
   assert.ok(!isNativeArgs('worker-start', { orca: true }));
   assert.ok(isNativeArgs('question', {}) && isNativeArgs('side-chat', {}));
-  assert.ok(!isNativeArgs('today-start', {}), 'Today stays on Orca until converted');
+  assert.ok(isNativeArgs('today-start', {}) && isNativeArgs('today-draft', {}), 'Today is native since 2026-11-08');
+  assert.ok(!isNativeArgs('today-start', { orca: true }));
+  assert.ok(isNativeArgs('terminal-send', { terminal: 'n:abc' }) && !isNativeArgs('terminal-send', { terminal: 'term_1' }));
   const q = buildCommand('question', { repo: '/r', question: 'Why?' }, id);
   assert.equal(q[0], 'native'); assert.match(q[3], /Read-only research/); assert.match(q[3], /first line is exactly `DONE: answered`/); assert.doesNotMatch(q[3], /worker_done/);
   const sc = buildCommand('side-chat', { repo: '/r', text: 'hi there' }, id);

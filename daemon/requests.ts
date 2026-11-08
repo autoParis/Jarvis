@@ -238,10 +238,11 @@ export function makeRequests(opts: {
     if (key !== last) { last = key; opts.onChange(next); }
   }
 
-  async function sync(work: Work, workers: WorkerInfo[], complete: boolean) {
+  async function sync(work: Work, workers: WorkerInfo[], complete: boolean, only?: (r: Request) => boolean) {
     rows = work.rows;
     const byDispatch = new Map(workers.map(w => [w.dispatch, w]));
     for (const r of store.requests()) {
+      if (only && !only(r)) continue;
       const w = byDispatch.get(r.dispatch_id);
       const f: Parameters<Store['updateRequest']>[1] = {};
       const path = w?.path;
@@ -342,9 +343,9 @@ export function makeRequests(opts: {
 
   const api = {
     list,
-    /** After every work poll. Overlapping polls share one sync. */
-    sync(work: Work, workers: WorkerInfo[], complete = true): Promise<void> {
-      syncing ??= sync(work, workers, complete).catch(e => log(`requests: sync failed: ${e}`)).finally(() => { syncing = undefined; });
+    /** After every work poll. Overlapping polls share one sync. `only` limits it to some requests (the native ones while Orca is silent). */
+    sync(work: Work, workers: WorkerInfo[], complete = true, only?: (r: Request) => boolean): Promise<void> {
+      syncing ??= sync(work, workers, complete, only).catch(e => log(`requests: sync failed: ${e}`)).finally(() => { syncing = undefined; });
       return syncing;
     },
     /** Resolves when the sync running now, if any, has finished. */

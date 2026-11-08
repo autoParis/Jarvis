@@ -83,13 +83,14 @@ export const WORKER_PERMISSION = 'worker-permission';
 export const BUTTON_ONLY = new Set(['terminal-send', 'worker-send', 'gmail-send', ...NAMED_ACTIONS, PROD_MCP_CALL, WORKER_PERMISSION]);
 /**
  * Since 2026-11-06 (The owner's call) a worker is a Claude background session by default: `worker-start`, `question` and
- * `side-chat` run through native.ts unless the proposal says `orca: true`. Today's rows still read Orca dispatch ids, so
- * `today-start` and `today-draft` stay on Orca until Today is converted. A stop or abandon on an `n:<id>` row is native.
+ * `side-chat` run through native.ts unless the proposal says `orca: true`. Today's starts and drafts followed on 2026-11-08
+ * (idea 5, step one): a Today row keeps the `n:<id>` of its worker where it kept an Orca dispatch id. A stop or abandon
+ * on an `n:<id>` row is native, and so is a `terminal-send` to one.
  */
-export const NATIVE_BY_DEFAULT = new Set(['worker-start', 'question', 'side-chat']);
+export const NATIVE_BY_DEFAULT = new Set(['worker-start', 'question', 'side-chat', 'today-start', 'today-draft']);
 export const isNativeArgs = (action: string, args: any) =>
   !!args && typeof args === 'object' && (NATIVE_BY_DEFAULT.has(action) ? args.orca !== true && args.native !== false
-    : action === 'today-start' || action === 'today-draft' ? args.native === true
+    : action === 'terminal-send' ? typeof args.terminal === 'string' && args.terminal.startsWith(ROW_PREFIX)
     : typeof args.dispatch === 'string' && args.dispatch.startsWith(ROW_PREFIX));
 /** The issue rule for a worker that got no Orca brief. */
 const NATIVE_ISSUE_RULE = ISSUE_RULE.replace('The Orca brief above says not to post to GitHub. One exception: if', 'One exception to not posting on GitHub: if');
@@ -103,6 +104,14 @@ He reads and answers you in this conversation from the Jarvis app, so talk to hi
 ${text.trim() ? `His first message:
 
 ${text}` : 'He has not written yet. Reply with one short line saying you are ready and where you are working (the folder, and the branch if it is a worktree), then wait for his first message.'}`;
+/**
+ * The Orca Run and identity terminal, which an Orca command needs. With the Orca link off (JARVIS_ORCA, config.ts) jarvisd
+ * makes neither, so an Orca start or message is refused before anything runs, with the reason.
+ */
+const orcaIds = (id: Identity): Identity => {
+  if (!id.run || !id.handle) throw new Error('The Orca link is off (JARVIS_ORCA), so Jarvis has no Orca Run. Start a native worker instead: leave out "orca": true.');
+  return id;
+};
 /** The `--name` of a native worker: the title's slug and the approval id, so it is unique and readable in `claude agents`. */
 export const nativeName = (title: unknown, approval: number) => `${String(title ?? 'worker').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'worker'}-${approval}`;
 
@@ -182,6 +191,8 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('args must be a JSON object');
   switch (action) {
     case 'today-draft': // a read-only worker in the repo's main checkout, started by today.ts. Its spec says read-only.
+      if (isNativeArgs(action, args)) return ['native', 'start', absPath(args.repo, 'repo (absolute path)'), str(args.spec, 'spec') + NATIVE_FOOTER + CARD_RULE];
+      orcaIds(id);
       return ['orca', 'orchestration', 'worker-start', '--run', id.run, '--from', id.handle,
         '--worktree', `path:${absPath(args.repo, 'repo (absolute path)')}`, '--agent', 'claude', '--model', 'claude-opus-5-5',
         '--task-title', str(args.taskTitle, 'taskTitle'), '--spec', str(args.spec, 'spec') + ASK_FOOTER + CARD_RULE, '--json'];
@@ -192,9 +203,14 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
       if (isNativeArgs(action, args)) {
         // A Claude background session in the repo (or in a worktree Claude makes), recorded only: execute hands it to native.start.
         if (args.permissionMode !== undefined && args.permissionMode !== 'auto' && args.permissionMode !== 'default') throw new Error('permissionMode must be auto or default');
-        if (!['new-top-level', 'new-child', 'main'].includes(wt)) throw new Error('a native worker takes worktree main, new-top-level or new-child');
-        return ['native', 'start', repo, str(args.spec, 'spec') + (action === 'worker-start' ? NATIVE_ISSUE_RULE : '') + NATIVE_FOOTER + CARD_RULE];
+        // A Today rerun after Not right names the folder of its first run (`path:<dir>`): the worker runs there, in no new worktree.
+        const rerun = action === 'today-start' && typeof wt === 'string' && wt.startsWith('path:') ? absPath(wt.slice(5), 'worktree path') : undefined;
+        if (!rerun && !['new-top-level', 'new-child', 'main'].includes(wt)) throw new Error('a native worker takes worktree main, new-top-level or new-child');
+        // A story's spec from today.ts carries the Orca wording of the issue rule; a native worker has no Orca brief.
+        const spec = str(args.spec, 'spec').replace(ISSUE_RULE, NATIVE_ISSUE_RULE);
+        return ['native', 'start', rerun ?? repo, spec + (action === 'worker-start' ? NATIVE_ISSUE_RULE : '') + NATIVE_FOOTER + CARD_RULE];
       }
+      orcaIds(id);
       const fresh = wt === 'new-top-level' || wt === 'new-child';
       // Orca takes --repo, --base-branch and --name only when it creates the worktree.
       const place = fresh ? ['--worktree', wt, '--repo', `path:${repo}`] : ['--worktree', wt === 'main' ? `path:${repo}` : wt];
@@ -211,6 +227,7 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
       const repo = absPath(args.repo, 'repo (absolute path)');
       const question = str(args.question, 'question');
       if (isNativeArgs(action, args)) return ['native', 'start', repo, questionSpec(question, 'answer in one final message whose first line is exactly `DONE: answered` and whose next lines are the answer, starting') + NATIVE_FOOTER + CARD_RULE];
+      orcaIds(id);
       return ['orca', 'orchestration', 'worker-start', '--run', id.run, '--from', id.handle,
         '--worktree', `path:${repo}`, '--agent', 'claude', '--model', 'claude-opus-5-5',
         '--task-title', `Question: ${question.slice(0, 60)}`,
@@ -221,6 +238,7 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
       // A native side chat may start with no first message (the new-session picker); Orca's still needs one.
       if (isNativeArgs(action, args)) return ['native', 'start', absPath(args.repo, 'repo (absolute path)'), nativeSideChatSpec(typeof args.text === 'string' ? args.text : '') + NATIVE_FOOTER + CARD_RULE];
       const text = str(args.text, 'text');
+      orcaIds(id);
       return ['orca', 'orchestration', 'worker-start', '--run', id.run, '--from', id.handle,
         '--worktree', `path:${absPath(args.repo, 'repo (absolute path)')}`, '--agent', 'claude', '--model', 'claude-opus-5-5',
         '--task-title', `${SIDE_CHAT_PREFIX}${text.replace(/\s+/g, ' ').slice(0, 60)}`, '--spec', sideChatSpec(text), '--json'];
@@ -241,6 +259,13 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
     }
     case 'session-type': // the owner's own message from the box in the app, so it does not wait for Approve.
     case 'terminal-send': {
+      // A native session (`n:<id>`) has no Orca terminal: its words go in through its stdin pipe (native.reply). Orca's
+      // terminal send stays only for a terminal the owner opened himself in Orca.
+      if (action === 'terminal-send' && isNativeArgs(action, args)) {
+        const worker = str(args.terminal, 'terminal');
+        if (!/^n:[\w-]+$/.test(worker)) throw new Error(`terminal ${worker} is not a native worker row`);
+        return ['native', 'type', worker, str(args.text, 'text')];
+      }
       const terminal = terminalHandle(args.terminal, id);
       return ['orca', 'terminal', 'send', '--terminal', terminal, '--text', str(args.text, 'text'), '--enter', ...(action === 'session-type' ? ['--wait-submit', '5'] : []), '--json'];
     }
@@ -248,6 +273,7 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
       // A message from the owner's steer box to a worker in another Run. Jarvis's own workers are steered without a card.
       const dispatch = str(args.dispatch, 'dispatch');
       if (!/^[\w-]+$/.test(dispatch)) throw new Error(`dispatch ${dispatch} is not an Orca dispatch id`);
+      orcaIds(id);
       return ['orca', 'orchestration', 'send', '--from', id.handle, '--to', `dispatch:${dispatch}`, '--subject', `From ${OWNER}`, '--body', str(args.text, 'text'), '--json'];
     }
     case 'gmail-send': {
@@ -384,7 +410,7 @@ export function showsText(tail: string[], text: string): boolean {
 /** The start of a failed worker-start's result when Claude Code never got the task. main.ts tells the brain on it. */
 export const NO_TASK = 'The task never reached the agent';
 
-export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => void, log: Log = () => {}, prod: ProdMcp = makeProdMcp(), gmail: Gws = realGws, check: StartCheck = {}, native?: Pick<Native, 'start' | 'stop' | 'abandon'>) {
+export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => void, log: Log = () => {}, prod: ProdMcp = makeProdMcp(), gmail: Gws = realGws, check: StartCheck = {}, native?: Pick<Native, 'start' | 'stop' | 'abandon'> & Partial<Pick<Native, 'reply'>>) {
   const item = (ext: string) => store.item(ext);
   /** Before a gmail-send is built: the email's To and Cc (read from Gmail for an older email) and the owner's addresses. */
   const emailReady = async (action: string, args: any) => {
@@ -451,13 +477,21 @@ export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => 
         // A question or a side chat runs in the repo's main checkout, like its Orca twin; a worker-start gets its own worktree unless told `main`.
         const title = args.taskTitle ?? (a.action === 'question' ? `question ${String(args.question).slice(0, 40)}` : a.action === 'side-chat' ? `${SIDE_CHAT_PREFIX}${String(args.text || `new in ${basename(argv[2])}`).slice(0, 40)}` : undefined);
         // A side chat stays in the main checkout unless the owner turned Worktree on in the picker.
-        const own = a.action === 'worker-start' || a.action === 'today-start' || (a.action === 'side-chat' && args.worktree === true);
+        // A Today rerun runs in its first run's folder (argv[2]), which is already its own.
+        const own = a.action === 'worker-start' || (a.action === 'today-start' && !String(args.worktree ?? '').startsWith('path:')) || (a.action === 'side-chat' && args.worktree === true);
         const w = await starts(() => native.start({
           name: nativeName(title, a.id), cwd: argv[2], brief: argv[3], model: args.model, permissionMode: args.permissionMode,
           approvalId: a.id, worktree: own && (args.worktree ?? 'new-top-level') !== 'main', interactive: args.background !== true, // interactive by default since 2026-11-07; `background: true` is the opt-out, `interactive` is accepted and ignored
         }));
         log('gate started a native worker', { ...ids, worker: w.id, session: w.session_id, name: w.name });
         return { status: 'done', result: JSON.stringify({ worker: `${ROW_PREFIX}${w.id}`, sessionId: w.session_id, name: w.name, state: w.state }) };
+      }
+      if (argv[1] === 'type') {
+        // The owner's Approve on a terminal-send: the exact words, typed into the session's terminal through its pipe.
+        if (!native.reply) return { status: 'failed', result: 'Typing into native sessions is not wired in this daemon.' };
+        const r = await native.reply(argv[2].slice(ROW_PREFIX.length), argv[3], 'owner');
+        log(r.ok ? 'gate typed into a native session' : 'gate could not type into a native session', { ...ids, worker: argv[2], ...(r.ok ? {} : { error: r.error }) });
+        return r.ok ? { status: 'done', result: JSON.stringify({ worker: argv[2], sent: true }) } : { status: 'failed', result: `Not sent: ${r.error}` };
       }
       await (argv[1] === 'stop' ? native.stop(argv[2]) : native.abandon(argv[2]));
       log(`gate ${argv[1] === 'stop' ? 'stopped' : 'abandoned'} a native worker`, { ...ids, worker: argv[2] });

@@ -42,7 +42,7 @@ Orca or a brain: `npm run preview`.
 - The first start creates an idle Orca terminal titled JARVIS (its identity) and a Run. Leave that terminal open.
 - `touch data/KILL` stops the watcher and the brain. Chat keeps working.
 - Times are spoken and shown in Eastern time (`America/Toronto`), set in the code and in `vault/CLAUDE.md`.
-- Other settings: `JARVIS_PORT`, `JARVIS_HOME_WORKTREE` (any Orca-managed worktree, as an Orca selector), `JARVIS_TTS_FR` / `JARVIS_TTS_EN` (`say:<voice>` or `<fluidaudio backend>:<voice>`, for example `supertonic3:M1`).
+- Other settings: `JARVIS_PORT`, `JARVIS_ORCA` (off by default; `on` brings back the Orca link: the identity terminal, the Orca watcher, and the Orca guide `vault/orca.md` and worker snapshot in the brain prompt), `JARVIS_HOME_WORKTREE` (any Orca-managed worktree, as an Orca selector, used only with `JARVIS_ORCA=on`), `JARVIS_TTS_FR` / `JARVIS_TTS_EN` (`say:<voice>` or `<fluidaudio backend>:<voice>`, for example `supertonic3:M1`).
 - Voice samples to pick from: `/bakeoff`.
 - Hands-free listening: the app's "Hands-free" button. Wake word and thresholds come from `JARVIS_WAKE_WORD`, `JARVIS_VAD_*` and `JARVIS_LISTEN_*`.
 - Writes to one Google Sheet go through `bin/sheet-edit`: see [docs/sheet-edit.md](docs/sheet-edit.md).
