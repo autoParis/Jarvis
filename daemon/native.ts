@@ -86,6 +86,9 @@ QUESTION: <one sentence>
 CONTEXT: <optional, at most 3 sentences>
 OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
 Then end your turn. The answer arrives as a message from jarvis-brain or jarvis-brain-relay (${OWNER}'s words, carried by jarvisd) and starts a new turn.
+An ask must have OPTIONS. Jarvis sends an ask with no options back to you, and ${OWNER} does not see it.
+
+A notice is not a question. A notice tells ${OWNER} a status and asks nothing, for example "the switch starts now, jarvisd restarts in 1 minute". Send a notice only if ${OWNER} must know it now. Start it with \`NOTICE: <one sentence>\` and do not use the ask fields. Jarvis shows it as a status line, with nothing to answer, and no answer comes back. Do not wait for one.
 
 When the work is finished, your last message of the final turn must start with a line \`DONE: <one sentence>\` (or \`FAILED: <one sentence>\`), followed by the report: what changed, the branch and commit, the PR link if any, what was not proven. That exact text reaches ${OWNER} word for word.
 
