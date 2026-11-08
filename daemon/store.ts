@@ -17,6 +17,8 @@ export type Approval = {
   decided_by: string | null; owner_text: string | null; result: string | null; created_at: string; decided_at?: string | null;
   /** JSON { approves, restsOn }: the card's If you approve and It rests on lines, from the proposer. Null on older rows. */
   card?: string | null;
+  /** The Jarvis chat message that asked for this proposal (chatlink.ts). It carries its own Approve and Reject while pending. */
+  chat_turn?: number | null;
 };
 
 /** One thing the owner asked Jarvis for: a worker it started for him. Shown in the Requests sidebar (requests.ts). */
@@ -171,6 +173,7 @@ export function openStore(path: string) {
   if (!itemCols.includes('answered_by')) db.exec('ALTER TABLE items ADD COLUMN answered_by TEXT;');
   const approvalCols = (db.prepare('PRAGMA table_info(approvals)').all() as { name: string }[]).map(c => c.name);
   if (!approvalCols.includes('card')) db.exec('ALTER TABLE approvals ADD COLUMN card TEXT;'); // added with the headed approval card
+  if (!approvalCols.includes('chat_turn')) db.exec('ALTER TABLE approvals ADD COLUMN chat_turn INTEGER;'); // the chat message with its own Approve (chatlink.ts)
 
   // Set when the brain's turn ends without an error, or when the check reports the message lost. Messages from before this column are not in question.
   const turnCols = (db.prepare('PRAGMA table_info(turns)').all() as { name: string }[]).map(c => c.name);
@@ -285,6 +288,11 @@ export function openStore(path: string) {
     addApproval(a: { action: string; args: string; say: string; card?: string | null }): Approval {
       const r = db.prepare('INSERT INTO approvals (action, args, say, after_turn, card) VALUES (?, ?, ?, ?, ?)').run(a.action, a.args, a.say, this.lastOwnerTurn(), a.card ?? null);
       return this.approval(Number(r.lastInsertRowid))!;
+    },
+    /** Sets the chat message on the given proposals that are still pending and have none yet. Returns the rows it changed. */
+    linkChatTurn(ids: number[], turnId: number): Approval[] {
+      return ids.filter(id => db.prepare(`UPDATE approvals SET chat_turn = ? WHERE id = ? AND status = 'pending' AND chat_turn IS NULL`).run(turnId, id).changes === 1)
+        .map(id => this.approval(id)!);
     },
     approval(id: number): Approval | undefined {
       return db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as Approval | undefined;

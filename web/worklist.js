@@ -209,6 +209,20 @@ export function approvalPairHtml(id, action) {
   return `<div class="pair" data-approval="${Number(id)}"><button type="button" class="no">${esc(no)}</button><button type="button" class="yes">${esc(yes)}</button></div>`;
 }
 
+/**
+ * Approve and Reject under the Jarvis message that asked for a proposal (approvals.chat_turn, set by daemon/chatlink.ts).
+ * Only pending proposals not yet tapped get buttons, so a decision anywhere (here, the Requests card, a spoken yes) removes them.
+ * With more than one proposal on the message, each pair names its proposal.
+ */
+export function chatDecisionHtml(approvals, turn, tapped = new Set()) {
+  const open = [...approvals].filter(a => a.chat_turn === turn && a.status === 'pending' && !tapped.has(a.id));
+  return open.map(a => {
+    const [yes, no] = approvalButtons(a.action);
+    return `<div class="chat-pair" data-approval="${Number(a.id)}">${open.length > 1 ? `<span class="chat-say">${esc(a.say)}</span>` : ''}`
+      + `<button type="button" class="chat-yes">${esc(yes)}</button><button type="button" class="chat-no">${esc(no)}</button></div>`;
+  }).join('');
+}
+
 /** What the approval will do, in its own stored words. A named action stores the exact command, which says it all. */
 export function approvalDetail(args) {
   if (args.runs) return args.runs;
