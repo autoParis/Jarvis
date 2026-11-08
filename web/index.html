@@ -185,7 +185,7 @@ import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js'
 import { makeModelPicker } from '/modelpicker.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
-import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml } from '/worklist.js';
+import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml, startedNoticeHtml, undoDeadline } from '/worklist.js';
 // The owner's name and the product label for the detail pane and the picker, once at load (GET /api/work).
 fetch('/api/work').then(r => r.json()).then(w => { setOwner(w.owner); setProduct(w.product); }).catch(() => {});
 const $ = id => document.getElementById(id);
@@ -429,7 +429,9 @@ function openItems() {
 }
 function approvalHtml(a, tag, withButtons) {
   const err = approvalErrors.get(a.id);
-  return `<div class="ask-tag"><div class="ask-title">${esc(tag)}</div><span class="ago">${ago(dbTime(a.created_at), Date.now())}</span></div>`
+  // A card the owner's answer changed in place says so, so a new spec is never read as the old one.
+  const changed = a.revised_at ? `<span class="pill changed">Changed ${ago(dbTime(a.revised_at), Date.now())}</span>` : '';
+  return `<div class="ask-tag"><div class="ask-title">${esc(tag)}</div>${changed}<span class="ago">${ago(dbTime(a.created_at), Date.now())}</span></div>`
     + approvalBodyHtml(a, parseArgs(a))
     + (withButtons ? approvalPairHtml(a.id, a.action) : '')
     + (err ? `<div class="outcome"><span class="pill failed">not sent</span>${esc(err)}</div>` : '');
@@ -519,8 +521,45 @@ function decideClick(e) {
   const id = b && Number(b.closest('[data-approval]').dataset.approval);
   if (id) decide(id, b.classList.contains('yes'));
 }
+// ---- a worker Jarvis started at once on the owner's own words: a line with Stop for 60 seconds, not a card ----
+const started = new Map(), stopOf = new Map(), stoppedText = new Map();
+function startedLine(a) {
+  let el = started.get(a.id);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'line started';
+    started.set(a.id, el);
+    append(el);
+  }
+  el.innerHTML = startedNoticeHtml(a, parseArgs(a), Date.now(), stoppedText.get(a.id));
+  // Redraw once when Stop runs out, so the button goes away by itself.
+  const left = undoDeadline(a) - Date.now();
+  clearTimeout(el.timer);
+  if (left > 0 && left < Infinity) el.timer = setTimeout(() => startedLine(approvals.get(a.id) ?? a), left + 50);
+}
+async function undoStart(id) {
+  stoppedText.set(id, 'Stopping');
+  startedLine(approvals.get(id));
+  try {
+    const r = await fetch('/api/approval/undo', { method: 'POST', body: JSON.stringify({ id }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) stoppedText.set(id, `Not stopped: ${j.error || `error ${r.status}`}`);
+    else if (j.id !== id) { stopOf.set(j.id, id); stoppedText.set(id, j.status === 'done' ? 'Stopped' : j.status === 'failed' ? `Not stopped: ${j.result ?? ''}` : 'Stopping'); }
+  } catch (err) { stoppedText.set(id, 'No answer from Jarvis: ' + err.message); }
+  startedLine(approvals.get(id));
+}
+items.addEventListener('click', e => { const b = e.target.closest('[data-undo]'); if (b) { b.disabled = true; undoStart(Number(b.dataset.undo)); } });
 function setApproval(a) {
   approvals.set(a.id, a);
+  if (a.decided_by === 'owner-asked') return startedLine(a);
+  if (a.decided_by === 'undo') {
+    // The stop that Stop made: its outcome goes on the started line, not on a line of its own.
+    // A Stop pressed while the start ran gets no stop id back, so the worker id finds its line.
+    const worker = parseArgs(a).dispatch;
+    const start = stopOf.get(a.id) ?? [...started.keys()].find(k => { try { const r = JSON.parse(approvals.get(k)?.result ?? '{}'); return worker && (r.worker === worker || r.dispatchId === worker); } catch { return false; } });
+    if (start && a.status !== 'approved') { stoppedText.set(start, a.status === 'done' ? 'Stopped' : `Not stopped: ${a.result ?? a.status}`); startedLine(approvals.get(start)); }
+    return;
+  }
   if (a.status !== 'pending' && a.decided_by !== 'automatic') {
     const outcome = approvalOutcomeText(a);
     if (outcome) answerLine(`approval:${a.id}`, { tag: approvalTag(a.action, parseArgs(a)), answer: outcome, at: a.decided_at ? dbTime(a.decided_at) : new Date().toISOString(), failed: a.status === 'failed' || a.status === 'unknown' });

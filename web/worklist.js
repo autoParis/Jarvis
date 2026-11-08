@@ -214,3 +214,31 @@ export function approvalDetail(args) {
   if (args.runs) return args.runs;
   return [toolLine(args), args.repo, args.dispatch, args.terminal, args.to && 'To: ' + args.to, args.subject && 'Subject: ' + args.subject, args.title, args.text, args.spec && args.spec.slice(0, 300)].filter(Boolean).join('\n');
 }
+
+/** How long Stop on a started notice works after the start ended. The same number as UNDO_MS in daemon/gate.ts. */
+export const UNDO_MS = 60_000;
+const dbMs = t => Date.parse(`${String(t).replace(' ', 'T')}Z`);
+
+/**
+ * When Stop on a worker Jarvis started at once stops working, in ms since 1970. Infinity while the start still runs:
+ * a press then stops the worker as soon as the start ends. 0 when there is nothing to stop.
+ */
+export function undoDeadline(a) {
+  if (a?.decided_by !== 'owner-asked') return 0;
+  if (a.status === 'approved') return Infinity;
+  if (a.status !== 'done' && a.status !== 'unknown') return 0;
+  return dbMs(a.finished_at ?? a.decided_at) + UNDO_MS;
+}
+
+/**
+ * The chat line for a worker Jarvis started at once because the owner asked for it: Starting or Started, the title,
+ * and Stop while it works. `stopped` is what Stop led to ('Stopping', 'Stopped', or an error), once pressed.
+ */
+export function startedNoticeHtml(a, args, now, stopped) {
+  const title = args?.taskTitle || a.say;
+  const state = a.status === 'approved' ? 'Starting' : a.status === 'failed' ? 'Did not start' : 'Started';
+  const failed = a.status === 'failed' ? `<div class="started-why">${esc(a.result ?? 'no reason given')}</div>` : '';
+  const stop = !stopped && now < undoDeadline(a) ? `<button type="button" class="undo" data-undo="${Number(a.id)}">Stop</button>` : '';
+  return `<span class="pill${a.status === 'failed' ? ' failed' : ''}">${esc(state)}</span><span class="started-t">${esc(title)}</span>`
+    + (stopped ? `<span class="started-stop">${esc(stopped)}</span>` : stop) + failed;
+}

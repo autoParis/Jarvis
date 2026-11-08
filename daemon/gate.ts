@@ -75,6 +75,17 @@ Your final report has this shape:
 Use active voice and simple tenses. Write one idea per sentence. Do not use semicolons.`;
 
 const AUTOMATIC = new Set(['question']);
+/**
+ * Since 2026-11-08 (the owner's call) a worker-start on Jarvis's own repo starts at once when his own message in the
+ * brain's current turn asked for it: the card is a notice with Stop, not Approve. Every other repo keeps the card.
+ */
+export const OWNER_ASKED = 'owner-asked';
+/** How long Stop on a started notice works, counted from the end of the start. */
+export const UNDO_MS = 60_000;
+/** The decided_by of the worker-stop that Stop on a started notice creates. */
+export const UNDO = 'undo';
+/** Jarvis's own repo, and whether the brain's current turn answers a message of the owner (Brain.answeringOwner). */
+export type OwnRepo = { repo: string; fromOwner: () => boolean };
 /** Buttons in the work list. Pressing one is the owner's decision, so they run at once, and the brain cannot propose them. */
 export const PRESSED = new Set(['side-chat', 'side-chat-close', 'session-type', 'session-resume', 'prompt-key', 'today-issue', 'today-start', 'today-draft']);
 /** Typing into another session, messaging another Run's worker, sending an email and the named actions run only on the Approve button, never on a relayed yes. */
@@ -308,7 +319,7 @@ const startKey = (args: any) => `${args.repo.replace(/\/+$/, '')}\n${shownTitle(
 function duplicateStart(args: any, open: Approval): string {
   const same = `A worker-start titled "${args.taskTitle}" in ${args.repo}`;
   const other = 'If this is a different task, use a title that names it.';
-  if (open.status === 'pending') return `${same} is already pending as approval #${open.id}. If its spec is wrong, run jarvis-act reject ${open.id} first, then propose the fix. ${other}`;
+  if (open.status === 'pending') return `${same} is already pending as approval #${open.id}. If its spec is wrong, change it in place with jarvis-act revise ${open.id}. ${other}`;
   return `${same} is already running from approval #${open.id}${open.result ? ` (${open.result})` : ''}. If it is wrong, get it stopped with worker-stop first. ${other}`;
 }
 
@@ -371,7 +382,7 @@ export type StartCheck = { startCheckMs?: number; startChecks?: number };
 /** The start of a failed worker-start's result when Claude Code never got the task. main.ts tells the brain on it. */
 export const NO_TASK = 'The task never reached the agent';
 
-export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => void, log: Log = () => {}, prod: ProdMcp = makeProdMcp(), gmail: Gws = realGws, check: StartCheck = {}, native?: Pick<Native, 'start' | 'stop' | 'abandon'>) {
+export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => void, log: Log = () => {}, prod: ProdMcp = makeProdMcp(), gmail: Gws = realGws, check: StartCheck = {}, native?: Pick<Native, 'start' | 'stop' | 'abandon'>, own?: OwnRepo) {
   const item = (ext: string) => store.item(ext);
   /** Before a gmail-send is built: the email's To and Cc (read from Gmail for an older email) and the owner's addresses. */
   const emailReady = async (action: string, args: any) => {
@@ -391,6 +402,69 @@ export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => 
   const startCheckMs = check.startCheckMs ?? 60_000, startChecks = check.startChecks ?? 3;
   const starts = oneAtATime();
   const checks = new Set<Promise<void>>();
+  /** Starts the owner pressed Stop on before they finished. The stop runs when the start ends. */
+  const undoQueued = new Set<number>();
+  const ownRoot = own?.repo.replace(/\/+$/, '');
+  const inOwnRepo = (repo: unknown) => !!ownRoot && typeof repo === 'string' && (repo.replace(/\/+$/, '') === ownRoot || repo.startsWith(`${ownRoot}/`));
+
+  /** The args and question a card stores, exactly as execute will build them. Throws on bad input, before anything is stored. */
+  async function prepare(action: string, args: any, say: string): Promise<{ args: any; say: string }> {
+    if (action === 'gmail-send' && args && typeof args === 'object') {
+      // The card shows who it goes to (reply all), filled in from the stored email, never from the brain.
+      const sent = store.gmailSendFor(String(args.item));
+      if (sent) throw new Error(`a reply to ${args.item} is already ${sent.status} (approval #${sent.id}). Not sending twice.`);
+      const self = await emailReady(action, args);
+      const meta = JSON.parse(store.item(String(args.item))?.meta ?? '{}') as Partial<EmailMeta>;
+      const r = store.item(String(args.item)) ? replyAll(meta, self) : { to: [], cc: [] };
+      args = { item: args.item, to: r.to.join(', '), cc: r.cc.join(', '), subject: meta.subject, text: typeof args.text === 'string' ? stripSignoff(args.text) : args.text };
+    }
+    buildCommand(action, args, id, item, action === 'gmail-send' ? selfAddresses(store) : []); // validate now
+    if (NAMED_ACTIONS.has(action)) args = namedCardArgs(action, args); // what the card shows is what execute builds
+    if (action === PROD_MCP_CALL) {
+      args = await prod.cardArgs(args);
+      say = `Run ${args.tool} on production?`; // The heading comes from the call, not from the brain's words about it.
+    }
+    return { args, say: str(say, 'say') };
+  }
+
+  /** Refuses a worker-start whose title and repo an open one already has. `self` is the card being revised. */
+  function refuseDuplicateStart(action: string, args: any, self?: number) {
+    if (action !== 'worker-start' || !args.taskTitle) return;
+    const key = startKey(args);
+    const open = store.openWorkerStarts().find(a => { if (a.id === self) return false; const o = JSON.parse(a.args); return o.taskTitle && startKey(o) === key; });
+    if (open) {
+      log('gate refused a duplicate worker-start', { run: id.run, approval: open.id, action, status: open.status });
+      throw new Error(duplicateStart(args, open));
+    }
+  }
+
+  /**
+   * Why a worker-start the brain marked ownerAsked still gets a card, or '' when it starts at once. Each check is one the
+   * gate can prove itself: the repo, and that the brain is answering a message of the owner right now.
+   */
+  function whyCard(action: string, args: any): string {
+    if (action !== 'worker-start') return `${action} is not a worker-start`;
+    if (!own) return 'this daemon has no own repo set';
+    if (!inOwnRepo(args.repo)) return `${args.repo} is not the Jarvis repo`;
+    if (!own.fromOwner()) return 'the brain is not answering a message of the owner';
+    return '';
+  }
+
+  /** Stop on a started notice: a worker-stop on the worker the start made, recorded like a button press. */
+  async function stopStarted(a: Approval): Promise<Approval> {
+    let r: any = {};
+    try { r = JSON.parse(a.result ?? '{}'); } catch {}
+    const dispatch = typeof r.worker === 'string' ? r.worker : typeof r.dispatchId === 'string' ? r.dispatchId : undefined;
+    if (!dispatch) throw new Error(`approval #${a.id} names no worker to stop: ${a.result ?? 'no result'}`);
+    const args = { dispatch };
+    const same = store.sameApproval('worker-stop', JSON.stringify(args));
+    if (same) return same;
+    const title = JSON.parse(a.args).taskTitle ?? 'the worker';
+    const stop = store.addApproval({ action: 'worker-stop', args: JSON.stringify(args), say: `Stop ${title}` });
+    store.decide(stop.id, 'approved', UNDO);
+    log('gate undo: stopping a worker started at once', { run: id.run, approval: a.id, stop: stop.id, dispatch });
+    return execute(store.approval(stop.id)!);
+  }
 
   /**
    * Orca typed the task but did not see the agent's turn start. A transcript with a message means Claude Code took it;
@@ -539,42 +613,72 @@ export function makeGate(store: Store, id: Identity, onChange: (a: Approval) => 
     },
     /** Resolves when every running start check has finished. For tests. */
     async checking(): Promise<void> { await Promise.all([...checks]); },
-    /** `card` is the proposer's If you approve and It rests on lines, shown under the question. Both are optional. */
-    async propose(action: string, args: any, say: string, card?: ApprovalCard): Promise<Approval> {
+    /**
+     * `card` is the proposer's If you approve and It rests on lines, shown under the question. Both are optional.
+     * `ownerAsked` is the brain saying the owner's own message in this turn asks for the work. On the Jarvis repo the
+     * worker then starts at once, and the app shows a notice with Stop for UNDO_MS. Anywhere else the card stays.
+     */
+    async propose(action: string, args: any, say: string, card?: ApprovalCard, opts: { ownerAsked?: boolean } = {}): Promise<Approval> {
       if (PRESSED.has(action)) throw new Error(`${action} runs only from ${OWNER}'s button in the work list`);
-      if (action === 'gmail-send' && args && typeof args === 'object') {
-        // The card shows who it goes to (reply all), filled in from the stored email, never from the brain.
-        const sent = store.gmailSendFor(String(args.item));
-        if (sent) throw new Error(`a reply to ${args.item} is already ${sent.status} (approval #${sent.id}). Not sending twice.`);
-        const self = await emailReady(action, args);
-        const meta = JSON.parse(store.item(String(args.item))?.meta ?? '{}') as Partial<EmailMeta>;
-        const r = store.item(String(args.item)) ? replyAll(meta, self) : { to: [], cc: [] };
-        args = { item: args.item, to: r.to.join(', '), cc: r.cc.join(', '), subject: meta.subject, text: typeof args.text === 'string' ? stripSignoff(args.text) : args.text };
-      }
-      buildCommand(action, args, id, item, action === 'gmail-send' ? selfAddresses(store) : []); // validate now
-      if (NAMED_ACTIONS.has(action)) args = namedCardArgs(action, args); // what the card shows is what execute builds
-      if (action === PROD_MCP_CALL) {
-        args = await prod.cardArgs(args);
-        say = `Run ${args.tool} on production?`; // The heading comes from the call, not from the brain's words about it.
-      }
-      if (action === 'worker-start' && args.taskTitle) {
-        const key = startKey(args);
-        const open = store.openWorkerStarts().find(a => { const o = JSON.parse(a.args); return o.taskTitle && startKey(o) === key; });
-        if (open) {
-          log('gate refused a duplicate worker-start', { run: id.run, approval: open.id, action, status: open.status });
-          throw new Error(duplicateStart(args, open));
-        }
-      }
+      ({ args, say } = await prepare(action, args, say));
+      refuseDuplicateStart(action, args);
       const same = store.sameApproval(action, JSON.stringify(args));
       if (same) { log('gate repeat proposal, returning the existing one', { run: id.run, approval: same.id, action, status: same.status }); return same; }
-      const a = store.addApproval({ action, args: JSON.stringify(args), say: str(say, 'say'), card: cardJson(card) });
+      const why = opts.ownerAsked === true ? whyCard(action, args) : undefined;
+      const a = store.addApproval({ action, args: JSON.stringify(args), say, card: cardJson(card) });
       log('gate proposed', { run: id.run, approval: a.id, action });
+      if (why === '') {
+        const asked = store.turn(store.lastOwnerTurn());
+        store.decide(a.id, 'approved', OWNER_ASKED, asked?.text);
+        log('gate started at once: the owner asked for it', { run: id.run, approval: a.id, action, turn: asked?.id });
+        onChange(store.approval(a.id)!); // the notice shows Starting with Stop now; the start can take a minute
+        const done = await execute(store.approval(a.id)!);
+        if (undoQueued.delete(a.id) && (done.status === 'done' || done.status === 'unknown')) await stopStarted(done);
+        return store.approval(a.id)!;
+      }
+      if (why) log('gate kept the card', { run: id.run, approval: a.id, action, why });
       onChange(a);
       if (AUTOMATIC.has(action)) {
         store.decide(a.id, 'approved', 'automatic');
         return execute(store.approval(a.id)!);
       }
       return a;
+    },
+    /**
+     * The owner answered an open card with a change ("yes, but make it 400"). The brain sends the whole new args. The
+     * card keeps its id and its place and shows the new content. A yes in the same answer can then confirm it.
+     */
+    async revise(approvalId: number, args: any, say?: string, card?: ApprovalCard): Promise<Approval> {
+      const a = store.approval(approvalId);
+      if (!a) throw new Error(`no approval ${approvalId}`);
+      if (a.status !== 'pending') throw new Error(`approval ${approvalId} is already ${a.status}; propose a new one instead`);
+      if (a.action === WORKER_PERMISSION) throw new Error('a worker\'s permission prompt cannot be changed');
+      const next = await prepare(a.action, args, say || a.say);
+      refuseDuplicateStart(a.action, next.args, a.id);
+      if (!store.reviseApproval(a.id, { args: JSON.stringify(next.args), say: next.say, card: cardJson(card) })) throw new Error(`approval ${approvalId} was decided meanwhile`);
+      const before = JSON.parse(a.args);
+      const changed = Object.keys({ ...before, ...next.args }).filter(k => JSON.stringify(before[k]) !== JSON.stringify(next.args[k]));
+      log('gate revised', { run: id.run, approval: a.id, action: a.action, changed, sayChanged: next.say !== a.say });
+      const out = store.approval(a.id)!;
+      onChange(out);
+      return out;
+    },
+    /**
+     * Stop on a started notice. It works for UNDO_MS after the start ended, and at any time while the start still runs
+     * (the stop then runs when the start ends). Returns the worker-stop approval, or the start itself when queued.
+     */
+    async undo(approvalId: number): Promise<Approval> {
+      const a = store.approval(approvalId);
+      if (!a || a.decided_by !== OWNER_ASKED) throw new Error(`approval ${approvalId} is not a worker Jarvis started at once`);
+      if (a.status === 'approved') {
+        undoQueued.add(a.id);
+        log('gate undo queued: the start is still running', { run: id.run, approval: a.id });
+        return a;
+      }
+      if (a.status !== 'done' && a.status !== 'unknown') throw new Error(`the start ${a.status}, so there is no worker to stop`);
+      const at = Date.parse(`${String(a.finished_at ?? a.decided_at).replace(' ', 'T')}Z`);
+      if (!(Date.now() - at <= UNDO_MS)) throw new Error(`Stop works for ${UNDO_MS / 1000} seconds after the start. Stop it from the work list.`);
+      return stopStarted(a);
     },
     /** Spoken or typed yes, relayed by the brain. Runs only if the owner said something after the proposal. */
     async confirm(approvalId: number): Promise<Approval> {
