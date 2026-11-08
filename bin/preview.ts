@@ -335,8 +335,6 @@ const termGate = makeTermGate({ store: { getState: k => termState.get(k), setSta
 await terms.list();
 const withTerms = (rows: any[]) => [...rows, ...terminalRows(terms.current())];
 
-// The shell pane here only echoes. It starts no shell.
-let shellAt = 0, shellOut: ((text: string) => void) | undefined;
 http.createServer(async (req, res) => {
   const url = (req.url ?? '/').split('?')[0];
   const { scene, clients, today, migration } = sceneOf(req);
@@ -369,13 +367,6 @@ http.createServer(async (req, res) => {
       return res.end(clip.subarray(range.start, range.end + 1));
     }
     if (/^\/api\/fold\/\d+$/.test(url)) return send(res, 200, { steps: FOLD_STEPS });
-    if (url === '/api/shell/stream') {
-      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
-      const line = (text: string) => { shellAt += text.length; res.write(`${JSON.stringify({ out: text, at: shellAt })}\n`); };
-      shellOut = line;
-      line('~ ❯ ');
-      return;
-    }
     if (url === '/api/audit') return send(res, 200, scene.audit);
     if (url === '/api/requests') return send(res, 200, scene.requests);
     const docAt = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
@@ -424,11 +415,6 @@ http.createServer(async (req, res) => {
   if (url.startsWith('/api/today/')) {
     const r = await todayRoute(today, 'POST', url, b, { fromOwner: () => true });
     if (r) return send(res, r.status, r.body);
-  }
-  if (url === '/api/shell/open') return send(res, 200, { started: true });
-  if (url === '/api/shell/input') {
-    shellOut?.(`${b.text}\r\nTo github.com:example-user/jarvis.git\r\n + 1a2b3c4...5d6e7f8 main -> main (forced update)\r\n~ ❯ `);
-    return send(res, 204);
   }
   if (url === '/api/ask/answer') {
     const i = scene.items.find(x => x.external_id === b.id);

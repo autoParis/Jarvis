@@ -43,7 +43,7 @@
       <button type="button" class="stop" id="pane-stop" hidden><span class="g g-stopped" aria-hidden="true"></span><span id="pane-stop-label">Stop</span></button>
       <button type="button" class="ib" id="newchat" aria-label="New session" title="New session" aria-haspopup="dialog" aria-expanded="false" aria-controls="newpick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
       <div id="more"><button type="button" class="ib" id="morebtn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="menu" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg></button>
-        <div id="menu" hidden><button id="menu-new" type="button">New session</button><button id="alerts" type="button" aria-pressed="false" hidden>Alerts<span></span></button><button id="sound" type="button" aria-pressed="false">Sound<span></span></button><button id="reportsbtn" type="button">Reports</button><button id="auditbtn" type="button">Audit log</button><button id="shellbtn" type="button">Shell</button><button id="pairbtn" type="button" hidden>Pair the Mac</button></div></div>
+        <div id="menu" hidden><button id="menu-new" type="button">New session</button><button id="alerts" type="button" aria-pressed="false" hidden>Alerts<span></span></button><button id="sound" type="button" aria-pressed="false">Sound<span></span></button><button id="reportsbtn" type="button">Reports</button><button id="auditbtn" type="button">Audit log</button><button id="pairbtn" type="button" hidden>Pair the Mac</button></div></div>
     </div>
   </header>
   <!-- The meeting toast (Leads, temporary): the Eastern day of the meeting only. The x closes it for that meeting, on every screen. -->
@@ -147,14 +147,6 @@
     <button type="submit" class="np-go" id="np-go"><span id="np-go-label">Start</span><kbd id="np-keys" aria-hidden="true">⌘↵</kbd></button>
   </div>
 </form>
-<section id="shell" hidden role="dialog" aria-label="Shell">
-  <div class="w-head"><b>Shell</b><div class="tools"><button type="button" class="shell-act" id="shell-hide">Hide</button><button type="button" class="shell-act bad" id="shell-close">Close</button></div></div>
-  <p id="shell-note">Ends on Close, after 3 minutes with this page closed, or when jarvisd restarts. Commands go to the log, output does not. Line output only: vim and top do not draw here.</p>
-  <pre id="shell-out" tabindex="0" aria-live="off"></pre>
-  <p id="shell-ended" hidden></p>
-  <form id="shell-form"><textarea id="shell-text" rows="3" aria-label="Command" placeholder="Paste a command" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"></textarea>
-    <div class="shell-row"><button type="button" class="shell-act" id="shell-ctrlc">Ctrl-C</button><button type="submit" class="shell-act run" id="shell-run">Run</button></div></form>
-</section>
 <section id="audit" hidden role="dialog" aria-label="Audit log">
   <div class="w-head"><b>Audit log</b><div class="tools"><button type="button" class="ib" id="audit-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div></div>
   <div id="audit-body"></div>
@@ -175,7 +167,6 @@ import { STATE as REQ_STATE, ago, requestMark, openIdOf } from '/requestlist.js'
 import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, messageFootHtml, toolRunHtml, toolRunSummary, briefFoldHtml, paneTag, COPY_ICON, COPIED_ICON, SPEAK, REPLY_ICON, quoteHtml, quoteSnippet, quoteWho } from '/workfold.js';
 import { makeSpeech } from '/speech.js';
 import { enterSends } from '/enterkey.js';
-import { makeScreen, feed as feedScreen, screenText } from '/shell.js';
 import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
 import { todayButton, makeTodayPop } from '/today.js';
 import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
@@ -732,12 +723,11 @@ const modelPicker = makeModelPicker({
   pill: $('model-pill'), sheet: $('model-sheet'), body: $('model-body'), err: $('model-err'), closeBtn: $('model-close'),
   post: next => fetch('/api/brain/model', { method: 'POST', body: JSON.stringify(next) }),
 });
-const overlayOpen = () => modelPicker.isOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('shell').hidden || !$('newpick').hidden || !$('menu').hidden;
+const overlayOpen = () => modelPicker.isOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('newpick').hidden || !$('menu').hidden;
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (viewer.classList.contains('open')) return viewer.onclick();
     if (modelPicker.isOpen) return modelPicker.open(false);
-    if (!$('shell').hidden) { $('shell').hidden = true; return; }
     if (!$('audit').hidden) return closeAudit();
     if (!$('newpick').hidden) return showPick(false);
     if (!$('menu').hidden) { showMenu(false); return moreBtn.focus(); }
@@ -760,90 +750,6 @@ document.addEventListener('keydown', e => {
     if (opt && !opt.disabled && matchMedia('(min-width: 780px)').matches) { e.preventDefault(); opt.click(); }
   }
 });
-
-// ---- the shell pane: a real shell on the Mac, the owner's phone only. The daemon refuses every other device (access.ts). ----
-const shellEl = $('shell'), shellOut = $('shell-out'), shellText = $('shell-text'), shellEnded = $('shell-ended');
-let shellScreen = makeScreen(), shellAt = 0, shellStream = null, shellOver = false;
-function shellDraw() {
-  const bottom = shellOut.scrollHeight - shellOut.scrollTop - shellOut.clientHeight < 40;
-  shellOut.textContent = screenText(shellScreen);
-  if (bottom) shellOut.scrollTop = shellOut.scrollHeight;
-}
-function shellEnd(text) {
-  shellOver = true;
-  shellEnded.textContent = text;
-  shellEnded.hidden = false;
-  $('shell-form').hidden = true;
-  $('shell-close').textContent = 'Start a new shell';
-}
-async function shellPost(path, body) {
-  const r = await fetch(`/api/shell/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
-  if (r.ok) return r;
-  const { error } = await r.json().catch(() => ({}));
-  throw new Error(error || `The shell answered ${r.status}.`);
-}
-// Output streams on its own request, never through /api/events. A dropped connection (phone locked, app switched) comes back from where it stopped.
-async function shellFollow() {
-  if (shellStream) return;
-  const stop = shellStream = new AbortController();
-  try {
-    while (!shellOver && shellStream === stop) {
-      const r = await rawFetch(`/api/shell/stream?from=${shellAt}`, { signal: stop.signal, headers: { 'x-jarvis-session': uiSession } });
-      if (!r.ok) {
-        const { error } = await r.json().catch(() => ({}));
-        if (r.status === 403 && !/no open app page/.test(error || '')) return shellEnd(error);
-        await new Promise(done => setTimeout(done, 2000));
-        continue;
-      }
-      const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
-      let held = '';
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        const lines = (held + value).split('\n');
-        held = lines.pop();
-        for (const line of lines) {
-          const e = line ? JSON.parse(line) : {};
-          if (e.out) { feedScreen(shellScreen, e.out); shellAt = e.at; }
-          if (e.ended) shellEnd(e.ended);
-        }
-        shellDraw();
-      }
-      if (!shellOver) await new Promise(done => setTimeout(done, 1000));
-    }
-  } catch (err) {
-    if (err.name !== 'AbortError' && !shellOver) { shellStream = null; await new Promise(done => setTimeout(done, 2000)); return shellFollow(); }
-  } finally { if (shellStream === stop) shellStream = null; }
-}
-async function shellStart() {
-  shellOver = false;
-  shellEnded.hidden = true;
-  $('shell-form').hidden = false;
-  $('shell-close').textContent = 'Close';
-  try {
-    const { started } = await (await shellPost('open')).json();
-    if (started) { shellScreen = makeScreen(); shellAt = 0; shellOut.textContent = ''; }
-    shellFollow();
-    shellText.focus();
-  } catch (err) { shellEnd(err.message); $('shell-close').hidden = true; }
-}
-$('shellbtn').onclick = () => { showMenu(false); shellEl.hidden = false; $('shell-close').hidden = false; shellStart(); };
-$('shell-hide').onclick = () => { shellEl.hidden = true; };
-$('shell-close').onclick = async () => {
-  if (shellOver) return shellStart();
-  try { await shellPost('close'); } catch (err) { shellEnd(err.message); return; }
-  shellEl.hidden = true;
-};
-$('shell-ctrlc').onclick = () => shellPost('interrupt').catch(err => shellEnd(err.message));
-$('shell-form').onsubmit = async e => {
-  e.preventDefault();
-  const text = shellText.value;
-  if (!text.trim()) return;
-  try { await shellPost('input', { text }); shellText.value = ''; shellOut.scrollTop = shellOut.scrollHeight; }
-  catch (err) { shellEnded.textContent = err.message; shellEnded.hidden = false; }
-};
-// Enter is a line break on a phone, so a pasted block stays whole until Run.
-shellText.addEventListener('keydown', e => { if (enterSends(e)) { e.preventDefault(); $('shell-form').requestSubmit(); } });
 
 // ---- audit log: answered questions and decided approvals, read from the store when the panel opens ----
 const auditEl = $('audit'), auditBody = $('audit-body');
@@ -1374,7 +1280,7 @@ try { if (localStorage.getItem('workCollapsed')) document.body.classList.add('ra
 railbtn.onclick = () => wide.matches ? collapse(!document.body.classList.contains('rail-closed')) : panel(!document.body.classList.contains('panel-open'));
 // On a phone a sideways swipe does the same. touchcancel forgets it: iOS sends that when its own back gesture takes over.
 let swipeFrom = null;
-const swipeBlocked = () => popOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('shell').hidden || !$('newpick').hidden || !getSelection().isCollapsed;
+const swipeBlocked = () => popOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('newpick').hidden || !getSelection().isCollapsed;
 document.addEventListener('touchstart', e => {
   swipeFrom = e.touches.length === 1 && !wide.matches && !swipeBlocked() && !e.target.closest?.(SWIPE_IGNORE) ? { startX: e.touches[0].clientX, startY: e.touches[0].clientY } : null;
 }, { passive: true });
