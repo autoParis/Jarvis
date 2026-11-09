@@ -47,3 +47,10 @@ const EVENTS = ['input', 'compositionstart', 'compositionupdate', 'compositionen
 export function withPictures(text, lines) {
   return [String(text ?? '').trim(), ...(lines || [])].filter(Boolean).join('\n');
 }
+
+// The message a voice clip sends: the typed text, the words, then the pictures. Nothing heard sends nothing, and the
+// typed text and the pictures stay in the box.
+export function voiceMessage(typed, words, lines) {
+  const said = withTyped(typed, words);
+  return said ? withPictures(said, lines) : '';
+}

@@ -16,7 +16,7 @@ import { termRoute } from './termroutes.ts';
 import { terminalRows } from './termrows.ts';
 import { imageFile, imageRoots, IMAGE_TYPES } from './images.ts';
 import { reportsDir, listReports, readReport, REPORT_MARKER } from './reports.ts';
-import { saveUpload, uploadDir, UPLOAD_LIMIT } from './uploads.ts';
+import { saveUpload, uploadDir, UPLOAD_LIMIT, pictureLines } from './uploads.ts';
 import { loadVapid, pushAll, pushOpenAsks, makeNotifier, urgent } from './push.ts';
 import { makeLog } from './log.ts';
 import { watchGmail, gws, haiku, readPeople, withRecipients, type EmailMeta } from './gmail.ts';
@@ -41,7 +41,7 @@ import { nativeRoute, routeWorkerTurn } from './nativeroutes.ts';
 import { readChatFile, withEvents, fileCursor } from './transcript.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
-import { withTyped } from '../web/dictate.js';
+import { voiceMessage, withPictures } from '../web/dictate.js';
 import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE, ORCA_LINK } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
 
@@ -565,7 +565,7 @@ const termCtx = {
   onChange: () => { pollTerms().catch(() => {}); },
   phoneRefusal: async (req: http.IncomingMessage) => phoneRefusal(await probePhone(req, PORT)),
 };
-const STATIC: Record<string, string> = { '/': 'index.html', '/markdown.js': 'markdown.js', '/askcard.js': 'askcard.js', '/paste.js': 'paste.js', '/enterkey.js': 'enterkey.js', '/listen.js': 'listen.js', '/requestlist.js': 'requestlist.js', '/worklist.js': 'worklist.js', '/workfold.js': 'workfold.js', '/messages.js': 'messages.js', '/today.js': 'today.js', '/migration.js': 'migration.js', '/report.js': 'report.js', '/modelpicker.js': 'modelpicker.js', '/newpick.js': 'newpick.js', '/terminal.js': 'terminal.js', '/swipe.js': 'swipe.js', '/dictate.js': 'dictate.js', '/speech.js': 'speech.js', '/app.css': 'app.css', '/manifest.webmanifest': 'manifest.webmanifest', '/sw.js': 'sw.js', '/icon.svg': 'icon.svg' };
+const STATIC: Record<string, string> = { '/': 'index.html', '/markdown.js': 'markdown.js', '/askcard.js': 'askcard.js', '/paste.js': 'paste.js', '/enterkey.js': 'enterkey.js', '/listen.js': 'listen.js', '/requestlist.js': 'requestlist.js', '/worklist.js': 'worklist.js', '/workfold.js': 'workfold.js', '/messages.js': 'messages.js', '/today.js': 'today.js', '/migration.js': 'migration.js', '/report.js': 'report.js', '/modelpicker.js': 'modelpicker.js', '/newpick.js': 'newpick.js', '/terminal.js': 'terminal.js', '/swipe.js': 'swipe.js', '/dictate.js': 'dictate.js', '/compose.js': 'compose.js', '/speech.js': 'speech.js', '/app.css': 'app.css', '/manifest.webmanifest': 'manifest.webmanifest', '/sw.js': 'sw.js', '/icon.svg': 'icon.svg' };
 const IMAGE_ROOTS = imageRoots(ROOT);
 const REPORTS_DIR = reportsDir(ROOT);
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.webmanifest': 'application/manifest+json', '.js': 'text/javascript', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.m4a': 'audio/mp4' };
@@ -673,13 +673,17 @@ http.createServer(async (req, res) => {
       const audio = await readBody(req, 20e6);
       const q = new URL(req.url ?? '/', 'http://x').searchParams;
       const hands = q.get('mode') === 'listen', bargeIn = q.get('barge') === '1';
+      // The pictures attached in the chat box go with the words (web/compose.js). Only files /api/upload saved pass.
+      const pics = pictureLines(q.getAll('image'), uploadDir(ROOT));
+      if (pics.refused.length) log('voice: picture refused, not an upload', { paths: pics.refused });
       const t0 = Date.now();
       const r = await voice.stt(audio, hands ? { threshold: listen.vadThreshold, minSpeechMs: listen.vadMinSpeechMs } : undefined);
       if (r.vadError) log(`listen: vad failed, transcribing anyway: ${r.vadError}`);
       if (!hands) {
-        log(`stt ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)}: ${r.text}`);
-        // Text the owner typed before he tapped the mic goes in front of the words, as one message (web/dictate.js).
-        const message = withTyped(q.get('typed'), r.text);
+        log(`stt ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)}${pics.lines.length ? ` pictures=${pics.lines.length}` : ''}: ${r.text}`);
+        // Text the owner typed before he tapped the mic goes in front of the words, and the pictures after them, as one
+        // message (web/dictate.js).
+        const message = voiceMessage(q.get('typed'), r.text, pics.lines);
         if (message) fromOwner(message, replyIdOf(q.get('replyTo')));
         return send(res, 200, { text: r.text, confidence: r.confidence, sent: !!message });
       }
@@ -690,7 +694,7 @@ http.createServer(async (req, res) => {
       log(`listen ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)} ${v.keep ? 'kept' : 'dropped'} (${v.why})${bargeIn ? ' barge-in' : ''}: ${v.keep || listen.debug ? r.text : `${r.text.split(/\s+/).filter(Boolean).length} words`}`);
       if (!v.keep) return send(res, 200, { text: '', kept: false, why: v.why });
       lastAddressedAt = now;
-      fromOwner(r.text);
+      fromOwner(withPictures(r.text, pics.lines));
       return send(res, 200, { text: r.text, confidence: r.confidence, kept: true, why: v.why });
     }
     // the owner tapped an option on an ask card: it goes to the worker at once, as if he had said it.
