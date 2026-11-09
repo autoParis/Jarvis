@@ -446,7 +446,8 @@ const brainInfo = () => ({ ...brain.status(), models: MODELS, efforts: EFFORTS }
 
 /** the owner's message. `replyTo` is the turn he answers (the reply button or swipe); its quote goes to the brain in front of his words. */
 function fromOwner(text: string, replyTo?: number) {
-  const quote = replyTo ? quoteOf(store.turn(replyTo)) : undefined;
+  const quoted = replyTo ? store.turn(replyTo) : undefined;
+  const quote = quoteOf(quoted);
   if (replyTo && !quote) log('reply: quoted turn not found, sent without the quote', { replyTo });
   const turn = say('owner', text, quote);
   if (existsSync(KILL_FILE)) {
@@ -455,7 +456,7 @@ function fromOwner(text: string, replyTo?: number) {
     return;
   }
   // The prompt rule alone lost to earlier French turns; tag each message with its language.
-  brain.send(`${quote ? `${quoteLine(quote)}\n` : ''}[${OWNER_CAP}, in ${detectLang(text.replace(IMAGE_MARKER, ' ')) === 'fr' ? 'French: answer in French' : 'English: answer in English'}] ${text}`, turn);
+  brain.send(`${quote ? `${quoteLine({ ...quote, text: quoted!.text })}\n` : ''}[${OWNER_CAP}, in ${detectLang(text.replace(IMAGE_MARKER, ' ')) === 'fr' ? 'French: answer in French' : 'English: answer in English'}] ${text}`, turn);
 }
 
 // ---- Watcher: Orca's asks and reports for the Run, only with the Orca link on ----
