@@ -19,7 +19,9 @@ import { reportsDir, listReports, readReport, REPORT_MARKER } from './reports.ts
 import { saveUpload, uploadDir, UPLOAD_LIMIT, pictureLines } from './uploads.ts';
 import { loadVapid, pushAll, pushOpenAsks, makeNotifier, urgent } from './push.ts';
 import { makeLog } from './log.ts';
-import { watchGmail, gws, haiku, readPeople, withRecipients, type EmailMeta } from './gmail.ts';
+import { watchGmail, gws, haiku, readPeople, withRecipients, POLL_MS as GMAIL_POLL_MS, type EmailMeta } from './gmail.ts';
+import { makeTasks, execRun, tasksRoute } from './tasks.ts';
+import { homedir } from 'node:os';
 import { makeWorkPoller, briefLines, githubRepo, isStopNotice, passedStopNotices, duplicateStopNotices, type WorkRow, type Work, type WorkerInfo } from './work.ts';
 import { makeRequests, backfillRequests, requestReport } from './requests.ts';
 import { readSource, chatFile, showReplies, type Read, type ReplyMemo } from './transcript.ts';
@@ -482,8 +484,26 @@ if (ORCA_LINK) watch({
   onTrouble: m => say('jarvis', m),
 }).catch(e => { log(`watcher stopped: ${e}`); say('jarvis', `My Orca watcher stopped: ${e}`); });
 
+// ---- Scheduled tasks screen: launchd jobs, the Orca automations and jarvisd's own timers, read fresh each time (tasks.ts) ----
+const tasks = makeTasks({
+  db: store.db, run: execRun(cleanEnv), uid: process.getuid?.() ?? 501, log, getState: store.getState, setState: store.setState,
+  agentsDir: join(homedir(), 'Library', 'LaunchAgents'),
+  prefixes: (process.env.JARVIS_LAUNCHD_PREFIXES || 'io.autoroot.,com.fbm.').split(',').filter(Boolean),
+  locked: [process.env.JARVIS_LAUNCHD_LABEL || 'io.autoroot.jarvis'],
+  orca: process.env.JARVIS_TASKS_ORCA !== 'off',
+  jarvisd: [
+    { id: 'jarvisd:check', name: 'Ten-minute check', schedule: 'Every 10 minutes, 8 AM to 4 PM', everyMs: CHECK_MS, description: 'Wakes the brain on a new finding or a due reminder, and sends approved support replies.' },
+    { id: 'jarvisd:today', name: 'Today list backstop', schedule: `Every ${BACKSTOP_MS / 60_000} minutes`, everyMs: BACKSTOP_MS, description: 'Catches Today items that an event missed.' },
+    ...(process.env.JARVIS_GMAIL !== 'off' ? [{ id: 'jarvisd:gmail', name: 'Gmail watcher', schedule: `Every ${GMAIL_POLL_MS / 60_000} minutes`, everyMs: GMAIL_POLL_MS, description: 'Reads new mail from the people in vault/people.md and stores it.' }] : []),
+  ],
+});
+const sampleTasks = () => { if (!existsSync(KILL_FILE)) tasks.sample().catch(e => log(`tasks: sample failed: ${e}`)); };
+setInterval(sampleTasks, 60_000);
+sampleTasks();
+
 // ---- Gmail: mail from people in vault/people.md (rules in gmail.ts). JARVIS_GMAIL=off turns it off. ----
 if (process.env.JARVIS_GMAIL !== 'off') watchGmail({
+  onPoll: error => tasks.record('jarvisd:gmail', error ? 'fail' : 'ok', error ? `Poll failed: ${error.slice(0, 300)}` : undefined),
   store, gws, llm: haiku, log, killFile: KILL_FILE, people: readPeople(join(ROOT, 'vault', 'people.md')),
   onItem: (i, meta) => {
     const text = fmtEmail(i);
@@ -522,7 +542,10 @@ setInterval(async () => {
 const replies = makeReplies({ store, log, api: gh, worker: makeTicketWorker({ dataDir: join(ROOT, 'data') }), wake: text => brain.send(text), paused: () => existsSync(KILL_FILE) });
 replies.recover();
 const check = makeCheck({ store, jarvisRun: run, poll: () => work.poll().then(withNative), requests, delivery: () => readDelivery(ROOT), running: startCommit, brainBusy: () => brain.busy, wake: text => brain.send(text), paused: () => existsSync(KILL_FILE), replies: () => replies.tick(), log });
-setInterval(() => { check.tick().catch(e => log(`check: ${e}`)); }, CHECK_MS);
+setInterval(() => {
+  check.tick().then(r => { if (r) tasks.record('jarvisd:check', r === 'ran' ? 'ok' : 'warn', r === 'skipped' ? 'Skipped: Orca did not answer.' : undefined); },
+    e => { log(`check: ${e}`); tasks.record('jarvisd:check', 'fail', String(e).slice(0, 300)); });
+}, CHECK_MS);
 check.start();
 
 // ---- Today list: The owner's thoughts, worked up in code-decided passes. Nothing outward without his tap (rules in today.ts) ----
@@ -535,7 +558,10 @@ const today = makeToday({
   released: i => { if (i.dispatch && !existsSync(KILL_FILE)) brain.send(`[today] ${OWNER} released item ${i.id}, dispatch ${i.dispatch}. Close the loop on its worker and branch ("Today list" in CLAUDE.md). Reply SILENT unless something needs him.`); },
 });
 todayReady = true;
-setInterval(() => { today.tick().catch(e => log(`today timer: ${e}`)); }, BACKSTOP_MS);
+setInterval(() => {
+  if (existsSync(KILL_FILE)) return;
+  today.tick().then(() => tasks.record('jarvisd:today', 'ok'), e => { log(`today timer: ${e}`); tasks.record('jarvisd:today', 'fail', String(e).slice(0, 300)); });
+}, BACKSTOP_MS);
 today.pass('daemon started').catch(e => log(`today pass: ${e}`));
 
 // ---- HTTP ----
@@ -561,7 +587,7 @@ function repos(): { name: string; path: string }[] {
 }
 
 // Routes that act as the owner. They need the secret of an open app page (access.ts).
-const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/approval/undo', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled']);
+const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/approval/undo', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled', '/api/tasks/save']);
 const ui = makeUiSessions();
 
 // ---- Project terminals from the new-session picker: tmux sessions, Touch ID on the Mac, the phone checks on the phone (terminal.ts, termgate.ts) ----
@@ -578,7 +604,7 @@ const termCtx = {
   onChange: () => { pollTerms().catch(() => {}); },
   phoneRefusal: async (req: http.IncomingMessage) => phoneRefusal(await probePhone(req, PORT)),
 };
-const STATIC: Record<string, string> = { '/': 'index.html', '/markdown.js': 'markdown.js', '/askcard.js': 'askcard.js', '/paste.js': 'paste.js', '/enterkey.js': 'enterkey.js', '/listen.js': 'listen.js', '/requestlist.js': 'requestlist.js', '/worklist.js': 'worklist.js', '/workfold.js': 'workfold.js', '/messages.js': 'messages.js', '/today.js': 'today.js', '/migration.js': 'migration.js', '/report.js': 'report.js', '/modelpicker.js': 'modelpicker.js', '/newpick.js': 'newpick.js', '/terminal.js': 'terminal.js', '/swipe.js': 'swipe.js', '/dictate.js': 'dictate.js', '/compose.js': 'compose.js', '/speech.js': 'speech.js', '/app.css': 'app.css', '/manifest.webmanifest': 'manifest.webmanifest', '/sw.js': 'sw.js', '/icon.svg': 'icon.svg' };
+const STATIC: Record<string, string> = { '/': 'index.html', '/markdown.js': 'markdown.js', '/askcard.js': 'askcard.js', '/paste.js': 'paste.js', '/enterkey.js': 'enterkey.js', '/listen.js': 'listen.js', '/requestlist.js': 'requestlist.js', '/worklist.js': 'worklist.js', '/workfold.js': 'workfold.js', '/messages.js': 'messages.js', '/today.js': 'today.js', '/migration.js': 'migration.js', '/report.js': 'report.js', '/tasks.js': 'tasks.js', '/modelpicker.js': 'modelpicker.js', '/newpick.js': 'newpick.js', '/terminal.js': 'terminal.js', '/swipe.js': 'swipe.js', '/dictate.js': 'dictate.js', '/compose.js': 'compose.js', '/speech.js': 'speech.js', '/app.css': 'app.css', '/manifest.webmanifest': 'manifest.webmanifest', '/sw.js': 'sw.js', '/icon.svg': 'icon.svg' };
 const IMAGE_ROOTS = imageRoots(ROOT);
 const REPORTS_DIR = reportsDir(ROOT);
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.webmanifest': 'application/manifest+json', '.js': 'text/javascript', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.m4a': 'audio/mp4' };
@@ -771,6 +797,11 @@ http.createServer(async (req, res) => {
       if (!r.text) return send(res, 200, { words: '', today: today.list() });
       const added = today.add({ words: r.text, go: new URL(req.url ?? '/', 'http://x').searchParams.get('go') === '1' });
       return send(res, added.status, { words: r.text, ...added.body });
+    }
+    // The Scheduled tasks screen: GET reads every source fresh, POST /api/tasks/save edits one launchd job (tasks.ts).
+    if (url.startsWith('/api/tasks')) {
+      const r = await tasksRoute(tasks, req.method ?? '', url, () => json(req));
+      if (r) return send(res, r.status, r.body);
     }
     // The audit log panel: answered asks and decided approvals. Read-only.
     if (req.method === 'GET' && url === '/api/audit') return send(res, 200, auditEntries(store, cardOf, PRESSED));

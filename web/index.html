@@ -44,7 +44,7 @@
       <button type="button" class="stop" id="pane-stop" hidden><span class="g g-stopped" aria-hidden="true"></span><span id="pane-stop-label">Stop</span></button>
       <button type="button" class="ib" id="newchat" aria-label="New session" title="New session" aria-haspopup="dialog" aria-expanded="false" aria-controls="newpick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
       <div id="more"><button type="button" class="ib" id="morebtn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="menu" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg></button>
-        <div id="menu" hidden><button id="menu-new" type="button">New session</button><button id="alerts" type="button" aria-pressed="false" hidden>Alerts<span></span></button><button id="sound" type="button" aria-pressed="false">Sound<span></span></button><button id="reportsbtn" type="button">Reports</button><button id="auditbtn" type="button">Audit log</button><button id="pairbtn" type="button" hidden>Pair the Mac</button></div></div>
+        <div id="menu" hidden><button id="menu-new" type="button">New session</button><button id="alerts" type="button" aria-pressed="false" hidden>Alerts<span></span></button><button id="sound" type="button" aria-pressed="false">Sound<span></span></button><button id="reportsbtn" type="button">Reports</button><button id="tasksbtn" type="button">Scheduled tasks</button><button id="auditbtn" type="button">Audit log</button><button id="pairbtn" type="button" hidden>Pair the Mac</button></div></div>
     </div>
   </header>
   <!-- The meeting toast (Leads, temporary): the Eastern day of the meeting only. The x closes it for that meeting, on every screen. -->
@@ -149,6 +149,13 @@
     <button type="submit" class="np-go" id="np-go"><span id="np-go-label">Start</span><kbd id="np-keys" aria-hidden="true">⌘↵</kbd></button>
   </div>
 </form>
+<section id="tasks" hidden role="dialog" aria-label="Scheduled tasks">
+  <div class="tk-wrap">
+    <div class="tk-top"><h1>Scheduled tasks</h1><span id="tasks-count" class="tk-count"></span><button type="button" class="ib" id="tasks-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div id="tasks-body"></div>
+    <p class="tk-foot">One mark per hour for frequent tasks, one per run for daily and weekly tasks. Newest on the right.<span id="tasks-read"></span></p>
+  </div>
+</section>
 <section id="audit" hidden role="dialog" aria-label="Audit log">
   <div class="w-head"><b>Audit log</b><div class="tools"><button type="button" class="ib" id="audit-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div></div>
   <div id="audit-body"></div>
@@ -176,6 +183,7 @@ import { boxAfterSend, settleBox, withPictures } from '/dictate.js';
 import { sendOut, imageParams } from '/compose.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
+import { listHtml as tasksHtml, fixMessage, when as taskWhen } from '/tasks.js';
 import { makeModelPicker } from '/modelpicker.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
@@ -781,11 +789,12 @@ const modelPicker = makeModelPicker({
   pill: $('model-pill'), sheet: $('model-sheet'), body: $('model-body'), err: $('model-err'), closeBtn: $('model-close'),
   post: next => fetch('/api/brain/model', { method: 'POST', body: JSON.stringify(next) }),
 });
-const overlayOpen = () => modelPicker.isOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('newpick').hidden || !$('menu').hidden;
+const overlayOpen = () => modelPicker.isOpen || viewer.classList.contains('open') || !$('tasks').hidden || !$('audit').hidden || !$('newpick').hidden || !$('menu').hidden;
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (viewer.classList.contains('open')) return viewer.onclick();
     if (modelPicker.isOpen) return modelPicker.open(false);
+    if (!$('tasks').hidden) return closeTasks();
     if (!$('audit').hidden) return closeAudit();
     if (!$('newpick').hidden) return showPick(false);
     if (!$('menu').hidden) { showMenu(false); return moreBtn.focus(); }
@@ -807,6 +816,61 @@ document.addEventListener('keydown', e => {
     const opt = $('req-card').querySelector(`.ask-opt[data-i="${Number(e.key) - 1}"]`);
     if (opt && !opt.disabled && matchMedia('(min-width: 780px)').matches) { e.preventDefault(); opt.click(); }
   }
+});
+
+// ---- Scheduled tasks: read fresh from launchd, Orca and jarvisd on every open (daemon/tasks.ts, web/tasks.js) ----
+const tasksEl = $('tasks'), tasksBody = $('tasks-body');
+let taskList = [], taskOpen = null;
+const closeTasks = () => { tasksEl.hidden = true; moreBtn.focus(); };
+const paintTasks = () => {
+  tasksBody.innerHTML = tasksHtml(taskList, taskOpen);
+  $('tasks-count').textContent = `${taskList.length} task${taskList.length === 1 ? '' : 's'}`;
+};
+async function loadTasks() {
+  const r = await fetch('/api/tasks');
+  if (!r.ok) throw new Error(`error ${r.status}`);
+  const b = await r.json();
+  taskList = b.tasks;
+  $('tasks-read').textContent = ` Read at ${taskWhen(b.at)} from launchd, Orca and jarvisd.`;
+  paintTasks();
+}
+$('tasks-close').onclick = closeTasks;
+$('tasksbtn').onclick = async () => {
+  showMenu(false);
+  taskOpen = null;
+  tasksBody.innerHTML = '<p class="tk-empty">Reading launchd, Orca and jarvisd…</p>';
+  $('tasks-count').textContent = '';
+  tasksEl.hidden = false;
+  try { await loadTasks(); } catch (err) { tasksBody.innerHTML = `<p class="tk-empty">Could not read the tasks: ${esc(err.message)}</p>`; }
+};
+tasksBody.addEventListener('click', async e => {
+  const fix = e.target.closest('.tk-fix');
+  if (fix) {
+    const t = taskList.find(x => x.id === fix.dataset.id);
+    if (!t || fix.disabled) return;
+    fix.disabled = true; fix.textContent = 'Sending…';
+    const r = await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: fixMessage(t) }) }).catch(() => null);
+    for (const b of tasksBody.querySelectorAll(`.tk-fix[data-id="${CSS.escape(t.id)}"]`)) { b.textContent = r?.ok ? 'Sent to Jarvis' : 'Not sent. Try again'; b.disabled = !!r?.ok; }
+    return;
+  }
+  if (e.target.closest('.tk-open')) return;
+  const row = e.target.closest('.tk-row');
+  if (!row) return;
+  taskOpen = taskOpen === row.dataset.id ? null : row.dataset.id;
+  paintTasks();
+  tasksBody.querySelector(`.tk-row[data-id="${CSS.escape(row.dataset.id)}"] .tk-head`)?.focus({ focusVisible: e.detail === 0 });
+});
+tasksBody.addEventListener('submit', async e => {
+  e.preventDefault();
+  const form = e.target, msg = form.closest('.tk-open').querySelector('.tk-msg'), btn = form.querySelector('.tk-save');
+  btn.disabled = true; btn.textContent = 'Saving…'; msg.hidden = true;
+  const r = await fetch('/api/tasks/save', { method: 'POST', body: JSON.stringify({ id: form.dataset.id, cron: form.cron.value, description: form.description.value }) }).catch(err => ({ ok: false, json: async () => ({ error: err.message }) }));
+  const b = await r.json().catch(() => ({}));
+  if (b.task) taskList = taskList.map(x => x.id === b.task.id ? b.task : x);
+  if (r.ok) paintTasks();
+  const box = tasksBody.querySelector(`.tk-row[data-id="${CSS.escape(form.dataset.id)}"] .tk-msg`);
+  if (box) { box.hidden = false; box.className = `tk-msg${r.ok ? '' : ' bad'}`; box.textContent = r.ok ? 'Saved. launchd reloaded the job, and the plist reads back the same.' : (b.error || `Save failed (error ${r.status}).`); }
+  if (!r.ok) { btn.disabled = false; btn.textContent = 'Save'; }
 });
 
 // ---- audit log: answered questions and decided approvals, read from the store when the panel opens ----

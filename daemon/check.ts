@@ -127,15 +127,18 @@ export function makeCheck(o: {
       wake(lost);
       o.store.settleTurns(lost.flatMap(f => f.turn ?? []));
     },
-    /** One tick. Outside the hours it reads and writes nothing. When Orca does not answer it changes nothing, so the next tick decides. */
-    async tick() {
-      if (running || !inCheckHours(now()) || o.paused()) return;
+    /**
+     * One tick. Outside the hours it reads and writes nothing. When Orca does not answer it changes nothing, so the next tick decides.
+     * Returns 'ran' or 'skipped' (Orca did not answer) for the Scheduled tasks strip, and undefined when no tick ran.
+     */
+    async tick(): Promise<'ran' | 'skipped' | undefined> {
+      if (running || !inCheckHours(now()) || o.paused()) return undefined;
       running = true;
       try {
         remind();
         await o.replies?.().catch(e => o.log('check: support replies failed', { error: String(e) }));
         const work = await o.poll();
-        if (work.error) return o.log('check: skipped, Orca did not answer', { error: work.error });
+        if (work.error) { o.log('check: skipped, Orca did not answer', { error: work.error }); return 'skipped'; }
         await o.requests.synced();
         const delivery = await o.delivery();
         const found = findings({ asks: o.store.openItems(), requests: o.store.requests(), rows: work.rows, jarvisRun: o.jarvisRun, closing: o.requests.closing, now: now(), delivery, running: o.running, lost: o.brainBusy() ? [] : o.store.unsettledTurns() });
@@ -147,6 +150,7 @@ export function makeCheck(o: {
         if (fresh.length) wake(fresh);
         // A lost message is reported once. It stays out of later ticks, even ones where the brain is busy.
         o.store.settleTurns(found.flatMap(f => f.turn ?? []));
+        return 'ran';
       } finally { running = false; }
     },
   };
