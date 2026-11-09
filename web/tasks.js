@@ -44,7 +44,7 @@ function openHtml(t, now) {
   const errBox = err ? `<div class="tk-err"><p>Last error${err.at ? `, ${esc(when(err.at, now, { today: true }))}` : ''}.${err.since ? ` Every run since ${esc(when(err.since, now))} failed.` : ''}</p><pre>${esc(err.text)}</pre></div>` : '';
   const log = t.logTail ? `<div class="tk-log"><p>Error log, written ${esc(when(t.logTail.at, now, { today: true }))}: ${esc(t.logTail.file)}</p><pre>${esc(t.logTail.text)}</pre></div>` : '';
   const ro = t.editable ? '' : ' disabled';
-  const cronHint = t.editable ? `<span class="tk-hint">cron, several with ;, or @every 30m</span>` : '';
+  const cronHint = t.editable ? `<span class="tk-hint">or @every 30m</span>` : '';
   return `<div class="tk-open" id="tk-open-${esc(t.id)}">${errBox}${log}${needsFix(t) ? `<div class="tk-fix-row">${fixButton(t)}</div>` : ''}
     <form class="tk-form" data-id="${esc(t.id)}">
       <label class="tk-f tk-cron"><span>${t.cron ? 'Schedule (cron)' : 'Schedule'}${cronHint}</span><input name="cron" value="${esc(t.cron ?? t.schedule)}" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"${ro}></label>

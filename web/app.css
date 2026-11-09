@@ -1086,7 +1086,8 @@ body:not(.term-open) .term-act { display: none; }
 .tk-err { background: var(--bad-soft); border-radius: var(--r-s); padding: 12px 18px; }
 .tk-err p, .tk-log p { font-size: 14px; color: var(--muted); }
 .tk-err pre, .tk-log pre { margin: 4px 0 0; font: 15px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
-.tk-log { padding: 0 2px; }
+.tk-log { padding: 0 2px; min-width: 0; }
+.tk-log p { overflow-wrap: anywhere; }
 .tk-log pre { font-size: 13px; color: var(--muted); }
 .tk-form { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(0, 7fr) auto; gap: 20px; align-items: end; }
 .tk-f { display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--muted); min-width: 0; }

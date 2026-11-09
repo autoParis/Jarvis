@@ -869,7 +869,7 @@ tasksBody.addEventListener('submit', async e => {
   if (b.task) taskList = taskList.map(x => x.id === b.task.id ? b.task : x);
   if (r.ok) paintTasks();
   const box = tasksBody.querySelector(`.tk-row[data-id="${CSS.escape(form.dataset.id)}"] .tk-msg`);
-  if (box) { box.hidden = false; box.className = `tk-msg${r.ok ? '' : ' bad'}`; box.textContent = r.ok ? 'Saved. launchd reloaded the job, and the plist reads back the same.' : (b.error || `Save failed (error ${r.status}).`); }
+  if (box) { box.hidden = false; box.className = `tk-msg${r.ok ? '' : ' bad'}`; box.textContent = r.ok ? (b.task?.status === 'Off' ? 'Saved in the plist, and it reads back the same. The job stays off.' : 'Saved. launchd reloaded the job, and the plist reads back the same.') :(b.error || `Save failed (error ${r.status}).`); }
   if (!r.ok) { btn.disabled = false; btn.textContent = 'Save'; }
 });
 
