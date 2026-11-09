@@ -258,6 +258,30 @@ export function lastAssistantText(file: string): string | undefined {
   return last;
 }
 
+/**
+ * The texts the last turn sent with SendMessage to the session named `to`, in order. The turn starts at the last user line
+ * that is a prompt, a typed message or a cross-session message (`turnOrigin: peer`); tool results and meta lines (system
+ * reminders) do not start one. Only the file's tail is read, so a message sent long ago in a very long turn is missed.
+ */
+export function lastTurnMessages(file: string, to: string): string[] {
+  let sent: string[] = [];
+  for (const raw of tailOf(file).split('\n')) {
+    if (!raw) continue;
+    let e: any;
+    try { e = JSON.parse(raw); } catch { continue; }
+    if (e.isSidechain) continue;
+    const c = e.message?.content;
+    if (e.type === 'user') {
+      const results = Array.isArray(c) && c.length > 0 && c.every((b: any) => b?.type === 'tool_result');
+      if (!results && (!e.isMeta || e.turnOrigin === 'peer')) sent = [];
+      continue;
+    }
+    if (e.type !== 'assistant' || !Array.isArray(c)) continue;
+    for (const b of c) if (b?.type === 'tool_use' && b.name === 'SendMessage' && b.input?.to === to && typeof b.input.message === 'string') sent.push(b.input.message);
+  }
+  return sent;
+}
+
 /** Claude Code or Codex transcript lines as pane lines. `start` is the byte offset of the first line, which makes the ids. */
 export function chatLines(jsonl: string, start: number): Line[] {
   const out: Line[] = [];

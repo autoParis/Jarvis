@@ -33,7 +33,8 @@ export const askId = (worker: string, at: number) => `ask:${worker}:${at}`;
 export async function nativeRoute(o: NativeRouteOptions, method: string, url: string, body: Json): Promise<RouteResult | undefined> {
   if (method !== 'POST') return undefined;
   if (url === '/api/hooks/permission') return { status: 200, body: await o.native.permissionRequest(body) };
-  if (url === '/api/hooks/stop') { o.native.stopHook(body); return { status: 200, body: {} }; }
+  // A turn that ended with no report line is sent back once: the reply carries Claude Code's `decision: block`.
+  if (url === '/api/hooks/stop') return { status: 200, body: o.native.stopHook(body) };
   if (url === '/api/hooks/pre') return { status: 200, body: o.native.preToolUse(body) };
   if (url === '/api/internal/native/reply') {
     const worker = typeof body.worker === 'string' ? body.worker : '';
