@@ -523,10 +523,36 @@ button.hand:not(:disabled):hover { background: var(--hover); border-color: var(-
 .shot.broken img { display: none; }
 .shot.broken span::after { content: " (not available)"; }
 .msg img { max-width: 100%; max-height: 60vh; border-radius: var(--r-s); display: block; }
-#viewer { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: rgb(0 0 0 / .86); padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
+/* The owner's own pictures on a sent message: one row of squares above his words, 4 to a line on a phone too */
+.shots { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 72px)); gap: 6px; white-space: normal; }
+.shots:not(:last-child) { margin-bottom: 8px; }
+.shots .shot { width: 100%; max-width: none; aspect-ratio: 1; border-radius: var(--r-s); }
+.shots .shot img { width: 100%; height: 100%; max-height: none; object-fit: cover; object-position: center; }
+.shots .shot.broken { background: var(--raised); border: 1px dashed var(--line); }
+.shots .shot.broken::after { content: none; }
+
+/* The big viewer. The ground is dark in both themes, as photo viewers are; the pen bar follows the theme. */
+#viewer { position: fixed; inset: 0; z-index: 60; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgb(0 0 0 / .86); padding: calc(60px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
 #viewer.open { display: flex; }
-#viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-s); }
-#viewer button { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 10px; height: 44px; padding: 0 14px; font-size: 14px; color: #fff; }
+.v-stage { position: relative; min-height: 0; display: flex; }
+#viewer img { display: block; max-width: calc(100vw - 24px); max-height: calc(100dvh - 84px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); object-fit: contain; border-radius: var(--r-s); }
+#viewer.edit img { max-height: calc(100dvh - 152px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); user-select: none; -webkit-user-drag: none; }
+#viewer canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; border-radius: var(--r-s); }
+#viewer canvas[hidden] { display: none; }
+.v-close { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 10px; height: 44px; padding: 0 14px; font-size: 14px; color: #fff; }
+.ink-bar { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 14px; background: var(--pop); color: var(--ink); border: 1px solid var(--pop-line); box-shadow: var(--pop-shadow); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.ink-bar[hidden] { display: none; }
+.ink-colors { display: flex; gap: 2px; padding-right: 6px; border-right: 1px solid var(--line); }
+.ink-color { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 10px; }
+.ink-color::before { content: ""; width: 24px; height: 24px; border-radius: 50%; background: var(--c); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .2); transition: transform .12s ease; }
+.ink-color[aria-pressed="true"] { background: var(--raised); }
+.ink-color[aria-pressed="true"]::before { box-shadow: 0 0 0 2px var(--pop), 0 0 0 4px var(--ink); transform: scale(.9); }
+.ink-undo, .ink-clear { height: 44px; display: flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: 10px; font-size: 14px; transition: background-color .12s; }
+.ink-undo svg, .ink-clear svg { width: 18px; height: 18px; }
+.ink-undo:hover:not(:disabled), .ink-clear:hover:not(:disabled) { background: var(--hover); }
+.ink-undo:disabled, .ink-clear:disabled { opacity: .4; cursor: default; }
+.ink-done { height: 44px; padding: 0 18px; border-radius: 10px; font-size: 14px; font-weight: 600; background: var(--need); color: var(--on-need); }
+@media (max-width: 420px) { .ink-undo span, .ink-clear span { display: none; } .ink-undo, .ink-clear { width: 44px; padding: 0; justify-content: center; } }
 
 /* Jarvis's markdown */
 .msg.md { white-space: normal; }
@@ -623,8 +649,10 @@ textarea:focus { outline: none; }
 #pending:empty { display: none; }
 #pending .thumb { position: relative; }
 #pending img { display: block; width: 64px; height: 64px; object-fit: cover; border-radius: var(--r-s); border: 1px solid var(--line); }
-#pending button { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px; background: var(--ink); color: var(--on-ink); }
-#pending button svg { width: 10px; height: 10px; }
+#pending .thumb-open { display: block; border-radius: var(--r-s); cursor: zoom-in; }
+#pending .thumb-open:hover img { border-color: var(--need-ink); }
+#pending .thumb-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px; background: var(--ink); color: var(--on-ink); }
+#pending .thumb-remove svg { width: 10px; height: 10px; }
 
 /* An open worker */
 .pl { overflow-wrap: anywhere; font-size: 16px; line-height: 1.5; }
