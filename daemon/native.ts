@@ -6,14 +6,16 @@ import { cleanEnv } from './orca.ts';
 import { classify, type NativeState, type WorkRow } from './work.ts';
 import type { Approval, NativeWorkerRow, Store } from './store.ts';
 import type { Log } from './log.ts';
-import { lastAssistantText } from './transcript.ts';
+import { lastAssistantText, lastTurnMessages } from './transcript.ts';
 import { FRESH_WRITE_MS, holdersIn, lastModel, processTable, sessionName, tailOf, type Holder } from './resume.ts';
 
 // Claude Code background sessions (`claude --bg`) as Jarvis's own workers, with no Orca in the loop (Jarvis 2.0, stage B).
 // jarvisd starts one, the session's hooks post back here over http (a permission prompt becomes an Approve card, each
 // turn's last message becomes the report), `claude agents` tells us whether it lives, and a reply goes in through a
 // short-lived Claude session, because SendMessage from another session is the only way into a running background one.
-// Claude Code 2.1.316, research preview: the output shapes parsed here were checked live on 2026-11-06.
+// Background sessions are a research preview. The output shapes parsed here were checked live on 2026-11-06 (2.1.316).
+// No version is pinned: the first start checks that `claude` has every command and option the driver runs
+// (missingFeatures), and each parse below fails with its own message when a shape changes.
 
 export type { NativeState } from './work.ts';
 export type NativeWorker = {
@@ -59,15 +61,59 @@ export type Claude = (args: string[], cwd?: string) => Promise<ClaudeRun>;
 
 /** A work-list row id is `n:<short id>`. */
 export const ROW_PREFIX = 'n:';
-/** Pinned: background sessions are a research preview, so a different `claude --version` gets a warning in the log. */
-export const CLAUDE_CODE_VERSION = '2.1.316';
+/** The `claude` options the driver passes: starts, resumes, the relay, Continue on phone and the Desktop button. */
+export const NEEDED_OPTIONS = ['--bg', '--name', '--settings', '--permission-mode', '--model', '--worktree', '--resume', '--remote-control', '--desktop',
+  '--print', '--output-format', '--tools', '--strict-mcp-config', '--mcp-config'];
+/** The `claude` commands the driver runs on background sessions. */
+export const NEEDED_COMMANDS = ['agents', 'attach', 'respawn', 'rm', 'stop'];
+/** `claude agents --json --all` is the liveness listing every poll reads. */
+export const NEEDED_AGENT_OPTIONS = ['--json', '--all'];
+
+/** True when `help` defines `flag` on an option line ("  -n, --name <name>", "  --bg, --background"), not only names it in a description. */
+const hasOption = (help: string, flag: string) => new RegExp(`^\\s+(?:-\\w,\\s+)?(?:--[\\w-]+,\\s+)*${flag}(?![\\w-])`, 'm').test(help);
+/** True when the Commands section of `help` lists `cmd`, alone or as one of its names ("  stop|kill <id>"). */
+const hasCommand = (help: string, cmd: string) => {
+  const at = help.search(/^Commands:/m);
+  return at >= 0 && new RegExp(`^\\s+(?:[\\w-]+\\|)*${cmd}(?:\\|[\\w-]+)*(?:\\s|$)`, 'm').test(help.slice(at));
+};
+/**
+ * What the driver needs and this Claude Code lacks, from `claude --help` and `claude agents --help`. Empty when it has
+ * everything. A check of what is used, not of a version number, so an update that keeps these passes with no warning.
+ */
+export function missingFeatures(help: string, agentsHelp: string): string[] {
+  return [
+    ...NEEDED_OPTIONS.filter(f => !hasOption(help, f)).map(f => `the ${f} option`),
+    ...NEEDED_COMMANDS.filter(c => !hasCommand(help, c)).map(c => `the claude ${c} command`),
+    ...(hasCommand(help, 'agents') ? NEEDED_AGENT_OPTIONS.filter(f => !hasOption(agentsHelp, f)).map(f => `the claude agents ${f} option`) : []),
+  ];
+}
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const RELAY_MODEL = 'claude-haiku-5-5';
 /** The short-lived session that carries a reply in. The worker sees its messages as coming from this name. */
 export const RELAY_NAME = 'jarvis-brain-relay';
 export const DENY_MESSAGE = `${OWNER_CAP} denied it from the Jarvis app`;
-/** A done turn without a DONE or FAILED line is reported to the brain once the report is this old. */
+/**
+ * The backstop for a turn whose Stop hook never reached jarvisd (a restart): a done turn without a DONE or FAILED line is
+ * reported to the brain once the report is this old. A Stop hook that arrives settles the turn at once (stopHook).
+ */
 export const SILENT_DONE_MS = 2 * 60_000;
+/** A turn that ends on purpose before the work is done starts its last message with this: it waits for something. */
+export const WAITING_LINE = /^\s*WAITING\s*:/i;
+/**
+ * The Stop hook's `decision: block` reason for a turn that ended with no DONE, FAILED or WAITING line, no ask to the brain
+ * and no background task or scheduled wake-up: Claude Code sends the worker straight back with these words (proven live
+ * on 2.1.316, 2026-11-09: the next message came about one second later). Given once per turn; the next stop is final.
+ */
+export const REPORT_NUDGE = `Jarvis got no report from this turn. Your last message does not start with a DONE: or FAILED: line, so ${OWNER} sees nothing. Do one of these now. Do not do the work again.
+- The task is finished: write your final message again. Its first line is \`DONE: <one sentence>\` (or \`FAILED: <one sentence>\`), then the report.
+- You wait for a background task or for an answer: write one line that starts with \`WAITING:\` and says what you wait for. Then end your turn.
+- You need a decision from ${OWNER}: ask jarvis-brain with SendMessage in the ask format. Then end your turn.`;
+/** The state key that says a worker's report at this time needs no silent-turn notice: it was a pause, or the notice went out. */
+const quietKey = (id: string) => `nativeQuiet:${id}`;
+/** At most this many REPORT_NUDGE blocks per worker in this window, whatever Claude Code says about the chain. */
+const NUDGE_MAX = 3, NUDGE_WINDOW_MS = 10 * 60_000;
+/** What the brain hears about a turn that ended with no DONE or FAILED line. vault/CLAUDE.md matches its start. */
+const silentText = (w: Pick<NativeWorker, 'name' | 'report'>) => `Worker ${w.name} ended its turn without a DONE or FAILED line. Its last words: ${(w.report ?? '').slice(0, 300)}`;
 /** Finished workers leave the work list after this. */
 export const ROW_MAX_AGE_MS = 24 * 3_600_000;
 const SESSION_WAIT_MS = 15_000, RESPAWN_WAIT_MS = 60_000, TICK_MS = 500;
@@ -98,6 +144,7 @@ An ask must have OPTIONS. Jarvis sends an ask with no options back to you, and $
 A notice is not a question. A notice tells ${OWNER} a status and asks nothing, for example "the switch starts now, jarvisd restarts in 1 minute". Send a notice only if ${OWNER} must know it now. Start it with \`NOTICE: <one sentence>\` and do not use the ask fields. Jarvis shows it as a status line, with nothing to answer, and no answer comes back. Do not wait for one.
 
 When the work is finished, your last message of the final turn must start with a line \`DONE: <one sentence>\` (or \`FAILED: <one sentence>\`), followed by the report: what changed, the branch and commit, the PR link if any, what was not proven. That exact text reaches ${OWNER} word for word.
+If you end a turn before the work is finished, because you wait for a background task or an answer, start your last message with \`WAITING: <what you wait for>\`.
 
 If a permission prompt appears, wait; ${OWNER} answers it from his app. If the permission layer refuses a command, do not retry or route around it; say so in your report.
 
@@ -274,9 +321,16 @@ export function makeNative(o: {
   const held = new Map<number, { worker: string; resolve: (reply: object) => void }>();
   // Liveness findings already told, `<id>:<kind>`, cleared when the condition goes away.
   const noticed = new Set<string>();
+  // Workers sent back with REPORT_NUDGE in the current chain of their turn, and when, for the cap.
+  const nudgedChain = new Set<string>();
+  const nudgeTimes = new Map<string, number[]>();
+  /** The report needs no silent-turn notice: it was a pause, or the brain was told. */
+  const quiet = (w: Pick<NativeWorker, 'id' | 'report_at'>) => !!w.report_at && !!store.getState(quietKey(w.id))?.endsWith(`:${w.report_at}`);
+  /** The last report was a pause (a WAITING line, an ask, a background task): the worker still has its task. */
+  const paused = (w: Pick<NativeWorker, 'id' | 'report_at'>) => !!w.report_at && store.getState(quietKey(w.id)) === `pause:${w.report_at}`;
   // From the last `claude agents` listing: the ids whose process is alive.
   let alive = new Set<string>();
-  let versionChecked = false;
+  let featuresOk = false;
   // Accidental resumes per interactive worker, for the backoff; and when each one was first seen idle, for the reaper.
   const resumeTimes = new Map<string, number[]>();
   // Resumes under way, so an overlapping poll does not start a second one.
@@ -348,7 +402,7 @@ export function makeNative(o: {
   };
   /** An interactive session's liveness from `status` (busy, waiting, idle) while its process lives; nothing once it is gone. */
   const interactiveState = (a: Agent | undefined, w: NativeWorker): NativeState | undefined =>
-    !a?.pid ? undefined : a.status === 'busy' ? 'working' : a.status === 'waiting' ? 'blocked' : w.remote && a.status === 'idle' ? 'done' : w.outcome ? w.state : w.report ? 'done' : 'working';
+    !a?.pid ? undefined : a.status === 'busy' ? 'working' : a.status === 'waiting' ? 'blocked' : w.remote && a.status === 'idle' ? 'done' : w.outcome ? w.state : w.report && !paused(w) ? 'done' : 'working';
 
   /** Polls `claude agents` until `ok(entry)` holds for the worker, or the time is up. */
   async function waitFor(w: NativeWorker, ok: (a: Agent) => boolean, ms: number): Promise<Agent | undefined> {
@@ -361,16 +415,32 @@ export function makeNative(o: {
     }
   }
 
-  async function checkVersion() {
-    if (versionChecked) return;
-    versionChecked = true;
-    const v = (await claude(['--version'])).out.trim();
-    if (!v.startsWith(CLAUDE_CODE_VERSION)) log('native: claude version differs from the pinned one', { found: v, pinned: CLAUDE_CODE_VERSION });
+  /**
+   * Before the first start: does this `claude` have every command and option the driver runs? Throws with the missing
+   * ones named, so the start fails with that reason instead of a parse error later. Only a pass is remembered, so an
+   * update of Claude Code is picked up at the next start with no jarvisd restart.
+   */
+  async function checkClaude() {
+    if (featuresOk) return;
+    const [v, help, agentsHelp] = await Promise.all([claude(['--version']), claude(['--help']), claude(['agents', '--help'])]);
+    const version = v.out.trim() || 'of unknown version';
+    const text = (r: ClaudeRun) => `${r.out}\n${r.err}`;
+    if (!/^Commands:/m.test(text(help))) {
+      log('native: claude --help unreadable', { version, code: help.code, out: help.out.slice(0, 200), err: help.err.slice(0, 200) });
+      throw new Error(`Jarvis could not read \`claude --help\` (exit ${help.code}), so it cannot check that Claude Code ${version} has what native workers need.`);
+    }
+    const missing = missingFeatures(text(help), text(agentsHelp));
+    if (missing.length) {
+      log('native: claude lacks what the driver needs', { version, missing });
+      throw new Error(`Claude Code ${version} lacks ${missing.join(', ')}, which Jarvis's native workers need. Update Claude Code (claude update), then start the worker again.`);
+    }
+    featuresOk = true;
+    log('native: claude has what the driver needs', { version });
   }
 
   const api = {
     async start(a: { name: string; cwd: string; brief: string; model?: string; permissionMode?: 'auto' | 'default'; approvalId?: number; worktree?: boolean; interactive?: boolean }): Promise<NativeWorker> {
-      await checkVersion();
+      await checkClaude();
       if (a.interactive) return startInteractive(a);
       const args = ['--bg', '--name', a.name, '--permission-mode', a.permissionMode ?? 'auto', '--model', a.model ?? DEFAULT_MODEL,
         '--settings', settingsPath, ...(a.worktree ? ['-w', a.name] : []), a.brief];
@@ -488,7 +558,7 @@ export function makeNative(o: {
       if (phoning.has(sid)) return { ok: false, error: 'Continue on phone is already under way for this session.' };
       phoning.add(sid);
       try {
-        await checkVersion();
+        await checkClaude();
         let mine = find(sid);
         if (mine && mine.session_id !== sid) mine = undefined;
         const onSession = (list: Agent[]) => list.filter(x => x.sessionId === sid && !!x.pid);
@@ -595,16 +665,55 @@ export function makeNative(o: {
       return { ok: true };
     },
 
-    /** The Stop http hook: each turn's last message is the report. */
-    stopHook(body: any): void {
-      if (body?.stop_hook_active) return;
+    /**
+     * The Stop http hook: each turn's last message is the report. A turn with no DONE or FAILED line is settled here, at
+     * once, never by the clock: a pause (a WAITING line, an ask to the brain, a background task or a scheduled wake-up
+     * that Claude Code lists in the hook body) is quiet; a side chat or a phone session is a conversation and is quiet;
+     * anything else is sent back once with REPORT_NUDGE (`decision: block`), and if the turn then still ends with no
+     * line, the brain hears it right away. Returns the hook's reply.
+     */
+    stopHook(body: any): object {
       const w = find(String(body?.session_id ?? ''));
-      if (!w) { log('hook from an unknown session', { hook: 'Stop', session: body?.session_id ?? null }); return; }
+      if (!w) { log('hook from an unknown session', { hook: 'Stop', session: body?.session_id ?? null }); return {}; }
       const text = String(body.last_assistant_message ?? '');
       const outcome = outcomeOf(text);
-      const next = update(w.id, { report: text, report_at: iso(), transcript: body.transcript_path ?? w.transcript, ...(outcome ? { outcome, state: outcome } : w.remote ? { state: 'done' } : {}) });
-      log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length });
+      const transcript = body.transcript_path ?? w.transcript;
+      // A stop that is not the answer to a block starts a new chain of the turn: it may be sent back once.
+      if (!body.stop_hook_active) nudgedChain.delete(w.id);
+      let pause: string | undefined;
+      if (!outcome) {
+        const action = w.approval_id ? store.approval(w.approval_id)?.action : undefined;
+        const tasks = Array.isArray(body.background_tasks) ? body.background_tasks.filter((t: any) => !t?.status || t.status === 'running' || t.status === 'pending') : [];
+        const crons = Array.isArray(body.session_crons) ? body.session_crons : [];
+        let asked = false;
+        try { asked = !!transcript && lastTurnMessages(transcript, 'jarvis-brain').some(m => !/^\s*(notice|done|failed)\s*:/i.test(m)); }
+        catch (e) { log('native: transcript unreadable at stop', { worker: w.id, error: (e as Error).message }); }
+        pause = w.remote || action === 'side-chat' ? 'conversation'
+          : WAITING_LINE.test(text) ? 'waiting line'
+          : asked ? 'ask to the brain'
+          : tasks.length ? `background task${tasks.length > 1 ? 's' : ''}: ${tasks.map((t: any) => t?.description ?? t?.command ?? t?.id).join('; ').slice(0, 160)}`
+          : crons.length ? 'scheduled wake-up' : undefined;
+      }
+      const t = iso();
+      const nudges = (nudgeTimes.get(w.id) ?? []).filter(x => now() - x < NUDGE_WINDOW_MS);
+      const nudge = !outcome && !pause && !nudgedChain.has(w.id) && nudges.length < NUDGE_MAX;
+      const next = update(w.id, { report: text, report_at: t, transcript, ...(outcome ? { outcome, state: outcome } : w.remote ? { state: 'done' } : pause || nudge ? { state: 'working' } : {}) });
+      if (pause) store.setState(quietKey(w.id), `pause:${t}`);
+      log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length, ...(pause ? { pause } : {}), ...(nudge ? { sentBack: true } : {}) });
       o.onReport(next, text, !!outcome);
+      if (nudge) {
+        nudgedChain.add(w.id);
+        nudgeTimes.set(w.id, [...nudges, now()]);
+        return { decision: 'block', reason: REPORT_NUDGE };
+      }
+      if (!outcome && !pause) {
+        // Sent back once and still no line: the brain hears it now, not two minutes later, and the poll's backstop stays quiet.
+        store.setState(quietKey(w.id), `told:${t}`);
+        noticed.add(`${w.id}:silent`);
+        log('native notice', { worker: w.id, kind: 'silent' });
+        o.onNotice(next, silentText(next));
+      }
+      return {};
     },
 
     preToolUse(body: any): object {
@@ -852,8 +961,10 @@ export function makeNative(o: {
         };
         notice('failed', next.state === 'failed', () => `Worker ${w.name} failed`);
         notice('blocked', next.state === 'blocked' && !!next.waiting_for && !pendingCard(w.id), () => `Worker ${w.name} is blocked: ${next.waiting_for}`);
-        notice('silent', next.state === 'done' && !next.outcome && !!next.report && now() - Date.parse(next.report_at!) >= SILENT_DONE_MS,
-          () => `Worker ${w.name} ended its turn without a DONE or FAILED line. Its last words: ${next.report!.slice(0, 300)}`);
+        // The backstop for a Stop hook that never arrived. A pause, or a turn stopHook already told the brain about, stays quiet,
+        // also after a jarvisd restart (the state key holds the report's time).
+        notice('silent', next.state === 'done' && !next.outcome && !!next.report && now() - Date.parse(next.report_at!) >= SILENT_DONE_MS && !quiet(next),
+          () => { store.setState(quietKey(w.id), `told:${next.report_at}`); return silentText(next); });
       }
   }
 

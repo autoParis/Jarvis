@@ -4,8 +4,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, type Item } from './store.ts';
+import { helpRun } from './fakeclaude.ts';
 import { askCard } from './asks.ts';
-import { makeNative, NATIVE_FOOTER, type Claude } from './native.ts';
+import { makeNative, NATIVE_FOOTER, REPORT_NUDGE, type Claude } from './native.ts';
 import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId, workerMessageKind, NO_OPTIONS_REFUSAL } from './nativeroutes.ts';
 import { buildCommand, isNativeArgs, nativeName, WORKER_PERMISSION, BUTTON_ONLY } from './gate.ts';
 import { chatLines } from './transcript.ts';
@@ -18,6 +19,7 @@ function fakeClaude() {
   const agent: any = { id: 'abc12345', sessionId: 'abc12345-0000-0000-0000-000000000000', name: 'probe-1', kind: 'background', pid: 42, status: 'idle', state: 'done' };
   const claude: Claude = async (args) => {
     calls.push(args);
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316 (Claude Code)', err: '' };
     if (args[0] === '--bg') return { code: 0, out: `backgrounded · ${agent.id} · ${args[2]}\n`, err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify([agent]), err: '' };
@@ -59,6 +61,10 @@ test('the hook routes: a known worker\'s permission prompt becomes a card and re
   assert.equal(stop?.status, 200);
   assert.equal(s.native.get(w.id)?.report, 'DONE: all good\n\nDetails here.');
   assert.equal(s.reports[0].final, true);
+  assert.deepEqual(stop?.body, {});
+  // A turn with no report line: the reply sends the worker back with Claude Code's `decision: block`.
+  const silent = await nativeRoute(s.o, 'POST', '/api/hooks/stop', { session_id: w.session_id, last_assistant_message: 'Here is the answer.', stop_hook_active: false });
+  assert.deepEqual(silent?.body, { decision: 'block', reason: REPORT_NUDGE });
   // A session jarvisd did not start: an empty decision (which the worker reads as a denial) and nothing stored.
   const stranger = await nativeRoute(s.o, 'POST', '/api/hooks/permission', { session_id: 'nope', tool_name: 'Bash', tool_input: {} });
   assert.deepEqual(stranger?.body, {});
@@ -199,6 +205,7 @@ test('an interactive worker starts in a pseudo-terminal, is found by name, stops
   const agent: any = { kind: 'interactive', name: 'design-5', pid: 777, status: 'busy', sessionId: 'c0ffee00-1111-2222-3333-444444444444' };
   const spawned: string[][] = [], killed: number[] = [];
   const claude: Claude = async (args) => {
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316', err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify([agent]), err: '' };
     if (args[0] === '-p') return { code: 0, out: JSON.stringify({ result: 'SENT' }), err: '' };

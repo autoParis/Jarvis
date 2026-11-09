@@ -628,3 +628,54 @@ test('more work after DONE puts a native request back to Working until its next 
   report('FAILED: could not.', '2026-10-30T12:35:00.000Z', 'failed');
   assert.equal(await status('exited'), 'failed');
 });
+
+test('a native request takes its session and worktree from its own row at the sync, with no Orca call', async () => {
+  const store = openStore(':memory:');
+  const orcaCalls: string[][] = [];
+  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => undefined, orca: async args => { orcaCalls.push(args); return { ok: false } as any; } });
+  await startNative(store, reqs, 'wt1', 'In a worktree');
+  // A worker started in the main checkout, as `worktree: main`: its folder is the repo itself, so it is not its worktree.
+  await startNative(store, reqs, 'main1', 'In the main checkout');
+  store.updateNativeWorker('main1', { cwd: '/repos/jarvis' });
+  store.db.prepare("UPDATE native_workers SET repo = '/repos/jarvis' WHERE id = 'main1'").run();
+  await reqs.sync({ at: '', rows: [nativeRow('wt1'), nativeRow('main1')], done: [] }, [], false);
+  const by = new Map(store.requests().map(r => [r.title, r]));
+  assert.equal(by.get('In a worktree')!.session, 'sess-wt1');
+  assert.equal(by.get('In a worktree')!.worktree, 'wt-wt1');
+  assert.equal(by.get('In the main checkout')!.session, 'sess-main1');
+  assert.equal(by.get('In the main checkout')!.worktree, null);
+  // The listing later names the worker's real worktree: the request follows it.
+  store.updateNativeWorker('main1', { cwd: '/repos/jarvis/.claude/worktrees/later-1' });
+  await reqs.sync({ at: '', rows: [nativeRow('wt1'), nativeRow('main1')], done: [] }, [], false);
+  assert.equal(store.requests().find(r => r.title === 'In the main checkout')!.worktree, 'later-1');
+  assert.deepEqual(orcaCalls, []);
+});
+
+test('a native DONE that names "PR #12" links to that PR from the worker\'s own folder', async () => {
+  const store = openStore(':memory:');
+  const asked: string[] = [];
+  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async dir => { asked.push(dir); return 'https://github.com/o/jarvis'; }, prOpen: async () => true });
+  await startNative(store, reqs, 'pr1', 'With a PR');
+  store.updateNativeWorker('pr1', { state: 'done', outcome: 'done', report: 'DONE: opened PR #12.', report_at: '2026-10-30T12:30:00.000Z' });
+  await reqs.sync({ at: '', rows: [nativeRow('pr1', 'idle')], done: [] }, [], false);
+  const r = store.requests()[0];
+  assert.equal(r.pr, 'PR #12');
+  assert.equal(r.pr_url, 'https://github.com/o/jarvis/pull/12');
+  assert.deepEqual(asked, ['/repos/wt-pr1']);
+  assert.equal(r.status, 'review');
+});
+
+test('a done native request leaves a day after done while Orca is not answering; an Orca one waits for Orca', async () => {
+  const { store, reqs, start, work, tick } = setup();
+  await startNative(store, reqs, 'day1', 'Native done');
+  start('ctx_o', 'Orca task');
+  store.updateNativeWorker('day1', { state: 'done', outcome: 'done', report: 'DONE: fixed.', report_at: '2026-10-30T12:30:00.000Z' });
+  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_o', subject: 'Done', body: 'Fixed.', meta: '{"outcome":"succeeded"}' });
+  await reqs.sync(work([nativeRow('day1', 'idle')]), [{ dispatch: 'ctx_o', outcome: 'succeeded' }]);
+  assert.deepEqual(store.requests().map(r => r.status), ['done', 'done']);
+  store.db.prepare("UPDATE requests SET status_at = '2026-10-30 12:00:00'").run();
+  tick(DONE_KEEP_MS);
+  // Orca closed: the poll errors, and only the native request may leave.
+  await reqs.sync(work([], 'orca did not answer'), [], false);
+  assert.deepEqual(reqs.list().map(r => r.title), ['Task ctx_o']);
+});

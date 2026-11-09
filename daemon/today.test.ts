@@ -534,6 +534,40 @@ test('a request the owner hid does not hold a slot, while a still-running worker
   assert.equal(status(t, id), 'waiting');
 });
 
+test('a hidden request on a native worker: Orca\'s complete list proves nothing, its own row decides', async () => {
+  const t = setup();
+  const id = addItem(t, 'x', true);
+  t.today.workup(id, TASK);
+  await settle();
+  // The worker is native: Orca's list never holds it.
+  const at = new Date(T0).toISOString();
+  t.store.addNativeWorker({ id: 'nat1', session_id: 's-nat1', name: 'x-1', cwd: '/wt/x-1', approval_id: null, state: 'working', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: at, updated_at: at });
+  t.store.setToday(id, { dispatch: 'n:nat1' });
+  t.store.addRequest({ dispatch_id: 'n:nat1', action: 'today-start', title: 'x' });
+  t.store.hideRequest(t.store.requestOf('n:nat1')!.id);
+  t.today.sync([{ dispatch: 'ctx_other', outcome: 'in_progress' }], true);
+  assert.equal(status(t, id), 'working', 'a complete Orca list without it does not end a native worker');
+  // The idle reaper's stop is not an end: a message resumes it.
+  t.store.updateNativeWorker('nat1', { state: 'stopped', waiting_for: 'Idle, resumes on a message' });
+  t.today.sync([], true);
+  assert.equal(status(t, id), 'working');
+  t.store.updateNativeWorker('nat1', { state: 'done', outcome: 'done', report: 'DONE: the list sorts by date.\n\nNot proven: the phone.', report_at: at });
+  t.today.sync([], false);
+  const r = t.store.todayItem(id)!;
+  assert.equal(r.status, 'ready');
+  assert.equal(r.result, 'the list sorts by date.');
+  // The owner stopping it ends it too, with no report.
+  const t2 = setup();
+  const id2 = addItem(t2, 'y', true);
+  t2.today.workup(id2, TASK);
+  await settle();
+  t2.store.addNativeWorker({ id: 'nat2', session_id: 's-nat2', name: 'y-1', cwd: '/wt/y-1', approval_id: null, state: 'stopped', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: at, updated_at: at });
+  t2.store.setToday(id2, { dispatch: 'n:nat2' });
+  t2.today.sync([], false);
+  assert.equal(status(t2, id2), 'waiting');
+  assert.match(t2.store.todayItem(id2)!.reason!, /ended without reporting/);
+});
+
 test('a start that lost its answer, or a crash mid-start, never retries on its own', async () => {
   const t = setup({ result: () => ({ status: 'unknown', result: 'no JSON' }) });
   const id = addItem(t, 'x', true);

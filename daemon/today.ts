@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import type { Store, TodayRow, Approval } from './store.ts';
 import { ISSUE_RULE, type Gate } from './gate.ts';
 import { requestReport } from './requests.ts';
-import { ROW_PREFIX } from './native.ts';
+import { ROW_PREFIX, IDLE_STOPPED, DESKTOP_WAITING } from './native.ts';
 import { QUIET_HOURS, sqlTime } from './push.ts';
 import type { Log } from './log.ts';
 
@@ -153,6 +153,14 @@ export const storySkill = (repo: string) => existsSync(join(repo, '.claude', 'sk
 export const storyStartSpec = (n: string, skill: string) => `Run the ${skill} skill on issue #${n} (do not pick a different issue). ${OWNER_CAP} accepted this story from his Today list. Done when the PR is marked ready with its evidence, or you are blocked.${ISSUE_RULE}`;
 
 export const issueUrlIn = (text: string | null | undefined) => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/.exec(text ?? '')?.[0];
+/**
+ * A native worker that will not go on by itself: it reported DONE or FAILED, failed, was abandoned, or the owner stopped
+ * it. A stop Jarvis made (the idle reaper, the Desktop handoff) is not an end: a message resumes it.
+ */
+function nativeEnded(w: { state: string; outcome: string | null; waiting_for: string | null }): boolean {
+  return !!w.outcome || w.state === 'failed' || w.state === 'abandoned' || (w.state === 'stopped' && w.waiting_for !== IDLE_STOPPED && w.waiting_for !== DESKTOP_WAITING);
+}
+
 /** The started worker: Orca's dispatch id, or a native worker's `n:<id>` (gate.ts runNative), which its request also uses. */
 const dispatchIn = (a: Approval): string | undefined => {
   const r = parse<{ dispatchId?: string; worker?: string }>(a.result, {});
@@ -279,10 +287,14 @@ export function makeToday(o: {
       const own = i.dispatch.startsWith(ROW_PREFIX) && i.phase !== 'draft' ? store.nativeWorker(i.dispatch.slice(ROW_PREFIX.length))?.cwd : undefined;
       if (own && own.replace(/\/+$/, '') !== (i.repo ?? '').replace(/\/+$/, '') && i.worktree !== `path:${own}`) store.setToday(i.id, { worktree: `path:${own}` });
       const report = r ? requestReport(store, r.id) : undefined;
-      const settled = !!w?.outcome && w.outcome !== 'in_progress';
       // A request the owner hid stops updating, so its worker is read directly. A hidden row must not hold a slot forever.
+      // An Orca worker from Orca's list (gone from a complete list is over); a native one from its own row, never from
+      // Orca's list, which does not hold native workers.
+      const nw = i.dispatch.startsWith(ROW_PREFIX) ? store.nativeWorker(i.dispatch.slice(ROW_PREFIX.length)) : undefined;
+      const settled = nw ? nativeEnded(nw) : !!w?.outcome && w.outcome !== 'in_progress';
+      const gone = i.dispatch.startsWith(ROW_PREFIX) ? !nw : complete && !w;
       const off = !r || !!r.hidden_at || !!r.removed_at;
-      const over = r && !off ? ['done', 'review', 'failed'].includes(r.status) : !!report || settled || (complete && !w);
+      const over = r && !off ? ['done', 'review', 'failed'].includes(r.status) : !!report || settled || gone;
       if (!over) {
         const line = r?.status === 'waiting' ? 'Its worker is asking you something, see Requests' : i.phase === 'draft' ? 'Drafting the story' : 'Running';
         if (line !== i.line) { store.setToday(i.id, { line }); touched = true; }
