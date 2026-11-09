@@ -18,7 +18,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --ground: #070B0B; --raised: rgb(215 240 236 / .055); --hover: rgb(215 240 236 / .04); --line: rgb(215 240 236 / .08); --control: #384342;
+    --ground: #070B0B; --raised: rgb(215 240 236 / .055); --hover: rgb(215 240 236 / .04); --line: rgb(215 240 236 / .08); --control: #66726F;
     --ink: #F1F5F4; --muted: #A3AEAB; --bad: #FF8373; --on-ink: #070B0B;
     --need: #22A88E; --on-need: #021A15; --need-ink: #4CC9AE; --need-soft: #0D1A19;
     --on-bad: #2A0A06; --pop: rgb(14 21 19 / .95); --pop-line: rgb(255 255 255 / .1); --pop-shadow: 0 24px 64px rgb(0 0 0 / .7), 0 2px 8px rgb(0 0 0 / .5); --scrim: rgb(0 0 0 / .62);
