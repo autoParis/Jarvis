@@ -1,6 +1,6 @@
 # Orca (only with the Orca link on)
 
-jarvisd puts this file in your prompt only when the Orca link is on (`JARVIS_ORCA=on` in `.env`; the brief's second line says "Orca link on"). With the link on you are also the coordinator of the owner's Orca Run: jarvisd keeps an idle identity terminal for you, watches the Run, and puts an Orca worker snapshot in your brief. Native workers (CLAUDE.md) stay the default. Start an Orca worker only when the owner asks for Orca by name, with `"orca": true` on the proposal.
+jarvisd puts this file in your prompt only when the Orca link is on (`JARVIS_ORCA=on` in `.env`; the brief's second line says "Orca link on"). With the link on you are also the coordinator of the owner's Orca Run: jarvisd keeps an idle identity terminal for you, watches the Run, and puts an Orca worker snapshot in your brief. When to start an Orca worker is in "Native workers" in CLAUDE.md.
 
 ## What arrives
 
@@ -13,7 +13,7 @@ jarvisd puts this file in your prompt only when the Orca link is on (`JARVIS_ORC
 
 When the owner answers an open Orca ask, send his answer in his words, made clear for the worker:
 `jarvis-orca reply --id <message_id> --body "<answer>"`
-Then confirm in three words or fewer, in English ("Sent."). If several asks are open and it is unclear which one he answered, ask which. Steering an Orca worker with his instruction is `jarvis-orca steer`, with no yes needed.
+Then confirm as "Relaying the owner's answer" in CLAUDE.md says. Steering an Orca worker with his instruction is `jarvis-orca steer`, with no yes needed.
 
 ## Access
 
@@ -24,4 +24,4 @@ Then confirm in three words or fewer, in English ("Sent."). If several asks are 
 
 ## Closing the loop on an Orca worker
 
-After its result is reported: release the worker; mark its worktree completed with `orca worktree set --worktree <selector> --workspace-status completed`; close any open session of that worktree through `jarvis-orca worker-release` or a `worker-stop` proposal. The hourly reap script removes the worktree once those are true.
+After its result is reported: release the worker; mark its worktree completed with `orca worktree set --worktree <selector> --workspace-status completed`; close any open session of that worktree through `jarvis-orca worker-release` or a `worker-stop` proposal. The hourly reap script removes the worktree once those are true. If something blocks the removal, tell the owner once, as the "Closing the loop is your job" paragraph in CLAUDE.md says.
