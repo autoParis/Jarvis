@@ -340,13 +340,14 @@ function handOver(d: PollDeps, item: Item) {
 }
 
 /** Polls forever. A failed poll keeps the history ID, so the next one covers the same messages. */
-export async function watchGmail(d: PollDeps & { killFile: string; onTrouble: (msg: string) => void }) {
+export async function watchGmail(d: PollDeps & { killFile: string; onTrouble: (msg: string) => void; onPoll?: (error?: string) => void }) {
   let failures = 0;
   for (;;) {
     if (!existsSync(d.killFile)) {
-      try { await pollGmail(d); failures = 0; }
+      try { await pollGmail(d); failures = 0; d.onPoll?.(); }
       catch (e) {
         failures++;
+        d.onPoll?.((e as Error).message);
         d.log(`gmail poll failed: ${(e as Error).message}`, { failures });
         if (failures === 3) d.onTrouble(`I can't read Gmail (${(e as Error).message.slice(0, 120)}). I'll keep trying every ${Math.round(POLL_MS / 60_000)} minutes.`);
       }

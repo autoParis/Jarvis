@@ -194,7 +194,7 @@ test('the page sends a push for an email to its popup, and keeps emails out of t
   const main = read('./main.ts');
   assert.match(main, /'\/messages\.js': 'messages\.js'/);
   assert.match(main, /'\/swipe\.js': 'swipe\.js'/);
-  assert.match(main, /'\/api\/message\/send', '\/api\/message\/handled'\]/);
+  assert.match(main, /'\/api\/message\/send', '\/api\/message\/handled'[,\]]/);
 });
 
 test('the button: none when empty, always Messages, urgent true with any urgent one', () => {

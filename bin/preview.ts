@@ -19,6 +19,7 @@
 //   ?s=today                   the Today list with a row in every status. Every other scene has an empty list, to show the button at zero
 //   ?s=migration               the Migration list with a person in every status. Every other scene has nobody on it
 //   ?s=dense                   cards as long as real ones: a fields ask with long context, an approval with its two lines, an old free-form escalation
+//   menu > Scheduled tasks     sample rows in every status; PREVIEW_TASKS=real reads the real launchd jobs and Orca, read-only
 //   ?s=native                  a native worker just started: its "Handed to a worker" row comes from daemon/requests.ts
 //
 // Terminal and Codex from the plus run the real terminal code (daemon/terminal.ts, termgate.ts, termroutes.ts) on a
@@ -55,6 +56,7 @@ import { makeTermGate } from '../daemon/termgate.ts';
 import { termRoute } from '../daemon/termroutes.ts';
 import { terminalRows } from '../daemon/termrows.ts';
 import { quoteOf, quoteLine, replyIdOf, type TurnRow } from '../daemon/quote.ts';
+import { makePreviewTasks } from './preview-tasks.ts';
 
 const CLOSED = process.env.PREVIEW_CLOSED ? JSON.parse(readFileSync(process.env.PREVIEW_CLOSED, 'utf8')) : undefined;
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
@@ -335,6 +337,8 @@ const termGate = makeTermGate({ store: { getState: k => termState.get(k), setSta
 await terms.list();
 const withTerms = (rows: any[]) => [...rows, ...terminalRows(terms.current())];
 
+const tasksRoute = makePreviewTasks();
+
 http.createServer(async (req, res) => {
   const url = (req.url ?? '/').split('?')[0];
   const { scene, clients, today, migration } = sceneOf(req);
@@ -351,6 +355,11 @@ http.createServer(async (req, res) => {
     brainSetting = m;
     await new Promise(r => setTimeout(r, 1000));
     return send(res, 200, brainInfo());
+  }
+  // The Scheduled tasks screen (menu > Scheduled tasks): sample rows, or the real jobs read-only with PREVIEW_TASKS=real.
+  if (url.startsWith('/api/tasks')) {
+    const r = await tasksRoute(req.method ?? '', url, () => body(req));
+    if (r) return send(res, r.status, r.body);
   }
   if (req.method === 'GET') {
     if (url === '/api/events') {
