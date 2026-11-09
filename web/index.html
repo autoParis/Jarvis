@@ -199,6 +199,14 @@ import { splitPictures, shotRowHtml, INK, makeInk, toImagePoint, paint, exportMa
 import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
 import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml, chatDecisionHtml, startedNoticeHtml, undoDeadline } from '/worklist.js';
+import { makeBackNav, makeDrafts } from '/backnav.js';
+// The mouse's back button and the browser's Back leave a worker's pane, a terminal or a report, as the pane's Back does.
+const backNav = makeBackNav({
+  win: window,
+  current: () => term || pane.id ? 'worker' : report.id ? 'report' : null,
+  leave: () => $('pane-back').click(),
+});
+const steerDrafts = makeDrafts();
 // The owner's name and the product label for the detail pane and the picker, once at load (GET /api/work).
 fetch('/api/work').then(r => r.json()).then(w => { setOwner(w.owner); setProduct(w.product); }).catch(() => {});
 const $ = id => document.getElementById(id);
@@ -1131,6 +1139,11 @@ function openPane(id) {
   paneLines.innerHTML = '<div class="empty">Reading…</div>';
   paneEl.hidden = false;
   document.body.classList.add('pane-open');
+  const box = $('steer-text');
+  box.value = steerDrafts.take(id);
+  box.style.height = '';
+  if (box.value) box.style.height = Math.min(box.scrollHeight, innerHeight * 0.3) + 'px';
+  backNav.opened();
   paneHead();
   renderWork();
   readPane(pane.gen, true);
@@ -1140,6 +1153,8 @@ function closePane() {
   clearTimeout(pane.timer);
   paneCards.clear();
   $('steer-cards').innerHTML = '';
+  // An unsent message waits for the owner's return to this pane (Back, Escape or the mouse's back button).
+  steerDrafts.keep(pane.id, $('steer-text').value);
   $('steer-text').value = '';
   pane.id = null; pane.gen++;
   paneEl.hidden = true;
@@ -1494,6 +1509,7 @@ function openTerm(o) {
   termEl.hidden = false;
   termEl.classList.toggle('mac', onMac);
   document.body.classList.add('pane-open', 'term-open');
+  backNav.opened();
   $('pane-open').hidden = $('pane-desktop').hidden = $('pane-stop').hidden = true;
   $('pane-back-label').textContent = 'Jarvis';
   $('term-status').innerHTML = '';
