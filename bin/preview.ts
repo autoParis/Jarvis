@@ -21,6 +21,7 @@
 //   ?s=dense                   cards as long as real ones: a fields ask with long context, an approval with its two lines, an old free-form escalation
 //   menu > Scheduled tasks     sample rows in every status; PREVIEW_TASKS=real reads the real launchd jobs and Orca, read-only
 //   ?s=native                  a native worker just started: its "Handed to a worker" row comes from daemon/requests.ts
+//   ?s=pictures                the owner's "Anything stuck?" carries 4 attached pictures: the row of small squares
 //
 // Terminal and Codex from the plus run the real terminal code (daemon/terminal.ts, termgate.ts, termroutes.ts) on a
 // tmux server of their own, `tmux -L jarvis-preview`, never jarvisd's sessions. Open the preview at http://localhost:7718
@@ -192,7 +193,7 @@ function build(s: string) {
     { id: 905, role: 'owner', text: w.you1, created_at: ago(30) },
     { id: 900, role: 'jarvis-work', text: '', ms: 488_000, created_at: ago(29) },
     { id: 902, role: 'jarvis', text: w.jarvis2, created_at: ago(29) },
-    { id: 906, role: 'owner', text: w.you2, created_at: ago(8), ...(s === 'reply' ? { reply_to: 901 } : {}) },
+    { id: 906, role: 'owner', text: s === 'pictures' ? `${w.you2}\n${[1, 2, 3, 4].map(n => `[image: /r/data/uploads/20261109T140000-a${n}f3.png]`).join('\n')}` : w.you2, created_at: ago(8), ...(s === 'reply' ? { reply_to: 901 } : {}) },
     { id: 903, role: 'jarvis', text: w.jarvis3, created_at: ago(7) },
     ...(s === 'docs' ? [{ id: 904, role: 'jarvis', text: `I wrote up the story draft. It covers the menu button, the list and the chat card.\n\n[report: ${SAMPLE_DOCS[0].path}]`, created_at: ago(5) }] : []),
   ].map(t => t.role === 'jarvis' ? { ...t, clips: clipCount(t.text!) } : t);
@@ -305,6 +306,7 @@ function sampleMigration(name: string, changed: (m: ReturnType<typeof makeMigrat
 }
 const messagesOf = (scene: Scene) => messageOrder(scene.emails.filter(i => i.status === 'spoken').map(i => messageCard(i)));
 const cardOf = (i: Item) => askCard(i, i.kind === 'escalation' ? '#4612 Export history screen' : undefined, () => true);
+const uploads = new Map<string, { type: string; bytes: Buffer }>();
 const body = async (req: http.IncomingMessage) => { let s = ''; for await (const c of req) s += c; return s ? JSON.parse(s) : {}; };
 const send = (res: http.ServerResponse, status: number, data?: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(data === undefined ? '' : JSON.stringify(data)); };
 const FOLD_STEPS = [
@@ -401,6 +403,8 @@ http.createServer(async (req, res) => {
     if (url === '/api/push/key') return send(res, 200, { publicKey: '' });
     if (/^\/api\/work\/[^/]+\/read$/.test(url)) return send(res, 200, new URL(req.url!, 'http://x').searchParams.get('cursor') ? { lines: [], cursor: 'end' } : { lines: LINES, cursor: 'end' });
     if (url === '/image') {
+      const up = uploads.get(new URL(req.url!, 'http://x').searchParams.get('path') ?? '');
+      if (up) { res.writeHead(200, { 'content-type': up.type }); return res.end(up.bytes); }
       res.writeHead(200, { 'content-type': 'image/svg+xml' });
       return res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="520" height="320"><rect width="520" height="320" fill="#fff"/><text x="20" y="34" font-family="sans-serif" font-size="16" font-weight="600" fill="#111">Sample picture</text>${[60, 96, 132, 168, 204, 240, 276].map(y => `<rect x="20" y="${y}" width="480" height="14" rx="3" fill="#E4E4E1"/>`).join('')}</svg>`);
     }
@@ -416,6 +420,15 @@ http.createServer(async (req, res) => {
   if (url === '/api/work/side-chat') return send(res, 200, { status: 'done', result: JSON.stringify({ worker: 'n:preview1', name: 'side-chat-preview' }) });
   // The microphone here hears nothing, so a recording adds this sample line.
   if (url === '/api/today/voice') { for await (const _ of req) {} const r = today.add({ words: 'Sample words from the microphone', go: new URL(req.url!, 'http://x').searchParams.get('go') === '1' }); return send(res, r.status, { words: 'Sample words from the microphone', ...r.body }); }
+  // An attached picture stays in this process's memory, under a made-up path that /image serves back. Nothing is written.
+  if (url === '/api/upload') {
+    const parts: Buffer[] = [];
+    for await (const c of req) parts.push(c as Buffer);
+    const path = `/preview/uploads/${uploads.size + 1}.${String(req.headers['content-type']).split('/')[1] ?? 'png'}`;
+    uploads.set(path, { type: String(req.headers['content-type']), bytes: Buffer.concat(parts) });
+    console.log(`upload ${path}: ${req.headers['content-type']}, ${uploads.get(path)!.bytes.length} bytes`);
+    return send(res, 200, { path });
+  }
   const b = await body(req).catch(() => ({}));
   if (url.startsWith('/api/migration/')) {
     const r = migrationRoute(migration, 'POST', url, b);

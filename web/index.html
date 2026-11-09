@@ -166,7 +166,17 @@
   <p id="model-err" role="alert" hidden></p>
   <div id="model-body"></div>
 </section>
-<div id="viewer" role="dialog" aria-label="Image"><img alt=""><button type="button">Close</button></div>
+<div id="viewer" role="dialog" aria-label="Picture" aria-modal="true">
+  <div class="v-stage"><img alt=""><canvas aria-label="Draw on the picture"></canvas></div>
+  <button type="button" class="v-close">Close</button>
+  <!-- Only for a picture in the box, before it is sent: a pen to circle or point at something. -->
+  <div class="ink-bar" role="toolbar" aria-label="Pen" hidden>
+    <span class="ink-colors"></span>
+    <button type="button" class="ink-undo" aria-label="Undo the last mark" title="Undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg><span>Undo</span></button>
+    <button type="button" class="ink-clear" aria-label="Clear all marks" title="Clear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg><span>Clear</span></button>
+    <button type="button" class="ink-done">Done</button>
+  </div>
+</div>
 <script src="/markdown.js"></script>
 <script src="/askcard.js"></script>
 <script src="/paste.js"></script>
@@ -185,6 +195,7 @@ import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
 import { listHtml as tasksHtml, when as taskWhen } from '/tasks.js';
 import { makeModelPicker } from '/modelpicker.js';
+import { splitPictures, shotRowHtml, INK, makeInk, toImagePoint, paint, exportMarked } from '/draw.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
 import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml, chatDecisionHtml, startedNoticeHtml, undoDeadline } from '/worklist.js';
@@ -214,10 +225,8 @@ const viewer = $('viewer');
 document.addEventListener('click', e => {
   const b = e.target.closest('.shot');
   if (!b || b.classList.contains('broken')) return;
-  viewer.querySelector('img').src = b.dataset.src;
-  viewer.classList.add('open');
+  openViewer(b.dataset.src);
 });
-viewer.onclick = () => { viewer.classList.remove('open'); viewer.querySelector('img').removeAttribute('src'); };
 function links(text) {
   return esc(text).replace(/https?:\/\/[^\s)]+/g, u =>
     /\.(png|jpe?g|gif|webp)(\?|$)/i.test(u) ? `<a href="${u}" target="_blank"><img src="${u}" alt=""></a>` : `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
@@ -230,7 +239,12 @@ function add(cls, text, at, speak, quote) {
   d.className = 'msg ' + cls;
   // Jarvis writes markdown; everything else (The owner, events) shows as typed.
   if (cls === 'jarvis') { d.classList.add('md'); d.innerHTML = markdown(text, shot); titleCards(d); }
-  else d.innerHTML = (cls === 'owner' ? quoteHtml(quote) : '') + render(text);
+  else if (cls === 'owner') {
+    // His pictures go in one row of small squares above his words. A tap opens one big.
+    const p = splitPictures(text);
+    d.innerHTML = quoteHtml(quote) + shotRowHtml(p.paths, esc) + (p.text ? `<div class="msg-text">${render(p.text)}</div>` : '');
+  }
+  else d.innerHTML = render(text);
   const line = document.createElement('div');
   line.className = 'line line-' + cls;
   const turn = (cls === 'owner' || cls === 'jarvis') && Number.isInteger(speak?.id) ? speak.id : 0;
@@ -792,7 +806,7 @@ const modelPicker = makeModelPicker({
 const overlayOpen = () => modelPicker.isOpen || viewer.classList.contains('open') || !$('tasks').hidden || !$('audit').hidden || !$('newpick').hidden || !$('menu').hidden;
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (viewer.classList.contains('open')) return viewer.onclick();
+    if (viewer.classList.contains('open')) return closeViewer();
     if (modelPicker.isOpen) return modelPicker.open(false);
     if (!$('tasks').hidden) return closeTasks();
     if (!$('audit').hidden) return closeAudit();
@@ -1695,20 +1709,105 @@ function attach(f) {
   if (f.size > IMAGE_MAX) return add('event', `Can't attach ${name}: larger than 10 MB.`);
   const el = document.createElement('div');
   el.className = 'thumb';
-  el.innerHTML = '<img alt=""><button type="button" aria-label="Remove picture"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>';
-  el.querySelector('img').src = URL.createObjectURL(f);
-  const item = { file: f, el };
-  el.querySelector('button').onclick = () => unattach(item);
+  el.innerHTML = '<button type="button" class="thumb-open" aria-label="Open the picture to see it big or draw on it" title="Open, or draw on it"><img alt=""></button><button type="button" class="thumb-remove" aria-label="Remove picture"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>';
+  // `base` is the picture as attached and `strokes` the pen marks on it. `file` is what the send uploads:
+  // the base, or the base with the marks drawn in once the viewer closes.
+  const item = { file: f, base: f, baseUrl: URL.createObjectURL(f), strokes: [], el, ready: Promise.resolve() };
+  el.querySelector('img').src = item.baseUrl;
+  el.querySelector('.thumb-open').onclick = () => openViewer(item.baseUrl, item);
+  el.querySelector('.thumb-remove').onclick = () => unattach(item);
   attached.push(item);
   pending.append(el);
   idleLabel();
 }
 function unattach(item) {
-  URL.revokeObjectURL(item.el.querySelector('img').src);
+  URL.revokeObjectURL(item.baseUrl);
+  if (item.markedUrl) URL.revokeObjectURL(item.markedUrl);
   item.el.remove();
   attached = attached.filter(a => a !== item);
   idleLabel();
 }
+
+// ---- the big viewer. For a picture in the box it also has a pen: the marks go into the picture that is sent ----
+const vImg = viewer.querySelector('img'), vCanvas = viewer.querySelector('canvas'), inkBar = viewer.querySelector('.ink-bar');
+let editing = null, ink = null, inkColor = INK[0], drawingWith = null;
+inkBar.querySelector('.ink-colors').innerHTML = INK.map((c, i) =>
+  `<button type="button" class="ink-color" data-color="${c}" style="--c:${c}" aria-label="${i ? 'Yellow' : 'Red'} pen" aria-pressed="${!i}" title="${i ? 'Yellow' : 'Red'}"></button>`).join('');
+function openViewer(src, item) {
+  editing = item ?? null;
+  viewer.classList.toggle('edit', !!editing);
+  inkBar.hidden = !editing;
+  vCanvas.hidden = !editing;
+  if (editing) {
+    ink = makeInk(editing.strokes);
+    const ready = () => { vCanvas.width = vImg.naturalWidth; vCanvas.height = vImg.naturalHeight; redraw(); };
+    vImg.onload = ready;
+  } else vImg.onload = null;
+  vImg.src = src;
+  viewer.classList.add('open');
+  viewer.querySelector(editing ? '.ink-done' : '.v-close').focus({ preventScroll: true });
+}
+function redraw() {
+  const ctx = vCanvas.getContext('2d');
+  ctx.clearRect(0, 0, vCanvas.width, vCanvas.height);
+  paint(ctx, ink.strokes);
+  inkBar.querySelector('.ink-undo').disabled = !ink.canUndo;
+  inkBar.querySelector('.ink-clear').disabled = !ink.strokes.length;
+}
+// Closing saves: a picture with marks is replaced, in the box and for the send, by one with the marks drawn in.
+function closeViewer() {
+  if (editing) saveMarks(editing, ink.strokes);
+  editing = ink = drawingWith = null;
+  viewer.classList.remove('open', 'edit');
+  vImg.onload = null;
+  vImg.removeAttribute('src');
+}
+function saveMarks(item, strokes) {
+  if (strokes === item.strokes) return;
+  item.strokes = strokes;
+  const img = new Image();
+  img.src = item.baseUrl;
+  item.ready = img.decode()
+    .then(() => strokes.length ? exportMarked(img, strokes, IMAGE_MAX) : item.base)
+    .then(file => {
+      if (item.markedUrl) URL.revokeObjectURL(item.markedUrl);
+      item.markedUrl = file === item.base ? null : URL.createObjectURL(file);
+      item.file = file;
+      delete item.path; // a path from an earlier upload holds the picture without these marks
+      item.el.querySelector('img').src = item.markedUrl ?? item.baseUrl;
+      item.el.classList.toggle('marked', !!item.markedUrl);
+    })
+    .catch(err => add('event', 'Marks not saved: ' + err.message));
+}
+// A tap on the dark area closes. On a picture in the box only the buttons close, so a stroke that ends off the picture cannot.
+viewer.addEventListener('click', e => {
+  if (e.target.closest('.v-close, .ink-done') || (!editing && !e.target.closest('.ink-bar'))) closeViewer();
+});
+inkBar.addEventListener('click', e => {
+  const c = e.target.closest('.ink-color');
+  if (c) { inkColor = c.dataset.color; for (const b of inkBar.querySelectorAll('.ink-color')) b.setAttribute('aria-pressed', b === c); }
+  if (e.target.closest('.ink-undo')) { ink.undo(); redraw(); }
+  if (e.target.closest('.ink-clear')) { ink.clear(); redraw(); }
+});
+// Pointer events cover a mouse, a finger and a pen. The line is about 4 screen pixels wide at any picture size.
+const inkPoint = e => toImagePoint(e.clientX, e.clientY, vCanvas.getBoundingClientRect(), vCanvas.width, vCanvas.height);
+vCanvas.addEventListener('pointerdown', e => {
+  if (!ink || drawingWith !== null || !vCanvas.width) return;
+  e.preventDefault();
+  drawingWith = e.pointerId;
+  vCanvas.setPointerCapture(e.pointerId);
+  ink.begin(inkPoint(e), inkColor, Math.max(2, 4 * vCanvas.width / vCanvas.getBoundingClientRect().width));
+  redraw();
+});
+vCanvas.addEventListener('pointermove', e => {
+  if (e.pointerId !== drawingWith) return;
+  const all = e.getCoalescedEvents?.(); // can be empty, for example for an event a script sends
+  for (const p of all?.length ? all : [e]) ink.move(inkPoint(p));
+  redraw();
+});
+const endStroke = e => { if (e.pointerId === drawingWith) drawingWith = null; };
+vCanvas.addEventListener('pointerup', endStroke);
+vCanvas.addEventListener('pointercancel', endStroke);
 
 // ---- text ----
 let sending = false, composing = false;

@@ -3,7 +3,8 @@
 // pictures. A dictation sent the words alone and left the picture in the tray, so it went later as a second message
 // (turns 4897 and 4898). Tested by daemon/compose.test.ts.
 //
-// `tray` is the list of attached pictures, `{ file, path? }` in the order the owner added them.
+// `tray` is the list of attached pictures, `{ file, path?, ready? }` in the order the owner added them. `ready` is a
+// promise that settles once the pen marks are drawn into `file`, so the upload never takes the picture without them.
 // `upload(file)` saves one picture and returns its path, or throws. A picture keeps its path, so a clip that does not
 // send (nothing heard, no wake word) does not upload it again on the next try.
 // `post(lines)` sends the message with one `[image: path]` line per picture and returns true if a message went out.
@@ -16,6 +17,7 @@ export async function sendOut({ tray, upload, post }) {
   try {
     const lines = [];
     for (const p of pics) {
+      await p.ready; // pen marks still being drawn into the picture (web/draw.js)
       p.path ??= await upload(p.file);
       lines.push(`[image: ${p.path}]`);
     }

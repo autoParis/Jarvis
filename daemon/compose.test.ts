@@ -88,3 +88,16 @@ test('every chat send in the page goes through sendOut, so no path can skip the 
     assert.ok(open >= 0 && !before.slice(open).includes('\n}\n'), `the fetch at offset ${m.index} is not inside a sendOut post`);
   }
 });
+
+test('a picture whose pen marks are still being drawn in uploads only once they are, so the marks go out', async () => {
+  let finish!: () => void;
+  const pic: any = { file: 'plain', ready: new Promise<void>(r => { finish = r; }) };
+  pic.ready.then(() => { pic.file = 'marked'; });
+  const up = uploader();
+  const sending = sendOut({ tray: [pic], upload: up.upload, post: async () => true });
+  await new Promise(r => setTimeout(r, 10));
+  assert.deepEqual(up.calls, [], 'no upload before the marks are in');
+  finish();
+  await sending;
+  assert.deepEqual(up.calls, ['marked']);
+});
