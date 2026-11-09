@@ -156,6 +156,15 @@ test('closed requests never count as open; a failed one and an orphan do', async
   assert.doesNotMatch(wakes[0], /ctx_done|ctx_review|ctx_hidden|ctx_closing/);
 });
 
+test('a native worker in the polled rows is live: its open request is no orphan, and it is not judged stuck', async () => {
+  // main.ts hands the check Orca's poll with the native rows added (withNative). Without them every running native worker
+  // read as "Request open (working) with no live worker" (2026-11-09: 43dfae28, f918c991, 4b393f6c).
+  const { store, check, wakes } = setup([worker('n:43dfae28', { run: undefined, state: 'idle', note: 'Idle, resumes on a message' })]);
+  store.addRequest({ dispatch_id: 'n:43dfae28', action: 'worker-start', title: '#4886 Check the price' });
+  await check.tick();
+  assert.deepEqual(wakes, []);
+});
+
 test('when Orca does not answer the tick wakes nobody and forgets nothing', async () => {
   const { store, check, wakes, failOrca } = setup();
   store.addRequest({ dispatch_id: 'ctx_1', action: 'worker-start', title: 'Orphan' });
