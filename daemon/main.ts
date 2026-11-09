@@ -133,12 +133,16 @@ const backfilled = backfillRequests(store);
 if (backfilled) log(`requests: backfilled ${backfilled} from earlier worker starts`);
 requests.backfill().catch(e => log(`requests: backfill failed: ${e}`));
 
+// Set once the Today list exists, so a native sync that runs during the start (a report recovered from a transcript) waits.
+let todayReady = false;
 // ---- Native workers: Claude background sessions jarvisd starts itself, beside the Orca path (native.ts, nativeroutes.ts) ----
 const native = makeNative({
   store, log, jarvisUrl: `http://127.0.0.1:${PORT}`, dataDir: join(ROOT, 'data'),
   onChange: () => publishWork(),
   onReport: (w, text, final) => {
-    if (!final) return; // a turn that ended without DONE or FAILED is the worker asking or pausing; the poll reports a silent one
+    if (!final) return; // a turn that ended without DONE or FAILED is the worker asking or pausing; native.stopHook reports a silent one
+    // The request and the Today row move on now, not at the next poll.
+    nativeSync().catch(e => log(`native sync after a report: ${e}`));
     const line = `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) reported ${w.outcome}:\n${text}`;
     store.addTurn({ role: 'event', text: line });
     broadcast({ type: 'event', text: line, at: new Date().toISOString() });
@@ -230,7 +234,6 @@ const work = makeWorkPoller({
   onChange: () => publishWork(),
   gone: JSON.parse(store.getState('workGone') ?? '[]'), onGone: ids => store.setState('workGone', JSON.stringify(ids)),
   onPolled: (w, workers, complete) => {
-    orcaPolledAt = Date.now();
     settleStopNotices(w, workers, complete).catch(e => log(`stop notices: ${e}`));
     // With the native rows, so a native request finds its conversation and its live state (Orca's poll lists only its own).
     requests.sync(withNative(w), workers, complete);
@@ -274,11 +277,14 @@ const hiddenIds = (): string[] => JSON.parse(store.getState('workHidden') ?? '[]
 /** Orca's answer when the worker or its terminal no longer exists. Close and Open then just drop the row. */
 const STALE = /\b(dispatch_inactive|terminal_handle_stale)\b/;
 work.start();
-// When the Orca poll last answered. Its onPolled syncs the requests and Today; with Orca closed, the native poll does it.
-let orcaPolledAt = 0;
-/** After a native poll while Orca is silent: the native requests and the Today rows behind them move on without Orca. */
+/**
+ * After every native poll and every final native report: the native requests and the Today rows behind them, from the
+ * native rows alone. Orca's poll syncs them too while it answers, but they never wait for it: before 2026-11-09 this ran
+ * only while Orca had been silent for 90 s, so with Orca up a native DONE reached its request and its Today row only at
+ * Orca's next poll. Waits for `today`, which is made further down.
+ */
 async function nativeSync() {
-  if (Date.now() - orcaPolledAt < 90_000) return;
+  if (!todayReady) return;
   const w = work.current();
   // `complete` false and Orca's requests left out: a silent Orca proves nothing about its own workers.
   await requests.sync(withNative(w), [], false, r => r.dispatch_id.startsWith(ROW_PREFIX));
@@ -528,6 +534,7 @@ const today = makeToday({
   discuss: words => fromOwner(`Let's talk about this one from my Today list: ${words}`),
   released: i => { if (i.dispatch && !existsSync(KILL_FILE)) brain.send(`[today] ${OWNER} released item ${i.id}, dispatch ${i.dispatch}. Close the loop on its worker and branch ("Today list" in CLAUDE.md). Reply SILENT unless something needs him.`); },
 });
+todayReady = true;
 setInterval(() => { today.tick().catch(e => log(`today timer: ${e}`)); }, BACKSTOP_MS);
 today.pass('daemon started').catch(e => log(`today pass: ${e}`));
 

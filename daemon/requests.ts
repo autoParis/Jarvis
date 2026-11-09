@@ -158,6 +158,17 @@ function nativeReport(store: Store, dispatch: string): { subject: string; body: 
   return { subject: w.name, body: w.report, meta: JSON.stringify({ outcome: w.outcome === 'done' ? 'succeeded' : 'failed' }), created_at: at };
 }
 
+/**
+ * A native worker's worktree folder name, or undefined when it runs in the repo's main checkout (a question, a draft,
+ * `worktree: main`): that folder is not its own, and other sessions there are not its conversation.
+ */
+function nativeWorktree(store: Store, nw: { cwd: string; repo?: string | null; approval_id: number | null }): string | undefined {
+  let repo = nw.repo ?? undefined;
+  if (!repo && nw.approval_id) { try { repo = JSON.parse(store.approval(nw.approval_id)?.args ?? '{}').repo; } catch {} }
+  const trim = (p: string) => p.replace(/\/+$/, '');
+  return typeof repo === 'string' && trim(repo) === trim(nw.cwd) ? undefined : basename(nw.cwd);
+}
+
 /** True when the owner or the brain sent a native worker more work after its last report: the report no longer settles it. */
 function repliedAfter(store: Store, dispatch: string, reportAt: string): boolean {
   if (!dispatch.startsWith(ROW_PREFIX)) return false;
@@ -244,13 +255,17 @@ export function makeRequests(opts: {
     for (const r of store.requests()) {
       if (only && !only(r)) continue;
       const w = byDispatch.get(r.dispatch_id);
+      // A native worker is not in Orca's list: its folder and session are on its own row (native.ts), as Orca's are on w.
+      const nw = r.dispatch_id.startsWith(ROW_PREFIX) ? store.nativeWorker(r.dispatch_id.slice(ROW_PREFIX.length)) : undefined;
       const f: Parameters<Store['updateRequest']>[1] = {};
-      const path = w?.path;
+      const path = w?.path ?? nw?.cwd;
       // A question runs read-only in the repo's main checkout. Other sessions there are not its conversation, and a
-      // PR it names in its answer is not its own, so it takes no worktree and no PR.
+      // PR it names in its answer is not its own, so it takes no worktree and no PR. Nor does a native worker in the main checkout.
       const question = r.action === 'question';
-      if (path && !question && basename(path) !== r.worktree) f.worktree = basename(path);
-      if (w?.session && w.session !== r.session) f.session = w.session;
+      const worktree = nw ? nativeWorktree(store, nw) : path && basename(path);
+      if (worktree && !question && worktree !== r.worktree) f.worktree = worktree;
+      const session = w?.session ?? nw?.session_id;
+      if (session && session !== r.session) f.session = session;
       const cur = { ...r, ...f };
       const row = conversation(cur, rows);
 
@@ -300,8 +315,9 @@ export function makeRequests(opts: {
       const status = statusOf(row, stopped ? undefined : outcome, isLive && !stopped, pr, r.status === 'done' ? false : check?.open, !!settled || over || stopped);
       if (status && status !== r.status) { f.status = status; log('request status', { request: r.id, dispatch: r.dispatch_id, from: r.status, to: status }); }
 
-      // A done request leaves 24 hours after it became done, by its status_at. Never while Orca is not answering.
-      if (r.status === 'done' && !f.status && !work.error && now() - Date.parse(`${r.status_at.replace(' ', 'T')}Z`) >= DONE_KEEP_MS) {
+      // A done request leaves 24 hours after it became done, by its status_at. Never while Orca is not answering, for an
+      // Orca request: a native one is settled by its own row, which needs no Orca.
+      if (r.status === 'done' && !f.status && (!work.error || !!nw) && now() - Date.parse(`${r.status_at.replace(' ', 'T')}Z`) >= DONE_KEEP_MS) {
         f.removed = true;
         log('request removed a day after done', { request: r.id, dispatch: r.dispatch_id });
       }
