@@ -130,7 +130,7 @@ if (run) logIds.run = run;
 log(ORCA_LINK ? 'orca identity' : 'orca link off: no identity terminal, no Orca watcher', { handle });
 
 // ---- Requests sidebar: one row per worker started for the owner, its status kept by the work poller (requests.ts) ----
-const requests = makeRequests({ store, log, orca, repoOf: githubRepo, onChange: list => broadcast({ type: 'requests', requests: list }) });
+const requests = makeRequests({ store, log, orca, repoOf: githubRepo, mergeRepo: ROOT, onChange: list => broadcast({ type: 'requests', requests: list }) });
 const backfilled = backfillRequests(store);
 if (backfilled) log(`requests: backfilled ${backfilled} from earlier worker starts`);
 requests.backfill().catch(e => log(`requests: backfill failed: ${e}`));

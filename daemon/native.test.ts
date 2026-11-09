@@ -620,6 +620,28 @@ test('the reaper ends a finished session idle for an hour, not a busy one, and a
   void store;
 });
 
+test('a done session that turns busy with no new turn (a resume, a compaction) is done again once idle', async () => {
+  // 5276-keep-the-muse-digest (2026-11-09): reported DONE, went busy for a compaction, and stayed "working" in Stories.
+  const { native, listing } = setupInteractive();
+  const w = await native.start({ name: 'muse-463', cwd: '/repo', brief: 'b', interactive: true });
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: PR #5297 is READY.' });
+  listing[0].status = 'busy';
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'working');
+  listing[0].status = 'idle';
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'done');
+  assert.equal(native.rows()[0].state, 'idle');
+
+  // A turn after the DONE that ends without DONE or FAILED is new work in progress: idle does not call it done.
+  listing[0].status = 'busy';
+  await native.poll();
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'Waiting for CI on the new head.' });
+  listing[0].status = 'idle';
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'working');
+});
+
 // ---- Stage 3: typing into the session ----
 
 test('typedBytes wraps the text in a bracketed paste and ends with a carriage return; escapes are dropped', () => {
