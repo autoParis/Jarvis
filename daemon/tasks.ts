@@ -29,6 +29,8 @@ export type Task = {
   status: Status; strip: 'hourly' | 'runs'; marks: Mark[];
   lastError?: { at?: string; text: string; since?: string };
   logTail?: { file: string; at: string; text: string };
+  /** The owner hid it on the screen. It still runs and is still sampled. jarvisd keeps the list (state key tasksHidden), not the plist. */
+  hidden?: boolean;
 };
 type RunRow = { at: number; outcome: Outcome; note?: string };
 
@@ -321,9 +323,29 @@ export function makeTasks(d: TasksDeps) {
     };
   }
 
+  const hiddenIds = (): string[] => { try { const v = JSON.parse(d.getState('tasksHidden') ?? '[]'); return Array.isArray(v) ? v.filter(x => typeof x === 'string') : []; } catch { return []; } };
+
   async function list(): Promise<Task[]> {
     const [jobs, orca] = await Promise.all([launchdJobs(), d.orca ? orcaTasks().catch(e => { d.log?.(`tasks: orca read failed: ${e}`); return []; }) : []]);
-    return [...jobs.map(launchdTask), ...orca, ...d.jarvisd.map(jarvisdTask)].sort((a, b) => a.name.localeCompare(b.name));
+    const hidden = new Set(hiddenIds());
+    return [...jobs.map(launchdTask), ...orca, ...d.jarvisd.map(jarvisdTask)].map(t => hidden.has(t.id) ? { ...t, hidden: true } : t)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Hides or shows one task on the screen. Only jarvisd's list of hidden ids changes: the job, its plist and its
+   * schedule stay as they are, so a hidden job still runs. Hiding needs a task that is in the list now. Showing takes any id,
+   * so an id whose job is gone can still be cleared.
+   */
+  async function setHidden(id: string, hide: boolean): Promise<{ status: number; error?: string; hidden?: string[] }> {
+    const ids = new Set(hiddenIds());
+    if (hide && !ids.has(id) && !(await list()).some(t => t.id === id)) return { status: 404, error: 'That task is not in the list any more.' };
+    ids.delete(id);
+    if (hide) ids.add(id);
+    const next = [...ids].slice(-200);
+    d.setState('tasksHidden', JSON.stringify(next));
+    d.log?.(hide ? 'tasks: hidden on the screen' : 'tasks: shown on the screen', { id });
+    return { status: 200, hidden: next };
   }
 
   let saving = false;
@@ -402,14 +424,14 @@ export function makeTasks(d: TasksDeps) {
     return last || 'bootstrap failed';
   }
 
-  return { list, sample, save, record };
+  return { list, sample, save, record, setHidden, hiddenIds };
 }
 
 export const humanize = (label: string) => sentenceCase(label.split('.').at(-1)!.replace(/[-_]+/g, ' '));
 const sentenceCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
- * The routes. GET lists, POST /api/tasks/save edits one launchd job, POST /api/tasks/ask-fix sends the brain the
+ * The routes. GET lists, POST /api/tasks/save edits one launchd job, POST /api/tasks/hide hides or shows a row, POST /api/tasks/ask-fix sends the brain the
  * "Ask Jarvis to fix" message as the owner's chat message. That message is built here from a fresh read, so it names
  * the task's real source and last error. It is not a send from the chat box, so it never takes the box's pictures.
  */
@@ -420,6 +442,12 @@ export async function tasksRoute(t: ReturnType<typeof makeTasks>, method: string
     if (typeof b.id !== 'string' || typeof b.cron !== 'string') return { status: 400, body: { error: 'id and cron are required' } };
     const r = await t.save(b.id, b.cron, typeof b.description === 'string' ? b.description : '');
     return { status: r.status, body: { error: r.error, task: r.task } };
+  }
+  if (method === 'POST' && url === '/api/tasks/hide') {
+    const b = await body();
+    if (typeof b.id !== 'string' || !b.id || typeof b.hidden !== 'boolean') return { status: 400, body: { error: 'id and hidden (true or false) are required' } };
+    const r = await t.setHidden(b.id, b.hidden);
+    return { status: r.status, body: r.error ? { error: r.error } : { hidden: r.hidden } };
   }
   if (method === 'POST' && url === '/api/tasks/ask-fix' && ask) {
     const b = await body();

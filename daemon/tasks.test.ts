@@ -8,7 +8,7 @@ import {
   schedSentence, everySentence, fromCron, toCron, parsePrint, marks, statusOf, lastErrorOf, orcaOutcome, rruleSentence,
   makeTasks, execRun, humanize, frequent, tasksRoute, type Run, type Sched,
 } from './tasks.ts';
-import { fixMessage, markLabel, listHtml } from '../web/tasks.js';
+import { fixMessage, markLabel, listHtml, countText, shownTask } from '../web/tasks.js';
 
 const HOUR = 3_600_000;
 const NOW = Date.parse('2026-11-09T15:30:00Z'); // 10:30 AM Eastern
@@ -271,4 +271,65 @@ test('Ask Jarvis to fix: the daemon builds the message from a fresh read, only f
   assert.equal(said.length, 1);
   assert.match(said[0], /^Scheduled task "Tick" shows Failing\. Source: launchd job io\.test\.tick \(.*io\.test\.tick\.plist\)\./);
   assert.match(said[0], /Exit code 3\./);
+});
+
+test('Hide keeps the job as it is: jarvisd stores the id, the plist and the run samples do not change', async () => {
+  const { tasks, dir, jobs, pass, calls } = setup();
+  const before = readFileSync(join(dir, 'io.test.tick.plist'), 'utf8');
+  const route = (b: Record<string, unknown>) => tasksRoute(tasks, 'POST', '/api/tasks/hide', async () => b);
+  assert.equal((await route({ id: 'launchd:io.test.tick' }))?.status, 400); // hidden must be true or false
+  assert.equal((await route({ id: 'launchd:io.test.nope', hidden: true }))?.status, 404);
+  const r = await route({ id: 'launchd:io.test.tick', hidden: true });
+  assert.equal(r?.status, 200);
+  assert.deepEqual((r?.body as { hidden: string[] }).hidden, ['launchd:io.test.tick']);
+  assert.deepEqual(tasks.hiddenIds(), ['launchd:io.test.tick']);
+  const list = await tasks.list();
+  assert.equal(list.find(t => t.id === 'launchd:io.test.tick')!.hidden, true);
+  assert.equal(list.find(t => t.id === 'launchd:io.test.weekly')!.hidden, undefined);
+  assert.equal(readFileSync(join(dir, 'io.test.tick.plist'), 'utf8'), before);
+  assert.ok(!calls.some(c => /^boot/.test(c)), 'hide never reloads a job');
+  // A hidden job still runs and is still sampled, so its failure still shows.
+  await tasks.sample();
+  jobs['io.test.tick'] = { runs: 11, exit: 2 }; pass(60_000); await tasks.sample();
+  const tick = (await tasks.list()).find(t => t.id === 'launchd:io.test.tick')!;
+  assert.equal(tick.status, 'Failing');
+  assert.equal(shownTask(tick), true);
+  // Show takes it off the list again. Hiding twice keeps one entry.
+  await route({ id: 'launchd:io.test.weekly', hidden: true });
+  await route({ id: 'launchd:io.test.weekly', hidden: true });
+  assert.deepEqual(tasks.hiddenIds(), ['launchd:io.test.tick', 'launchd:io.test.weekly']);
+  await route({ id: 'launchd:io.test.tick', hidden: false });
+  assert.deepEqual(tasks.hiddenIds(), ['launchd:io.test.weekly']);
+  // An id whose job is gone can still be shown again, so the list can be cleared.
+  assert.equal((await route({ id: 'launchd:io.test.gone', hidden: false }))?.status, 200);
+});
+
+test('the screen leaves hidden tasks out, offers Show N hidden, and always shows a hidden task that fails', () => {
+  const base = { source: 'launchd', sourceLabel: 's', schedule: 'Every hour', editable: false, description: '', strip: 'runs', marks: [] };
+  const tasks = [
+    { ...base, id: 'a', name: 'Alpha', status: 'OK' },
+    { ...base, id: 'b', name: 'Factory runner', status: 'OK', hidden: true },
+    { ...base, id: 'c', name: 'Factory retro', status: 'Failing', hidden: true, lastError: { text: 'boom' } },
+  ];
+  const html = listHtml(tasks, null, NOW);
+  assert.match(html, /Alpha/);
+  assert.doesNotMatch(html, /Factory runner/);
+  assert.match(html, /Factory retro <em class="tk-tag">Hidden<\/em>/); // failing: it shows, marked Hidden
+  assert.match(html, /data-showhidden aria-pressed="false">Show 2 hidden<\/button>/);
+  assert.match(html, /aria-label="Hide Alpha from this list"/);
+  assert.match(html, /data-hide-task="c" data-unhide aria-label="Show Factory retro in the list again"/);
+  assert.equal(countText(tasks), '2 tasks, 2 hidden');
+  const all = listHtml(tasks, null, NOW, true);
+  assert.match(all, /Factory runner <em class="tk-tag">Hidden<\/em>/);
+  assert.match(all, />Leave out 2 hidden<\/button>/);
+  assert.equal(countText(tasks, true), '3 tasks');
+  assert.doesNotMatch(listHtml([tasks[0]], null, NOW), /showhidden/); // nothing hidden: no link
+  assert.match(listHtml([tasks[1]], null, NOW), /Every task is hidden\./);
+});
+
+test('jarvisd serves Hide as an owner action from the app page', () => {
+  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+  assert.match(main, /const AS_OWNER = new Set\(\[[^\]]*'\/api\/tasks\/hide'/);
+  const page = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  assert.match(page, /fetch\('\/api\/tasks\/hide', \{ method: 'POST', body: JSON\.stringify\(\{ id, hidden: hide \}\) \}\)/);
 });

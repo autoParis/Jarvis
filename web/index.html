@@ -193,7 +193,7 @@ import { boxAfterSend, settleBox, withPictures } from '/dictate.js';
 import { sendOut, imageParams } from '/compose.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
-import { listHtml as tasksHtml, when as taskWhen } from '/tasks.js';
+import { listHtml as tasksHtml, when as taskWhen, countText as taskCount } from '/tasks.js';
 import { makeModelPicker } from '/modelpicker.js';
 import { splitPictures, shotRowHtml, INK, makeInk, toImagePoint, paint, exportMarked } from '/draw.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
@@ -834,11 +834,11 @@ document.addEventListener('keydown', e => {
 
 // ---- Scheduled tasks: read fresh from launchd, Orca and jarvisd on every open (daemon/tasks.ts, web/tasks.js) ----
 const tasksEl = $('tasks'), tasksBody = $('tasks-body');
-let taskList = [], taskOpen = null;
+let taskList = [], taskOpen = null, taskShowHidden = false;
 const closeTasks = () => { tasksEl.hidden = true; moreBtn.focus(); };
 const paintTasks = () => {
-  tasksBody.innerHTML = tasksHtml(taskList, taskOpen);
-  $('tasks-count').textContent = `${taskList.length} task${taskList.length === 1 ? '' : 's'}`;
+  tasksBody.innerHTML = tasksHtml(taskList, taskOpen, Date.now(), taskShowHidden);
+  $('tasks-count').textContent = taskCount(taskList, taskShowHidden);
 };
 async function loadTasks() {
   const r = await fetch('/api/tasks');
@@ -851,13 +851,26 @@ async function loadTasks() {
 $('tasks-close').onclick = closeTasks;
 $('tasksbtn').onclick = async () => {
   showMenu(false);
-  taskOpen = null;
+  taskOpen = null; taskShowHidden = false;
   tasksBody.innerHTML = '<p class="tk-empty">Reading launchd, Orca and jarvisd…</p>';
   $('tasks-count').textContent = '';
   tasksEl.hidden = false;
   try { await loadTasks(); } catch (err) { tasksBody.innerHTML = `<p class="tk-empty">Could not read the tasks: ${esc(err.message)}</p>`; }
 };
 tasksBody.addEventListener('click', async e => {
+  if (e.target.closest('[data-showhidden]')) { taskShowHidden = !taskShowHidden; paintTasks(); tasksBody.querySelector('[data-showhidden]')?.focus({ focusVisible: e.detail === 0 }); return; }
+  const hideBtn = e.target.closest('[data-hide-task]');
+  if (hideBtn) {
+    // Hide or show changes only jarvisd's list of hidden ids. The row moves at once, and moves back if the save fails.
+    const id = hideBtn.dataset.hideTask, hide = !('unhide' in hideBtn.dataset);
+    const set = h => { taskList = taskList.map(x => x.id === id ? { ...x, hidden: h } : x); paintTasks(); };
+    if (hide && taskOpen === id) taskOpen = null;
+    set(hide);
+    const r = await fetch('/api/tasks/hide', { method: 'POST', body: JSON.stringify({ id, hidden: hide }) }).catch(() => null);
+    if (!r?.ok) { set(!hide); add('event', 'Hide: not saved, try again.'); return; }
+    (tasksBody.querySelector(`[data-hide-task="${CSS.escape(id)}"]`) ?? tasksBody.querySelector('[data-showhidden]'))?.focus({ focusVisible: e.detail === 0 });
+    return;
+  }
   const fix = e.target.closest('.tk-fix');
   if (fix) {
     const t = taskList.find(x => x.id === fix.dataset.id);
