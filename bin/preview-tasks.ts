@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fixMessage } from '../web/tasks.js';
-import { marks, statusOf, lastErrorOf, fromCron, toCron, schedSentence, makeTasks, execRun, type Task, type Outcome } from '../daemon/tasks.ts';
+import { marks, statusOf, lastErrorOf, fromCron, toCron, schedSentence, makeTasks, execRun, tasksRoute, type Task, type Outcome } from '../daemon/tasks.ts';
 
 const HOUR = 3_600_000;
 type Spec = { id: string; name: string; cron: string; source: Task['source']; label: string; hourly: boolean; every: number; bad?: number[]; failAll?: string; description: string; editable?: boolean };
@@ -64,6 +64,14 @@ export function makePreviewTasks() {
       if ('error' in s) return { status: 400, body: { error: s.error } };
       list = list.map(t => t.id === b.id ? { ...t, cron: toCron(s), schedule: schedSentence(s), description: String(b.description ?? '') } : t);
       return { status: 200, body: { task: list.find(t => t.id === b.id) } };
+    }
+    // Hide or show: real mode keeps the hidden ids in this process's memory (the state map), sample mode in the sample list.
+    if (method === 'POST' && url === '/api/tasks/hide') {
+      if (tasks) return tasksRoute(tasks, method, url, body);
+      const b = await body();
+      if (typeof b.id !== 'string' || typeof b.hidden !== 'boolean') return { status: 400, body: { error: 'id and hidden (true or false) are required' } };
+      list = list.map(t => t.id === b.id ? { ...t, hidden: b.hidden || undefined } : t);
+      return { status: 200, body: { hidden: list.filter(t => t.hidden).map(t => t.id) } };
     }
     if (method === 'POST' && url === '/api/tasks/ask-fix') {
       const b = await body(), t = (tasks ? await tasks.list() : list).find(x => x.id === b.id);
