@@ -136,6 +136,30 @@ const outcomeOf = (report: string): 'done' | 'failed' | null => {
   return m ? (m[1].toUpperCase() === 'DONE' ? 'done' : 'failed') : null;
 };
 
+/**
+ * When a finished row finished, in ms: its DONE or FAILED report, else its last change. The report time does not move when
+ * the reaper stops the session an hour later, so the row leaves the list a day after the report, no later than its request
+ * (requests.ts DONE_KEEP_MS, counted from the request's done time, which follows the report). Counted from the last change,
+ * the row outlived its request by that hour and fell into its group's Done fold.
+ */
+export function finishedAt(w: Pick<NativeWorker, 'outcome' | 'report_at' | 'updated_at'>): number {
+  return Date.parse(w.outcome && w.report_at ? w.report_at : w.updated_at);
+}
+
+/**
+ * The work-list state of a native worker. A session Jarvis stopped itself (the idle reaper, the desktop handoff) did not
+ * exit: it waits on the owner when an ask is open, and is idle otherwise. As `exited` the request layer read it as failed
+ * (requests.ts statusOf), so a worker waiting on an ask was reported failed. Only a stop or a death keeps `exited`.
+ */
+export function rowState(w: Pick<NativeWorker, 'state' | 'waiting_for'>, asking: boolean): WorkRow['state'] {
+  if (w.state === 'blocked') return 'waiting';
+  if (w.state === 'working' || w.state === 'starting') return asking ? 'waiting' : 'working';
+  if (asking && (w.state === 'done' || w.state === 'stopped')) return 'waiting';
+  if (w.state === 'done') return 'idle';
+  if (w.state === 'stopped' && (w.waiting_for === IDLE_STOPPED || w.waiting_for === DESKTOP_WAITING)) return 'idle';
+  return 'exited';
+}
+
 export function runClaude(args: string[], cwd?: string): Promise<ClaudeRun> {
   return new Promise(resolve => execFile('claude', args, { cwd, env: { ...cleanEnv, HOME: process.env.HOME }, timeout: 10 * 60_000, maxBuffer: 20 * 1024 * 1024 },
     (err, out, errOut) => resolve({ code: err ? (err as any).code ?? 1 : 0, out: String(out), err: String(errOut) })));
@@ -274,6 +298,19 @@ export function makeNative(o: {
     const w = row(id)!;
     o.onChange(w);
     return w;
+  };
+  /**
+   * The words the work list sorts a row by: the task title and spec the owner approved. The name is only their slug, which
+   * drops the "#" of "#4886 Check the price", so classify put every story worker in Other. A row with no start card (a
+   * session continued on the phone) falls back to its name.
+   */
+  const taskOf = (w: NativeWorker): { title: string; spec?: string } => {
+    const a = w.approval_id ? store.approval(w.approval_id) : undefined;
+    let args: any;
+    try { args = a ? JSON.parse(a.args) : undefined; } catch {}
+    return typeof args?.taskTitle === 'string' && args.taskTitle.trim()
+      ? { title: args.taskTitle, spec: typeof args.spec === 'string' ? args.spec : undefined }
+      : { title: w.name };
   };
   const pendingCard = (id: string) => [...held.values()].some(h => h.worker === id);
   /** A task still under way: the only state a dead terminal is resumed from on its own, and the one that gets the nudge. */
@@ -611,21 +648,26 @@ export function makeNative(o: {
 
     rows(): WorkRow[] {
       const onPhone = (w: NativeWorker) => !!w.remote && alive.has(w.id) && w.state !== 'stopped';
-      return api.list().filter(w => w.state !== 'abandoned' && !(['done', 'failed', 'stopped'].includes(w.state) && now() - Date.parse(w.updated_at) > ROW_MAX_AGE_MS && !onPhone(w))).map(w => {
+      // An open ask holds the row in view as waiting, whatever its process does (rowState).
+      const asks = new Map(store.openItems().filter(i => i.source === 'native' && i.dispatch_id).map(i => [i.dispatch_id!, i.subject || 'A question for you'] as const));
+      const asking = (w: NativeWorker) => asks.has(`${ROW_PREFIX}${w.id}`);
+      return api.list().filter(w => w.state !== 'abandoned' && !(['done', 'failed', 'stopped'].includes(w.state) && now() - finishedAt(w) > ROW_MAX_AGE_MS && !onPhone(w) && !asking(w))).map(w => {
+        const task = taskOf(w);
         const r: WorkRow = {
-          id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(w.name),
-          state: w.state === 'blocked' ? 'waiting' : w.state === 'working' || w.state === 'starting' ? 'working' : w.state === 'done' ? 'idle' : 'exited',
+          id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(task.title, task.spec),
+          state: rowState(w, asking(w)),
           worktree: basename(w.cwd), sideChat: false,
           // An interactive session takes a message in any state: a stopped or failed one is resumed first.
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
           native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}) },
         };
         if (w.state === 'blocked' && w.waiting_for) r.note = w.waiting_for;
+        else if (asking(w)) r.note = asks.get(`${ROW_PREFIX}${w.id}`);
         else if (w.state === 'done' && onPhone(w)) r.note = `In the Claude app as "${w.remote}"`;
         else if (w.state === 'done') r.note = `Done ${ago(now() - Date.parse(w.report_at ?? w.updated_at))}`;
         else if (w.state === 'stopped') r.note = w.waiting_for ?? 'Stopped';
         else if (w.state === 'failed') r.note = w.waiting_for ?? 'Failed';
-        if (['done', 'failed', 'stopped'].includes(w.state) && !onPhone(w)) r.endedAt = new Date(Date.parse(w.state === 'done' ? w.report_at ?? w.updated_at : w.updated_at)).toISOString();
+        if (['done', 'failed', 'stopped'].includes(w.state) && !onPhone(w) && !asking(w)) r.endedAt = new Date(finishedAt(w)).toISOString();
         return r;
       });
     },
@@ -792,8 +834,10 @@ export function makeNative(o: {
           next = row(w.id) ?? next;
           // The reaper: finished or waiting on an ask, and idle for an hour since its last report, its last resume or that ask
           // (the row's own timestamps, so a jarvisd restart does not reset the hour).
-          // A session on the phone is left running: ending it would take it out of the Claude app.
-          if (a?.pid && a.status === 'idle' && next.state !== 'stopped' && !next.remote) {
+          // A session on the phone gets the same hour, counted from its last phone turn or its Continue on phone: left running,
+          // it kept its row open for good (teal-and-mint-app-theme-420, idle from 2026-11-08 to 11-09). A message resumes it with
+          // its Remote Control name, and Continue on phone brings it back to the Claude app.
+          if (a?.pid && a.status === 'idle' && next.state !== 'stopped') {
             const since = idleFrom(next);
             if (since !== undefined && now() - since >= IDLE_REAP_MS) { api.reap(next); next = row(w.id) ?? next; }
           }

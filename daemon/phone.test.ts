@@ -183,18 +183,23 @@ test('a worker jarvisd runs is ended and resumed with the flag; a busy one is re
   assert.ok(s.spawns[s.spawns.length - 1].argv.includes('--remote-control=Photos'));
 });
 
-test('the idle reaper leaves a phone session running', async () => {
+test('the idle reaper ends a phone session idle for an hour, so its row does not stay open for good', async () => {
   const s = setup();
   const r = await s.native.phone({ sessionId: SID, cwd: '/repo', title: 'Photos' });
   assert.equal(r.ok, true);
-  s.tick(IDLE_REAP_MS + 60_000);
   await s.native.poll();
-  assert.deepEqual(s.killedGroups, [], 'a finished worker idle this long is reaped; a phone session is not');
-  assert.equal(s.native.get(SID)?.state, 'done');
-  assert.ok(s.native.rows().some(x => x.native?.remote === 'Photos'), 'and it stays in the list past the 24 hours while it lives');
+  s.tick(IDLE_REAP_MS - 60_000);
+  await s.native.poll();
+  assert.deepEqual(s.killedGroups, [], 'not before the hour from Continue on phone');
+  assert.match(s.native.rows()[0].note ?? '', /In the Claude app/);
+  s.tick(2 * 60_000);
+  await s.native.poll();
+  assert.equal(s.killedGroups.length, 1, 'idle an hour on the phone: ended like any finished session');
+  assert.equal(s.native.get(SID)?.state, 'stopped');
+  assert.equal(s.native.get(SID)?.remote, 'Photos', 'a message resumes it with its Remote Control name');
+  assert.equal(s.native.rows()[0].state, 'idle');
   s.tick(25 * 3_600_000);
-  await s.native.poll();
-  assert.ok(s.native.rows().some(x => x.native?.remote === 'Photos'));
+  assert.deepEqual(s.native.rows(), [], 'and its row leaves after the day like any finished row');
 });
 
 test('a Stop hook on a phone session leaves it idle, not working', async () => {

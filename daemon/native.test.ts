@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, type Approval } from './store.ts';
-import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, NUDGE, typedBytes, type NativeWorker } from './native.ts';
+import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, IDLE_STOPPED, DESKTOP_WAITING, NUDGE, typedBytes, rowState, finishedAt, type NativeWorker } from './native.ts';
+import { statusOf } from './requests.ts';
 
 const SESSION = '00000000-0000-4000-8000-000000000001';
 
@@ -695,4 +696,70 @@ test('a session in the desktop app stays stopped through the polls, so a later m
   assert.equal(r.state, 'stopped');
   assert.equal(r.waiting_for, 'Open in the Claude desktop app');
   assert.equal(spawns.length, 1, 'the desktop-held session is not treated as dead');
+});
+
+// ---- The work list's sections and stale rows (2026-11-09) ----
+
+test('a story worker sorts by its approved task title, not by its name, which drops the "#"', async () => {
+  const { native, store } = setupInteractive();
+  const a = store.addApproval({ action: 'worker-start', say: 'Start?', args: JSON.stringify({ taskTitle: '#4886 Check the price Facebook kept on a widget update', spec: 'Run pick-and-ship on issue #4886.' }) });
+  await native.start({ name: '4886-check-the-price-facebook-kept-on-a--443', cwd: '/repo', brief: 'b', interactive: true, approvalId: a.id });
+  const r = native.rows()[0];
+  assert.equal(r.group, 'story');
+  assert.equal(r.label, '#4886');
+  assert.equal(r.title, '4886-check-the-price-facebook-kept-on-a--443', 'the title stays the name');
+
+  // No story in the title: Other. No start card at all (a session continued on the phone): the name decides.
+  const s2 = setupInteractive();
+  const b = s2.store.addApproval({ action: 'worker-start', say: 'Start?', args: JSON.stringify({ taskTitle: 'Teal and mint app theme' }) });
+  await s2.native.start({ name: 'teal-and-mint-app-theme-420', cwd: '/repo', brief: 'b', interactive: true, approvalId: b.id });
+  assert.equal(s2.native.rows()[0].group, 'other');
+  const s3 = setupInteractive();
+  await s3.native.start({ name: 'issue-4412-fix', cwd: '/repo', brief: 'b', interactive: true });
+  assert.equal(s3.native.rows()[0].label, '#4412');
+});
+
+test('a worker the reaper stopped while it waits on an ask is waiting, not exited, so its request never reads failed', async () => {
+  const { native, listing, tick, store } = setupInteractive();
+  const w = await native.start({ name: '4886-check-443', cwd: '/repo', brief: 'b', interactive: true });
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'STORY: #4886\nQUESTION: How do I test it?' });
+  store.insertItem({ source: 'native', external_id: `ask:${w.id}:1`, kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`, subject: 'How do I test it?', body: 'b', status: 'spoken' });
+  listing[0].status = 'idle';
+  await native.poll(); tick(IDLE_REAP_MS + 1); await native.poll();
+  assert.equal(native.get(w.id)?.state, 'stopped', 'reaped');
+  const r = native.rows()[0];
+  assert.equal(r.state, 'waiting');
+  assert.equal(r.note, 'How do I test it?');
+  assert.equal(r.endedAt, undefined, 'an open ask keeps it out of the Done fold');
+  // The request layer reads the row as waiting on the owner, never failed.
+  assert.equal(statusOf(r, undefined, true, null, undefined, false), 'waiting');
+  tick(25 * 3_600_000);
+  assert.equal(native.rows().length, 1, 'and in the list while the ask is open');
+});
+
+test('rowState maps each native state to the work list', () => {
+  assert.equal(rowState({ state: 'stopped', waiting_for: IDLE_STOPPED }, false), 'idle');
+  assert.equal(rowState({ state: 'stopped', waiting_for: IDLE_STOPPED }, true), 'waiting');
+  assert.equal(rowState({ state: 'stopped', waiting_for: DESKTOP_WAITING }, false), 'idle');
+  assert.equal(rowState({ state: 'stopped', waiting_for: null }, false), 'exited');
+  assert.equal(rowState({ state: 'failed', waiting_for: null }, true), 'exited');
+  assert.equal(rowState({ state: 'done', waiting_for: null }, false), 'idle');
+  assert.equal(rowState({ state: 'done', waiting_for: null }, true), 'waiting');
+  assert.equal(rowState({ state: 'working', waiting_for: null }, false), 'working');
+  assert.equal(rowState({ state: 'blocked', waiting_for: 'x' }, false), 'waiting');
+});
+
+test('a finished row leaves a day after its report, not a day after the reaper stopped it', async () => {
+  const { native, listing, tick } = setupInteractive();
+  const w = await native.start({ name: 'chat-approve-433', cwd: '/repo', brief: 'b', interactive: true });
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: shipped' });
+  const reportAt = native.get(w.id)!.report_at!;
+  listing[0].status = 'idle';
+  await native.poll(); tick(IDLE_REAP_MS + 1); await native.poll();
+  assert.equal(native.get(w.id)?.state, 'stopped');
+  assert.equal(native.rows()[0].endedAt, reportAt, 'its finish time is the report, not the reap');
+  assert.equal(finishedAt(native.get(w.id)!), Date.parse(reportAt));
+  // The request leaves DONE_KEEP_MS after it turned done, which follows the report. The row must not outlive it.
+  tick(24 * 3_600_000 - IDLE_REAP_MS);
+  assert.deepEqual(native.rows(), [], 'gone a day after the report, before its request leaves Completed');
 });

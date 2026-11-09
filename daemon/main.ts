@@ -161,7 +161,13 @@ const native = makeNative({
 /** The work list with the native rows, for the app and the brain's brief. */
 // Project terminals (terminal.ts): their rows join the work list. Declared here because publishWork runs at startup.
 const terms = makeTerminals({ log, env: { ...cleanEnv, TERM: 'xterm-256color' } });
-const mergedWork = (): Work => { const w = work.current(); return { ...w, rows: [...w.rows, ...native.rows(), ...terminalRows(terms.current())] }; };
+/**
+ * Orca's work list with the native rows. Orca's poll lists only its own workers, so every reader that asks whether a
+ * worker is live (the requests, the ten-minute check) takes the list through here. The check once read Orca's poll alone
+ * and reported every running native worker as "Request open with no live worker" (2026-11-09).
+ */
+const withNative = (w: Work): Work => ({ ...w, rows: [...w.rows, ...native.rows()] });
+const mergedWork = (): Work => { const w = withNative(work.current()); return { ...w, rows: [...w.rows, ...terminalRows(terms.current())] }; };
 function publishWork() { const w = mergedWork(); store.setState('workers', briefLines(w)); broadcast({ type: 'work', work: w }); }
 // After publishWork exists: recover() updates rows, and each update publishes the work list.
 native.recover().catch(e => log(`native recover failed: ${e}`));
@@ -227,7 +233,7 @@ const work = makeWorkPoller({
     orcaPolledAt = Date.now();
     settleStopNotices(w, workers, complete).catch(e => log(`stop notices: ${e}`));
     // With the native rows, so a native request finds its conversation and its live state (Orca's poll lists only its own).
-    requests.sync({ ...w, rows: [...w.rows, ...native.rows()] }, workers, complete);
+    requests.sync(withNative(w), workers, complete);
     // After the requests, because a Today row reads its request's status.
     requests.synced().then(() => today.sync(workers, complete)).catch(e => log(`today sync: ${e}`));
   },
@@ -275,7 +281,7 @@ async function nativeSync() {
   if (Date.now() - orcaPolledAt < 90_000) return;
   const w = work.current();
   // `complete` false and Orca's requests left out: a silent Orca proves nothing about its own workers.
-  await requests.sync({ ...w, rows: [...w.rows, ...native.rows()] }, [], false, r => r.dispatch_id.startsWith(ROW_PREFIX));
+  await requests.sync(withNative(w), [], false, r => r.dispatch_id.startsWith(ROW_PREFIX));
   today.sync([], false);
 }
 const nativePoll = () => native.poll().then(nativeSync).catch(e => log(`native poll failed: ${e}`));
@@ -509,7 +515,7 @@ setInterval(async () => {
 // Pending support replies are a step of that check: each goes out once its fix is in production (rules in replies.ts).
 const replies = makeReplies({ store, log, api: gh, worker: makeTicketWorker({ dataDir: join(ROOT, 'data') }), wake: text => brain.send(text), paused: () => existsSync(KILL_FILE) });
 replies.recover();
-const check = makeCheck({ store, jarvisRun: run, poll: () => work.poll(), requests, delivery: () => readDelivery(ROOT), running: startCommit, brainBusy: () => brain.busy, wake: text => brain.send(text), paused: () => existsSync(KILL_FILE), replies: () => replies.tick(), log });
+const check = makeCheck({ store, jarvisRun: run, poll: () => work.poll().then(withNative), requests, delivery: () => readDelivery(ROOT), running: startCommit, brainBusy: () => brain.busy, wake: text => brain.send(text), paused: () => existsSync(KILL_FILE), replies: () => replies.tick(), log });
 setInterval(() => { check.tick().catch(e => log(`check: ${e}`)); }, CHECK_MS);
 check.start();
 
