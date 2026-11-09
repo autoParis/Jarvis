@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from './store.ts';
@@ -86,4 +86,25 @@ test('the swipe locks on a leftward drag only, and a short drag does not reach t
   assert.equal(replyOffset(20), 0, 'never to the right');
   assert.ok(replyOffset(-400) >= -REPLY_SWIPE.max, 'never past max');
   assert.ok(replyOffset(-REPLY_SWIPE.threshold - 40) > -REPLY_SWIPE.threshold - 40, 'slower past the threshold');
+});
+
+// The row under a message (time, Copy, Reply, speaker) hangs in the gap below it on a screen with a mouse. These numbers
+// come from web/app.css, so a change to the gap, the row height or its offset that makes the row touch the next message fails here.
+test('the hover row under a message never reaches the next message, and sits on the Approve row of a proposal', () => {
+  const css = readFileSync(new URL('../web/app.css', import.meta.url), 'utf8');
+  const px = (re: RegExp) => { const m = re.exec(css); assert.ok(m, `not in app.css: ${re}`); return Number(m[1]); };
+  const gap = px(/#items, #pane-lines \{[^}]*gap: (\d+)px/);
+  const height = px(/\.msg-foot \{ position: absolute;[^}]*height: (\d+)px/);
+  const jarvisUp = px(/\.msg-foot \{ position: absolute; top: calc\(100% - (\d+)px\)/);
+  assert.match(css, /\.line-owner > \.msg-foot \{ top: 100%; \}/, "under the owner's bubble the row starts at the bubble's edge");
+  const lineMargin = px(/@media \(hover: hover\) \{\s*\.line:not\(:last-child\) \{ margin-bottom: (\d+)px/);
+  const ownerMargin = px(/@media \(hover: hover\) \{[^@]*?\.line-owner:not\(:last-child\) \{ margin-bottom: (\d+)px/);
+  const clearJarvis = gap + lineMargin - (height - jarvisUp), clearOwner = gap + ownerMargin - height;
+  assert.ok(jarvisUp > 0, 'the row moves up toward its own Jarvis message');
+  assert.ok(clearJarvis >= 8, `a Jarvis message's row keeps 8px clear of the next message, has ${clearJarvis}`);
+  assert.ok(clearOwner >= 4, `an owner message's row keeps 4px clear of the next message, has ${clearOwner}`);
+  // A proposal: the row is in the flow next to Reject and Approve and wraps under them, never absolute below them.
+  assert.match(css, /\.line:has\(> \.chat-decide:not\(:empty\)\) \{ display: flex; flex-wrap: wrap; align-items: flex-end;[^}]*margin-bottom: 0;/);
+  assert.match(css, /\.line:has\(> \.chat-decide:not\(:empty\)\) > \.msg \{ flex: 0 0 100%;/);
+  assert.match(css, /\.line:has\(> \.chat-decide:not\(:empty\)\) > \.msg-foot \{ position: static; margin: \d+px 0 \d+px auto; \}/);
 });
