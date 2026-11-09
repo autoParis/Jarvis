@@ -408,9 +408,22 @@ body.pane-open #chat, body.pane-open #doneline { display: none; }
 .line { position: relative; min-width: 0; }
 .line-owner { align-self: flex-end; max-width: 80%; }
 .owner { background: var(--raised); border-radius: var(--r); padding: 8px 12px; font-size: 15px; }
-/* The time and copy under a message. It sits in the gap below, so showing it moves nothing */
-.msg-foot { position: absolute; top: 100%; right: 0; z-index: 1; height: 22px; display: flex; align-items: center; gap: 6px; opacity: 0; pointer-events: none; transition: opacity .12s; }
+/* The time and copy under a message. It sits in the gap below, so showing it moves nothing. The 22px row is taller than the
+   18px gap between messages, so each line adds to the gap below it: on a Jarvis message the row goes 6px up into the empty
+   leading of the last line and keeps 8px clear of the next message; under the owner's bubble it starts at the bubble's edge
+   and keeps 4px clear */
+.msg-foot { position: absolute; top: calc(100% - 6px); right: 0; z-index: 1; height: 22px; display: flex; align-items: center; gap: 6px; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.line-owner > .msg-foot { top: 100%; }
 .line:hover .msg-foot, .line:focus-within .msg-foot { opacity: 1; pointer-events: auto; }
+@media (hover: hover) {
+  .line:not(:last-child) { margin-bottom: 6px; }
+  .line-owner:not(:last-child) { margin-bottom: 8px; }
+}
+/* A message with Approve and Reject: the row is in the flow, at the right end of the buttons' last row. Where the two do
+   not fit side by side, the row wraps to just under the buttons, so it can never reach the next message */
+.line:has(> .chat-decide:not(:empty)) { display: flex; flex-wrap: wrap; align-items: flex-end; column-gap: 16px; margin-bottom: 0; }
+.line:has(> .chat-decide:not(:empty)) > .msg { flex: 0 0 100%; min-width: 0; }
+.line:has(> .chat-decide:not(:empty)) > .msg-foot { position: static; margin: 4px 0 5px auto; }
 /* Approve and Reject on the Jarvis message that asked for a proposal: small pills under its last line, the same neutral fill
    and teal border as the Requests card's Approve. Reject is smaller and quieter. They go away once he decides anywhere */
 .chat-decide { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
@@ -756,6 +769,7 @@ a.num:hover { color: var(--ink); }
 @media (hover: none) {
   .msg-foot { position: static; display: none; height: auto; justify-content: flex-end; opacity: 1; pointer-events: auto; }
   .line.shown .msg-foot, .line:not(:has(~ .line)) .msg-foot { display: flex; }
+  .line:has(> .chat-decide:not(:empty)) > .msg-foot { margin: 8px 0 0 auto; } /* 8px between Approve and the 44px buttons */
   .msg-copy, .msg-reply, .msg-speak { width: 44px; height: 44px; }
   #items .line { touch-action: pan-y pinch-zoom; } /* a sideways drag on a message is the reply swipe, never a page pan */
   #reply-cancel { width: 44px; height: 44px; }
