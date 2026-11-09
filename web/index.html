@@ -173,6 +173,7 @@ import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } f
 import { todayButton, makeTodayPop } from '/today.js';
 import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
 import { boxAfterSend, settleBox, withPictures } from '/dictate.js';
+import { sendOut, imageParams } from '/compose.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
 import { makeModelPicker } from '/modelpicker.js';
@@ -1600,7 +1601,7 @@ function showDone() {
 // ---- attached pictures: uploaded on send, then passed to Jarvis as one [image: path] line each ----
 const IMAGE_OK = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], IMAGE_MAX = 10 * 1024 * 1024;
 const fileIn = $('file'), pending = $('pending');
-let attached = []; // { file, el } in the order the owner added them
+let attached = []; // { file, el, path? } in the order the owner added them. Every send takes them (sendOut, web/compose.js).
 // The plus button. Today it only opens the photo picker; later this becomes the popover with more actions.
 function openAddMenu() { fileIn.click(); }
 $('add').onclick = openAddMenu;
@@ -1647,6 +1648,16 @@ function unattach(item) {
 let sending = false, composing = false;
 t.addEventListener('compositionstart', () => { composing = true; });
 t.addEventListener('compositionend', () => { composing = false; });
+// One attached picture to the daemon. The path it returns goes in the message as an `[image: path]` line.
+async function uploadPicture(file) {
+  const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type }, body: file });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`picture not uploaded (${j.error || r.status})`);
+  return j.path;
+}
+// Every send takes the attached pictures through sendOut (web/compose.js): this one, the mic dictation (upload) and
+// a hands-free clip (sendClip). The pictures upload before anything goes out, so a failed upload keeps the text and
+// every picture in the box.
 // `settle` is for a tap on Send: the phone's dictation can commit its words a moment after the tap, so the send
 // waits for the box to go quiet (settleBox in web/dictate.js). The box is read again after the uploads, and only
 // the text that went out leaves it, so a picture send never wipes dictated words.
@@ -1655,22 +1666,16 @@ async function sendText(settle = false) {
   sending = true;
   try {
     if (settle) await settleBox(t, { composing: () => composing });
-    const pics = [...attached];
-    // Upload all of them before sending anything, so a failed upload keeps the text and every picture in the box.
-    const lines = [];
-    for (const { file } of pics) {
-      const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type }, body: file });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) return add('event', `Picture not sent: ${j.error || r.status}`);
-      lines.push(`[image: ${j.path}]`);
-    }
-    const sent = t.value, message = withPictures(sent, lines);
-    if (!message) return;
-    t.value = boxAfterSend(t.value, sent);
-    pics.forEach(unattach);
-    const reply = replyTo?.id;
-    cancelReply();
-    await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: message, replyTo: reply }) });
+    const went = await sendOut({ tray: attached, upload: uploadPicture, post: async lines => {
+      const sent = t.value, message = withPictures(sent, lines);
+      if (!message) return false;
+      t.value = boxAfterSend(t.value, sent);
+      const reply = replyTo?.id;
+      cancelReply();
+      await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: message, replyTo: reply }) });
+      return true;
+    } });
+    went.forEach(unattach);
   } catch (err) { add('event', 'Send failed: ' + err.message); }
   finally { sending = false; idleLabel(); fit(); }
 }
@@ -1739,14 +1744,20 @@ async function upload() {
   mic.classList.add('busy');
   try {
     // A dictation while the reply strip is open answers that message. Text in the box goes in front of the words
-    // (web/dictate.js), and the box clears only once the daemon has sent the message.
+    // and the attached pictures after them (web/dictate.js, web/compose.js). The box and the tray clear only once the
+    // daemon has sent the message.
     const reply = replyTo?.id, typed = t.value;
-    const q = new URLSearchParams();
-    if (reply) q.set('replyTo', reply);
-    if (typed.trim()) q.set('typed', typed);
-    const r = await fetch(String(q) ? `/api/voice?${q}` : '/api/voice', { method: 'POST', body: blob });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.status);
+    let j = {};
+    const went = await sendOut({ tray: attached, upload: uploadPicture, post: async lines => {
+      const q = imageParams(new URLSearchParams(), lines);
+      if (reply) q.set('replyTo', reply);
+      if (typed.trim()) q.set('typed', typed);
+      const r = await fetch(String(q) ? `/api/voice?${q}` : '/api/voice', { method: 'POST', body: blob });
+      j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.status);
+      return !!j.sent;
+    } });
+    went.forEach(unattach);
     if (!j.text) add('event', "Didn't catch that.");
     else {
       if (typed.trim()) { t.value = boxAfterSend(t.value, typed); idleLabel(); fit(); }
@@ -1877,9 +1888,16 @@ async function sendClip(frames, rate, barge) {
   frames.reduce((o, f) => (all.set(f, o), o + f.length), 0);
   mic.classList.add('busy');
   try {
-    const r = await fetch(`/api/voice?mode=listen&barge=${barge ? 1 : 0}`, { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: encodeWav(all, rate) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.status);
+    // A clip Jarvis keeps takes the attached pictures. A clip it drops (no wake word) leaves them in the tray.
+    let j = {};
+    const went = await sendOut({ tray: attached, upload: uploadPicture, post: async lines => {
+      const q = imageParams(new URLSearchParams({ mode: 'listen', barge: barge ? '1' : '0' }), lines);
+      const r = await fetch(`/api/voice?${q}`, { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: encodeWav(all, rate) });
+      j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.status);
+      return !!j.kept;
+    } });
+    went.forEach(unattach);
     // Clips not meant for Jarvis leave no trace in the chat; the placeholder says why for a moment.
     if (!j.kept && hands && j.why === 'no wake word') { voiceNote = 'Not for Jarvis (no wake word)'; showHands(); clearTimeout(voiceNoteTimer); voiceNoteTimer = setTimeout(() => { voiceNote = ''; showHands(); }, 2000); }
   } catch (err) { add('event', 'Voice upload failed: ' + err.message); }
