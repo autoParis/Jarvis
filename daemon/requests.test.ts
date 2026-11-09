@@ -679,3 +679,79 @@ test('a done native request leaves a day after done while Orca is not answering;
   await reqs.sync(work([], 'orca did not answer'), [], false);
   assert.deepEqual(reqs.list().map(r => r.title), ['Task ctx_o']);
 });
+
+// 2026-11-09: three rows sat in Waiting for merge after their work had shipped (requests 194, 212 and 332).
+test('a PR number with no link gets its link from the request\'s repo, and a merged PR moves it to Completed', async () => {
+  const { store, start, work, prState } = setup();
+  const asked: string[] = [];
+  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async dir => { asked.push(dir); return 'https://github.com/o/app'; }, prOpen: async url => prState.get(url) });
+  start('ctx_1', 'Fix onboarding', { repo: '/repos/app', taskTitle: '#4828 Marketplace onboarding fixes', spec: 's' });
+  // Found while Orca no longer listed the worker, so no folder gave a link.
+  store.db.prepare(`UPDATE requests SET pr = 'PR #4846', pr_url = NULL, status = 'review'`).run();
+  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done, PR #4846', body: 'ok', meta: '{"outcome":"succeeded"}' });
+  prState.set('https://github.com/o/app/pull/4846', false);
+  await reqs.sync(work([]), []);
+  const r = store.requests()[0];
+  assert.equal(r.pr_url, 'https://github.com/o/app/pull/4846');
+  assert.equal(r.status, 'done');
+  assert.deepEqual(asked, ['/repos/app']);
+});
+
+test('a PR number its repo does not have is never kept, and one stored earlier is cleared', async () => {
+  const store = openStore(':memory:');
+  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => 'https://github.com/o/jarvis', prOpen: async () => 'missing' });
+  await startNative(store, reqs, 'np1', 'Jarvis 2.0 leftovers');
+  store.updateNativeWorker('np1', { state: 'done', outcome: 'done', report: 'DONE: fixed.\n- There is no PR. A "PR #12" in a DONE report got no link.', report_at: '2026-10-30T12:30:00.000Z' });
+  await reqs.sync({ at: '', rows: [nativeRow('np1', 'idle')], done: [] }, [], false);
+  let r = store.requests()[0];
+  assert.equal(r.pr, null);
+  assert.equal(r.status, 'done');
+
+  // The same request as the daemon left it before this fix: the wrong number stored, no link, in review.
+  store.db.prepare(`UPDATE requests SET pr = 'PR #12', pr_url = NULL, status = 'review'`).run();
+  const again = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => 'https://github.com/o/jarvis', prOpen: async () => 'missing' });
+  await again.sync({ at: '', rows: [nativeRow('np1', 'idle')], done: [] }, [], false);
+  r = store.requests()[0];
+  assert.equal(r.pr, null);
+  assert.equal(r.pr_url, null);
+  assert.equal(r.status, 'done');
+});
+
+test('a Jarvis request with no PR waits for merge until master holds its branch, then is Completed', async () => {
+  const store = openStore(':memory:');
+  let clock = Date.parse('2026-10-30T12:00:00Z');
+  let merged: boolean | undefined = false;
+  const asked: string[] = [];
+  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, now: () => clock, repoOf: async () => 'https://github.com/o/jarvis', prOpen: async () => 'missing',
+    mergeRepo: '/r/', branchMerged: async dir => { asked.push(dir); return merged; } });
+  await startNative(store, reqs, 'jb1', 'Jarvis change');
+  store.updateNativeWorker('jb1', { state: 'done', outcome: 'done', report: 'DONE: three commits on the branch. There is no PR.', report_at: '2026-10-30T12:30:00.000Z' });
+  const poll = () => reqs.sync({ at: '', rows: [nativeRow('jb1', 'idle')], done: [] }, [], false);
+  await poll();
+  assert.equal(store.requests()[0].status, 'review');
+  assert.deepEqual(asked, ['/repos/wt-jb1']);
+  // Asked again only after the PR check interval.
+  merged = true;
+  await poll();
+  assert.equal(store.requests()[0].status, 'review');
+  clock += 5 * 60_000;
+  await poll();
+  assert.equal(store.requests()[0].status, 'done');
+});
+
+test('another repo\'s request with no PR is Completed at once, and git is not asked', async () => {
+  const store = openStore(':memory:');
+  const asked: string[] = [];
+  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => undefined, mergeRepo: '/repos/jarvis', branchMerged: async dir => { asked.push(dir); return false; } });
+  await startNative(store, reqs, 'ob1', 'App research');
+  store.updateNativeWorker('ob1', { state: 'done', outcome: 'done', report: 'DONE: answered.', report_at: '2026-10-30T12:30:00.000Z' });
+  await reqs.sync({ at: '', rows: [nativeRow('ob1', 'idle')], done: [] }, [], false);
+  assert.equal(store.requests()[0].status, 'done');
+  assert.deepEqual(asked, []);
+});
+
+test('statusOf: a finished request with no PR is in review only while its branch is unmerged', () => {
+  assert.equal(statusOf(undefined, 'succeeded', false, null, undefined, true, true), 'review');
+  assert.equal(statusOf(undefined, 'succeeded', false, null, undefined, true, false), 'done');
+  assert.equal(statusOf(undefined, 'succeeded', false, 'PR #3', false, true, true), 'done');
+});

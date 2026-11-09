@@ -400,9 +400,14 @@ export function makeNative(o: {
       : a.id === w.id || (!!w.session_id && a.sessionId === w.session_id));
     return mine.find(a => !!a.pid) ?? mine[0];
   };
-  /** An interactive session's liveness from `status` (busy, waiting, idle) while its process lives; nothing once it is gone. */
+  /**
+   * An interactive session's liveness from `status` (busy, waiting, idle) while its process lives; nothing once it is gone.
+   * Idle after a DONE or FAILED that is still its last report is that outcome again: a busy spell with no new turn (a
+   * resume or a compaction) left 5276-keep-the-muse-digest "working" in Stories for good (2026-11-09).
+   */
   const interactiveState = (a: Agent | undefined, w: NativeWorker): NativeState | undefined =>
-    !a?.pid ? undefined : a.status === 'busy' ? 'working' : a.status === 'waiting' ? 'blocked' : w.remote && a.status === 'idle' ? 'done' : w.outcome ? w.state : w.report && !paused(w) ? 'done' : 'working';
+    !a?.pid ? undefined : a.status === 'busy' ? 'working' : a.status === 'waiting' ? 'blocked' : w.remote && a.status === 'idle' ? 'done'
+      : w.outcome ? (a.status === 'idle' && outcomeOf(w.report ?? '') === w.outcome ? w.outcome : w.state) : w.report && !paused(w) ? 'done' : 'working';
 
   /** Polls `claude agents` until `ok(entry)` holds for the worker, or the time is up. */
   async function waitFor(w: NativeWorker, ok: (a: Agent) => boolean, ms: number): Promise<Agent | undefined> {

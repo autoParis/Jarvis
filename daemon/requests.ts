@@ -180,12 +180,13 @@ const failing = (outcome: string | undefined) => !!outcome && outcome !== 'succe
 /**
  * The status the work list implies, or undefined when it says nothing new (the worker is no longer listed by Orca).
  * `prOpen` is the last known PR state: true open, false merged or closed, undefined not checked yet.
+ * `unmerged` is true when a request with no PR has a branch with commits that are not on the base branch yet.
  */
-export function statusOf(row: WorkRow | undefined, outcome: string | undefined, isLive: boolean, pr: string | null, prOpen: boolean | undefined, finished: boolean): RequestStatus | undefined {
+export function statusOf(row: WorkRow | undefined, outcome: string | undefined, isLive: boolean, pr: string | null, prOpen: boolean | undefined, finished: boolean, unmerged = false): RequestStatus | undefined {
   if (row?.state === 'waiting') return 'waiting';
   if (isLive) return row?.state === 'exited' ? 'failed' : 'working';
   if (failing(outcome)) return 'failed';
-  if (outcome === 'succeeded' || finished) return pr && prOpen !== false ? 'review' : 'done';
+  if (outcome === 'succeeded' || finished) return (pr ? prOpen !== false : unmerged) ? 'review' : 'done';
   return undefined;
 }
 
@@ -196,13 +197,38 @@ function stoppedAt(store: Store, dispatch: string): string | null {
     UNION ALL SELECT updated_at FROM items WHERE dispatch_id = ? AND answer = ?)`).get(dispatch, dispatch, STOP_ANSWER) as { at: string | null }).at;
 }
 
-/** `gh pr view` for a PR link: true open, false merged or closed, undefined when gh did not answer. */
-function ghPrOpen(url: string): Promise<boolean | undefined> {
-  return new Promise(resolve => execFile('gh', ['pr', 'view', url, '--json', 'state'], { timeout: 15_000 }, (err, out) => {
+/**
+ * `gh pr view` for a PR link: true open, false merged or closed, 'missing' when the repo has no PR with that number,
+ * undefined when gh did not answer.
+ */
+function ghPrOpen(url: string): Promise<PrState> {
+  return new Promise(resolve => execFile('gh', ['pr', 'view', url, '--json', 'state'], { timeout: 15_000 }, (err, out, errOut) => {
+    if (err && /Could not resolve to a PullRequest/i.test(String(errOut))) return resolve('missing');
     const state = !err && json(out)?.state;
     resolve(state === 'OPEN' ? true : state === 'MERGED' || state === 'CLOSED' ? false : undefined);
   }));
 }
+export type PrState = boolean | 'missing' | undefined;
+
+/**
+ * True when the branch checked out in `dir` has no commit that its repo's master (or main) lacks, false when it has
+ * some, undefined when git cannot tell (the folder is gone).
+ */
+function gitBranchMerged(dir: string): Promise<boolean | undefined> {
+  const count = (base: string) => new Promise<number | undefined>(resolve => execFile('git', ['-C', dir, 'rev-list', '--count', `${base}..HEAD`], { timeout: 10_000 }, (err, out) => {
+    const n = Number.parseInt(String(out).trim(), 10);
+    resolve(err || Number.isNaN(n) ? undefined : n);
+  }));
+  return count('master').then(n => n ?? count('main')).then(n => n === undefined ? undefined : n === 0);
+}
+
+/** The checkout a request's worker started from: the native worker's repo, else the `repo` its start approval named. */
+function requestRepo(store: Store, r: Request, nw: { repo?: string | null } | undefined): string | undefined {
+  if (nw?.repo) return nw.repo;
+  const repo = r.approval_id ? json(store.approval(r.approval_id)?.args ?? null)?.repo : undefined;
+  return typeof repo === 'string' ? repo : undefined;
+}
+const trimDir = (p: string) => p.replace(/\/+$/, '');
 
 export function makeRequests(opts: {
   store: Store; log: Log;
@@ -212,14 +238,24 @@ export function makeRequests(opts: {
   transcriptDirs?: string[];
   /** GitHub web URL of a checkout, to turn "PR #12" into a link (work.ts githubRepo). */
   repoOf: (dir: string) => Promise<string | undefined>;
-  prOpen?: (url: string) => Promise<boolean | undefined>;
+  prOpen?: (url: string) => Promise<PrState>;
+  /**
+   * The checkout whose work ships by merging the worker's branch, with no PR (Jarvis's own). A finished request from it
+   * with no PR waits for merge while its branch has commits master lacks.
+   */
+  mergeRepo?: string;
+  branchMerged?: (dir: string) => Promise<boolean | undefined>;
   onChange: (list: RequestView[]) => void;
   now?: () => number;
 }) {
   const { store, log } = opts;
   const now = opts.now ?? Date.now;
   const prOpen = opts.prOpen ?? ghPrOpen;
+  const branchMerged = opts.branchMerged ?? gitBranchMerged;
   const prChecks = new Map<number, { at: number; open?: boolean }>();
+  const branchChecks = new Map<number, { at: number; merged?: boolean }>();
+  /** The GitHub link of "PR #12" in the repo of `dir`, or undefined when the repo is not known. */
+  const linkOf = (pr: string, dir: string | undefined) => dir ? opts.repoOf(dir).then(repo => repo && `${repo}/pull/${pr.slice(4)}`).catch(() => undefined) : Promise.resolve(undefined);
   // Polls in a row an open request's worker was missing. Only a poll where every Run answered counts.
   const absent = new Map<number, number>();
   // Requests already searched for a session since the start, so a closed one is not searched at every poll.
@@ -262,6 +298,7 @@ export function makeRequests(opts: {
       // A question runs read-only in the repo's main checkout. Other sessions there are not its conversation, and a
       // PR it names in its answer is not its own, so it takes no worktree and no PR. Nor does a native worker in the main checkout.
       const question = r.action === 'question';
+      const repoDir = requestRepo(store, r, nw);
       const worktree = nw ? nativeWorktree(store, nw) : path && basename(path);
       if (worktree && !question && worktree !== r.worktree) f.worktree = worktree;
       const session = w?.session ?? nw?.session_id;
@@ -277,9 +314,21 @@ export function makeRequests(opts: {
         const found = doneMsg ? findPr(`${doneMsg.subject}\n${doneMsg.body}`) : {};
         const pr = found.pr ?? row?.pr ?? (row?.label?.startsWith('PR #') ? row.label : undefined);
         if (pr) {
-          f.pr = pr;
-          f.pr_url = found.url ?? (path ? await opts.repoOf(path).then(repo => repo && `${repo}/pull/${pr.slice(4)}`).catch(() => undefined) : undefined);
+          const url = found.url ?? await linkOf(pr, path ?? repoDir);
+          // A bare number in a report can be any PR it talks about ("a PR #12 in a DONE report got no link"). It counts
+          // only when its repo has that PR. When gh does not answer, it is kept and the PR check below tests it again.
+          const state = url && !found.url ? await prOpen(url).catch(() => undefined) : undefined;
+          if (state === 'missing') log('request PR number skipped, no such PR', { request: r.id, dispatch: r.dispatch_id, pr, url });
+          else {
+            f.pr = pr;
+            f.pr_url = url;
+            if (typeof state === 'boolean') prChecks.set(r.id, { at: now(), open: state });
+          }
         }
+      } else if (r.pr && !r.pr_url && !question) {
+        // A PR found while the worker's folder was unknown: its link comes from the repo the request started in.
+        const url = await linkOf(r.pr, path ?? repoDir);
+        if (url) { f.pr_url = url; log('request PR linked', { request: r.id, dispatch: r.dispatch_id, url }); }
       }
 
       // A native worker sent more work after its DONE or FAILED is working again until its next report: that report
@@ -305,14 +354,32 @@ export function makeRequests(opts: {
       const ended = !unsettled || over || !!settled || row?.state === 'exited' || r.status === 'failed';
       const stopped = !!stopAt && !failedFirst && ended;
 
-      const pr = f.pr ?? r.pr, url = f.pr_url ?? r.pr_url;
+      let pr = f.pr ?? r.pr;
+      const url = f.pr_url ?? r.pr_url;
+      const finished = w?.outcome === 'succeeded' || !!settled || over || stopped;
       let check = prChecks.get(r.id);
-      if (url && r.status !== 'done' && (!check || now() - check.at >= PR_CHECK_MS) && (w?.outcome === 'succeeded' || settled || over || stopped)) {
-        check = { at: now(), open: await prOpen(url).catch(() => undefined) ?? check?.open };
-        prChecks.set(r.id, check);
+      if (pr && url && r.status !== 'done' && (!check || now() - check.at >= PR_CHECK_MS) && finished) {
+        const state = await prOpen(url).catch(() => undefined);
+        if (state === 'missing') {
+          // Not a real PR (a number read from a report): the request has none.
+          f.pr = null; f.pr_url = null; pr = null; prChecks.delete(r.id); check = undefined;
+          log('request PR cleared, no such PR', { request: r.id, dispatch: r.dispatch_id, pr: r.pr, url });
+        } else {
+          check = { at: now(), open: state ?? check?.open };
+          prChecks.set(r.id, check);
+        }
+      }
+      // Jarvis's own work has no PR: it waits for merge until master holds every commit of the worker's branch.
+      let merged = branchChecks.get(r.id);
+      const tree = cur.worktree && path && basename(path) === cur.worktree ? path : undefined;
+      if (!pr && tree && opts.mergeRepo && repoDir && trimDir(repoDir) === trimDir(opts.mergeRepo) && r.status !== 'done' && finished
+        && (!merged || now() - merged.at >= PR_CHECK_MS)) {
+        merged = { at: now(), merged: await branchMerged(tree).catch(() => undefined) ?? merged?.merged };
+        branchChecks.set(r.id, merged);
       }
       // Done after a merge stays done: the PR check is in memory, and a restart must not reopen it as "in review".
-      const status = statusOf(row, stopped ? undefined : outcome, isLive && !stopped, pr, r.status === 'done' ? false : check?.open, !!settled || over || stopped);
+      const status = statusOf(row, stopped ? undefined : outcome, isLive && !stopped, pr, r.status === 'done' ? false : check?.open, !!settled || over || stopped,
+        r.status !== 'done' && merged?.merged === false);
       if (status && status !== r.status) { f.status = status; log('request status', { request: r.id, dispatch: r.dispatch_id, from: r.status, to: status }); }
 
       // A done request leaves 24 hours after it became done, by its status_at. Never while Orca is not answering, for an
