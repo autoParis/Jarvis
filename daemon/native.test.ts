@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, type Approval } from './store.ts';
-import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, IDLE_STOPPED, DESKTOP_WAITING, NUDGE, typedBytes, rowState, finishedAt, type NativeWorker } from './native.ts';
+import { helpRun, CLAUDE_HELP, AGENTS_HELP } from './fakeclaude.ts';
+import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, IDLE_STOPPED, DESKTOP_WAITING, NUDGE, typedBytes, rowState, finishedAt, missingFeatures, type NativeWorker } from './native.ts';
 import { statusOf } from './requests.ts';
 
 const SESSION = '00000000-0000-4000-8000-000000000001';
@@ -16,6 +17,7 @@ function fakeClaude() {
   let relayAnswer = 'SENT';
   const claude = async (args: string[]) => {
     calls.push(args);
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316 (Claude Code)\n', err: '' };
     if (args[0] === '--bg') return { code: 0, out: `backgrounded · ${agent.id} · ${agent.name}\n\n  claude attach ${agent.id}\n`, err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify(agent.pid === null && !agent.listed ? [] : [agent]), err: '' };
@@ -73,7 +75,7 @@ test('start parses the short id, finds the session and stores the worker', async
 
 test('start throws with the claude output when no id was printed', async () => {
   const { native, fake } = setup();
-  fake.claude = async () => ({ code: 1, out: '', err: 'Workspace not trusted\n' });
+  fake.claude = async (args: string[]) => helpRun(args) ?? { code: 1, out: '', err: 'Workspace not trusted\n' };
   const n = makeNative({ store: openStore(':memory:'), log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, claude: fake.claude });
   await assert.rejects(n.start({ name: 'p', cwd: '/x', brief: 'b' }), /Workspace not trusted/);
   void native;
@@ -299,6 +301,7 @@ function setupInteractive(nowMs = 1_800_000_000_000) {
   const calls: string[][] = [];
   const claude = async (args: string[]) => {
     calls.push(args);
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316 (Claude Code)\n', err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify(listing), err: '' };
     if (args[0] === '-p') return { code: 0, out: JSON.stringify({ type: 'result', is_error: false, result: 'SENT' }), err: '' };
@@ -451,7 +454,7 @@ test('a pid listed on the session refuses the resume; a message after the Deskto
   assert.equal(t.native.rows()[0].steer, 'auto', 'a stopped interactive row still takes a message');
   t.listing.push({ pid: 888, cwd: '/repo', kind: 'interactive', sessionId: ISESSION, name: 'desk-412', status: 'idle' });
   const n2 = makeNative({ store: t.store, log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {},
-    claude: async (args: string[]) => args[0] === 'agents' ? { code: 0, out: JSON.stringify(t.listing), err: '' } : { code: 0, out: JSON.stringify({ type: 'result', result: 'SENT' }), err: '' },
+    claude: async (args: string[]) => helpRun(args) ?? (args[0] === 'agents' ? { code: 0, out: JSON.stringify(t.listing), err: '' } : { code: 0, out: JSON.stringify({ type: 'result', result: 'SENT' }), err: '' }),
     mkfifo: () => {}, spawnPty: (argv, cwd, fifo) => { t.spawns.push({ argv, cwd, fifo }); t.listing.push({ pid: 999, pgid: 6000, cwd, kind: 'interactive', sessionId: ISESSION, name: 'desk-412', status: 'busy' }); return 6000; },
     killGroup: () => {}, alivePgid: () => false, killPid: pid => { killedPids.push(pid); for (const a of t.listing) if (a.pid === pid) delete a.pid; } });
   assert.deepEqual(await n2.reply(w2.id, 'back here', 'owner'), { ok: true });
@@ -631,7 +634,7 @@ test('a reply to an interactive worker is typed into its pipe, verbatim, with th
   const native = makeNative({
     store, log: (m, f) => logs.push(`${m} ${JSON.stringify(f ?? {})}`), jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')),
     onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {},
-    claude: async (args: string[]) => { calls.push(args); return args[0] === 'agents' ? { code: 0, out: JSON.stringify(listing), err: '' } : args[0] === '-p' ? { code: 0, out: JSON.stringify({ type: 'result', result: 'SENT' }), err: '' } : { code: 0, out: '2.1.316', err: '' }; },
+    claude: async (args: string[]) => { calls.push(args); const help = helpRun(args); if (help) return help; return args[0] === 'agents' ? { code: 0, out: JSON.stringify(listing), err: '' } : args[0] === '-p' ? { code: 0, out: JSON.stringify({ type: 'result', result: 'SENT' }), err: '' } : { code: 0, out: '2.1.316', err: '' }; },
     mkfifo: () => {}, alivePgid: () => true, killGroup: () => {},
     spawnPty: (argv, cwd, fifo) => { listing.push({ pid: 11, cwd, kind: 'interactive', sessionId: ISESSION, name: argv[2], status: 'idle' }); return 10; },
     writeFifo: (fifo, bytes) => { if (fail) { const e: any = new Error(fail); e.code = fail; throw e; } typed.push({ fifo, bytes }); },
@@ -762,4 +765,45 @@ test('a finished row leaves a day after its report, not a day after the reaper s
   // The request leaves DONE_KEEP_MS after it turned done, which follows the report. The row must not outlive it.
   tick(24 * 3_600_000 - IDLE_REAP_MS);
   assert.deepEqual(native.rows(), [], 'gone a day after the report, before its request leaves Completed');
+});
+
+test('missingFeatures: the real Claude Code help has everything the driver runs, and a missing piece is named', () => {
+  assert.deepEqual(missingFeatures(CLAUDE_HELP, AGENTS_HELP), []);
+  // A description that only mentions a flag does not count as having it.
+  const noBg = CLAUDE_HELP.replace(/^  --bg, --background/m, '  --background      ');
+  assert.deepEqual(missingFeatures(noBg, AGENTS_HELP), ['the --bg option']);
+  const noRespawn = CLAUDE_HELP.replace(/^  respawn \[options\] \[id\]/m, '  respawnx');
+  assert.deepEqual(missingFeatures(noRespawn, AGENTS_HELP), ['the claude respawn command']);
+  assert.deepEqual(missingFeatures(CLAUDE_HELP, AGENTS_HELP.replace(/^  --json/m, '  --jsonl')), ['the claude agents --json option']);
+  // A longer option with the same start is not the option.
+  assert.deepEqual(missingFeatures(CLAUDE_HELP.replace(/^  --remote-control \[name\]/m, '  --remote-controlx'), AGENTS_HELP), ['the --remote-control option']);
+});
+
+test('start works on any version that has the features, with no warning, and fails with the missing feature named', async () => {
+  for (const version of ['2.1.316 (Claude Code)', '2.4.0 (Claude Code)']) {
+    const { fake } = setup();
+    const logs: string[] = [];
+    const inner = fake.claude;
+    const claude = async (args: string[]) => args[0] === '--version' ? { code: 0, out: `${version}\n`, err: '' } : inner(args);
+    const n = makeNative({ store: openStore(':memory:'), log: (m, f) => logs.push(`${m} ${JSON.stringify(f ?? {})}`), jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, claude });
+    await n.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
+    assert.ok(logs.some(l => l.startsWith('native: claude has what the driver needs') && l.includes(version)), version);
+    assert.ok(!logs.some(l => /differs|pinned|lacks/.test(l)), version);
+  }
+  const calls: string[][] = [];
+  let help = CLAUDE_HELP.replace(/^  --bg, --background/m, '  --background      ');
+  const claude = async (args: string[]) => { calls.push(args); return args[0] === '--help' ? { code: 0, out: help, err: '' } : helpRun(args) ?? { code: 0, out: '9.0.0 (Claude Code)', err: '' }; };
+  const n = makeNative({ store: openStore(':memory:'), log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, claude });
+  await assert.rejects(n.start({ name: 'p', cwd: '/x', brief: 'b' }), /Claude Code 9\.0\.0 \(Claude Code\) lacks the --bg option, which Jarvis's native workers need\. Update Claude Code/);
+  assert.ok(!calls.some(a => a.includes('--bg')), 'nothing started');
+  // Only a pass is remembered: after an update the next start checks again and goes on.
+  help = CLAUDE_HELP;
+  await assert.rejects(n.start({ name: 'p', cwd: '/x', brief: 'b' }), /claude --bg did not start/);
+  assert.equal(calls.filter(a => a[0] === '--help').length, 2);
+});
+
+test('start says so when claude --help cannot be read', async () => {
+  const claude = async () => ({ code: 127, out: '', err: 'command not found' });
+  const n = makeNative({ store: openStore(':memory:'), log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, claude });
+  await assert.rejects(n.start({ name: 'p', cwd: '/x', brief: 'b' }), /could not read `claude --help` \(exit 127\)/);
 });

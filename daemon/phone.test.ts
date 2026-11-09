@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from './store.ts';
+import { helpRun } from './fakeclaude.ts';
 import { makeNative, ROW_PREFIX, IDLE_REAP_MS } from './native.ts';
 import { findSession, holdersIn, sessionName } from './resume.ts';
 import { nativeRoute } from './nativeroutes.ts';
@@ -26,6 +27,7 @@ function setup(o: { written?: number } = {}) {
   let nextPgid = 7000;
   const claude = async (args: string[]) => {
     calls.push(args);
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316 (Claude Code)\n', err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify(listing), err: '' };
     if (args[0] === 'stop') { for (const a of listing) if (a.id === args[1]) delete a.pid; return { code: 0, out: `stopped ${args[1]}`, err: '' }; }

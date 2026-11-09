@@ -13,7 +13,9 @@ import { FRESH_WRITE_MS, holdersIn, lastModel, processTable, sessionName, tailOf
 // jarvisd starts one, the session's hooks post back here over http (a permission prompt becomes an Approve card, each
 // turn's last message becomes the report), `claude agents` tells us whether it lives, and a reply goes in through a
 // short-lived Claude session, because SendMessage from another session is the only way into a running background one.
-// Claude Code 2.1.316, research preview: the output shapes parsed here were checked live on 2026-11-06.
+// Background sessions are a research preview. The output shapes parsed here were checked live on 2026-11-06 (2.1.316).
+// No version is pinned: the first start checks that `claude` has every command and option the driver runs
+// (missingFeatures), and each parse below fails with its own message when a shape changes.
 
 export type { NativeState } from './work.ts';
 export type NativeWorker = {
@@ -59,8 +61,32 @@ export type Claude = (args: string[], cwd?: string) => Promise<ClaudeRun>;
 
 /** A work-list row id is `n:<short id>`. */
 export const ROW_PREFIX = 'n:';
-/** Pinned: background sessions are a research preview, so a different `claude --version` gets a warning in the log. */
-export const CLAUDE_CODE_VERSION = '2.1.316';
+/** The `claude` options the driver passes: starts, resumes, the relay, Continue on phone and the Desktop button. */
+export const NEEDED_OPTIONS = ['--bg', '--name', '--settings', '--permission-mode', '--model', '--worktree', '--resume', '--remote-control', '--desktop',
+  '--print', '--output-format', '--tools', '--strict-mcp-config', '--mcp-config'];
+/** The `claude` commands the driver runs on background sessions. */
+export const NEEDED_COMMANDS = ['agents', 'attach', 'respawn', 'rm', 'stop'];
+/** `claude agents --json --all` is the liveness listing every poll reads. */
+export const NEEDED_AGENT_OPTIONS = ['--json', '--all'];
+
+/** True when `help` defines `flag` on an option line ("  -n, --name <name>", "  --bg, --background"), not only names it in a description. */
+const hasOption = (help: string, flag: string) => new RegExp(`^\\s+(?:-\\w,\\s+)?(?:--[\\w-]+,\\s+)*${flag}(?![\\w-])`, 'm').test(help);
+/** True when the Commands section of `help` lists `cmd`, alone or as one of its names ("  stop|kill <id>"). */
+const hasCommand = (help: string, cmd: string) => {
+  const at = help.search(/^Commands:/m);
+  return at >= 0 && new RegExp(`^\\s+(?:[\\w-]+\\|)*${cmd}(?:\\|[\\w-]+)*(?:\\s|$)`, 'm').test(help.slice(at));
+};
+/**
+ * What the driver needs and this Claude Code lacks, from `claude --help` and `claude agents --help`. Empty when it has
+ * everything. A check of what is used, not of a version number, so an update that keeps these passes with no warning.
+ */
+export function missingFeatures(help: string, agentsHelp: string): string[] {
+  return [
+    ...NEEDED_OPTIONS.filter(f => !hasOption(help, f)).map(f => `the ${f} option`),
+    ...NEEDED_COMMANDS.filter(c => !hasCommand(help, c)).map(c => `the claude ${c} command`),
+    ...(hasCommand(help, 'agents') ? NEEDED_AGENT_OPTIONS.filter(f => !hasOption(agentsHelp, f)).map(f => `the claude agents ${f} option`) : []),
+  ];
+}
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const RELAY_MODEL = 'claude-haiku-5-5';
 /** The short-lived session that carries a reply in. The worker sees its messages as coming from this name. */
@@ -276,7 +302,7 @@ export function makeNative(o: {
   const noticed = new Set<string>();
   // From the last `claude agents` listing: the ids whose process is alive.
   let alive = new Set<string>();
-  let versionChecked = false;
+  let featuresOk = false;
   // Accidental resumes per interactive worker, for the backoff; and when each one was first seen idle, for the reaper.
   const resumeTimes = new Map<string, number[]>();
   // Resumes under way, so an overlapping poll does not start a second one.
@@ -361,16 +387,32 @@ export function makeNative(o: {
     }
   }
 
-  async function checkVersion() {
-    if (versionChecked) return;
-    versionChecked = true;
-    const v = (await claude(['--version'])).out.trim();
-    if (!v.startsWith(CLAUDE_CODE_VERSION)) log('native: claude version differs from the pinned one', { found: v, pinned: CLAUDE_CODE_VERSION });
+  /**
+   * Before the first start: does this `claude` have every command and option the driver runs? Throws with the missing
+   * ones named, so the start fails with that reason instead of a parse error later. Only a pass is remembered, so an
+   * update of Claude Code is picked up at the next start with no jarvisd restart.
+   */
+  async function checkClaude() {
+    if (featuresOk) return;
+    const [v, help, agentsHelp] = await Promise.all([claude(['--version']), claude(['--help']), claude(['agents', '--help'])]);
+    const version = v.out.trim() || 'of unknown version';
+    const text = (r: ClaudeRun) => `${r.out}\n${r.err}`;
+    if (!/^Commands:/m.test(text(help))) {
+      log('native: claude --help unreadable', { version, code: help.code, out: help.out.slice(0, 200), err: help.err.slice(0, 200) });
+      throw new Error(`Jarvis could not read \`claude --help\` (exit ${help.code}), so it cannot check that Claude Code ${version} has what native workers need.`);
+    }
+    const missing = missingFeatures(text(help), text(agentsHelp));
+    if (missing.length) {
+      log('native: claude lacks what the driver needs', { version, missing });
+      throw new Error(`Claude Code ${version} lacks ${missing.join(', ')}, which Jarvis's native workers need. Update Claude Code (claude update), then start the worker again.`);
+    }
+    featuresOk = true;
+    log('native: claude has what the driver needs', { version });
   }
 
   const api = {
     async start(a: { name: string; cwd: string; brief: string; model?: string; permissionMode?: 'auto' | 'default'; approvalId?: number; worktree?: boolean; interactive?: boolean }): Promise<NativeWorker> {
-      await checkVersion();
+      await checkClaude();
       if (a.interactive) return startInteractive(a);
       const args = ['--bg', '--name', a.name, '--permission-mode', a.permissionMode ?? 'auto', '--model', a.model ?? DEFAULT_MODEL,
         '--settings', settingsPath, ...(a.worktree ? ['-w', a.name] : []), a.brief];
@@ -488,7 +530,7 @@ export function makeNative(o: {
       if (phoning.has(sid)) return { ok: false, error: 'Continue on phone is already under way for this session.' };
       phoning.add(sid);
       try {
-        await checkVersion();
+        await checkClaude();
         let mine = find(sid);
         if (mine && mine.session_id !== sid) mine = undefined;
         const onSession = (list: Agent[]) => list.filter(x => x.sessionId === sid && !!x.pid);

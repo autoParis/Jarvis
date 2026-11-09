@@ -4,6 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, type Item } from './store.ts';
+import { helpRun } from './fakeclaude.ts';
 import { askCard } from './asks.ts';
 import { makeNative, NATIVE_FOOTER, type Claude } from './native.ts';
 import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId, workerMessageKind, NO_OPTIONS_REFUSAL } from './nativeroutes.ts';
@@ -18,6 +19,7 @@ function fakeClaude() {
   const agent: any = { id: 'abc12345', sessionId: 'abc12345-0000-0000-0000-000000000000', name: 'probe-1', kind: 'background', pid: 42, status: 'idle', state: 'done' };
   const claude: Claude = async (args) => {
     calls.push(args);
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316 (Claude Code)', err: '' };
     if (args[0] === '--bg') return { code: 0, out: `backgrounded · ${agent.id} · ${args[2]}\n`, err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify([agent]), err: '' };
@@ -199,6 +201,7 @@ test('an interactive worker starts in a pseudo-terminal, is found by name, stops
   const agent: any = { kind: 'interactive', name: 'design-5', pid: 777, status: 'busy', sessionId: 'c0ffee00-1111-2222-3333-444444444444' };
   const spawned: string[][] = [], killed: number[] = [];
   const claude: Claude = async (args) => {
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316', err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify([agent]), err: '' };
     if (args[0] === '-p') return { code: 0, out: JSON.stringify({ result: 'SENT' }), err: '' };
