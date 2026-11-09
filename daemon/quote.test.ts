@@ -16,9 +16,29 @@ test('the brain line names who wrote the quoted message and when, in Eastern tim
   assert.equal(own, `[replying to his own message, 11-07 8:05 a.m. Eastern: "Say 'yes' to it"]`, 'inner double quotes cannot end the quote');
 });
 
-test('the brain line keeps the first 200 characters of a long message', () => {
-  const line = quoteLine({ id: 4, role: 'jarvis', text: 'a'.repeat(500), at: '2026-11-07T20:18:00Z' });
-  assert.ok(line.includes(`"${'a'.repeat(QUOTE_CHARS)}…"`));
+test('the brain line keeps the ask of a two-part message, past the first 200 characters', () => {
+  const text = `I merged the prompt cleanup, and all 908 tests pass. ${'The changes are small. '.repeat(20)}\n\n`
+    + 'Story 4060. Which design should the worker build?\n\n2A. Option A, access in the key\n\n2B. Option B, one set of checkboxes';
+  const line = quoteLine({ id: 5304, role: 'jarvis', text, at: '2026-11-07T20:18:00Z' });
+  assert.ok(line.includes('I merged the prompt cleanup'));
+  assert.ok(line.includes('Which design should the worker build? 2A. Option A, access in the key 2B. Option B, one set of checkboxes"]'));
+  assert.ok(!line.includes('…'), 'a message under the cap is not cut');
+});
+
+test('the brain line drops image and report marker lines and links', () => {
+  const text = 'Done.\n\n[report: /a/claude-md-audit.md]\n\nSee https://claude.ai/artifact/6vpU\n\n2B. Option B\n[image: /a/2b.png]\n\nWhich one?';
+  const line = quoteLine({ id: 4, role: 'jarvis', text, at: '2026-11-07T20:18:00Z' });
+  assert.equal(line, '[replying to jarvis, 11-07 3:18 p.m. Eastern: "Done. See 2B. Option B Which one?"]');
+});
+
+test('past the cap the brain line keeps the start and the end of the message', () => {
+  const text = `START ${'a'.repeat(9000)} ASK AT THE END?`;
+  const line = quoteLine({ id: 4, role: 'jarvis', text, at: '2026-11-07T20:18:00Z' });
+  const words = line.slice(line.indexOf('"') + 1, -2);
+  assert.ok(words.startsWith('START a'));
+  assert.ok(words.endsWith('a ASK AT THE END?'));
+  assert.ok(words.includes(' … '));
+  assert.ok(words.length <= QUOTE_CHARS + 3, `${words.length} characters`);
 });
 
 test('only a message from the owner or Jarvis can be quoted', () => {
