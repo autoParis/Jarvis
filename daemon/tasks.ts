@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, renameSync, copyFileSync, statSync, openSync, readSync, closeSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { fixMessage } from '../web/tasks.js';
 
 export type Run = (cmd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 export const execRun = (env?: NodeJS.ProcessEnv): Run => (cmd, args) => new Promise(resolve => {
@@ -407,14 +408,26 @@ export function makeTasks(d: TasksDeps) {
 export const humanize = (label: string) => sentenceCase(label.split('.').at(-1)!.replace(/[-_]+/g, ' '));
 const sentenceCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** The routes. GET lists, POST /api/tasks/save edits one launchd job. */
-export async function tasksRoute(t: ReturnType<typeof makeTasks>, method: string, url: string, body: () => Promise<Record<string, unknown>>) {
+/**
+ * The routes. GET lists, POST /api/tasks/save edits one launchd job, POST /api/tasks/ask-fix sends the brain the
+ * "Ask Jarvis to fix" message as the owner's chat message. That message is built here from a fresh read, so it names
+ * the task's real source and last error. It is not a send from the chat box, so it never takes the box's pictures.
+ */
+export async function tasksRoute(t: ReturnType<typeof makeTasks>, method: string, url: string, body: () => Promise<Record<string, unknown>>, ask?: (text: string) => void) {
   if (method === 'GET' && url === '/api/tasks') return { status: 200, body: { tasks: await t.list(), at: new Date().toISOString() } };
   if (method === 'POST' && url === '/api/tasks/save') {
     const b = await body();
     if (typeof b.id !== 'string' || typeof b.cron !== 'string') return { status: 400, body: { error: 'id and cron are required' } };
     const r = await t.save(b.id, b.cron, typeof b.description === 'string' ? b.description : '');
     return { status: r.status, body: { error: r.error, task: r.task } };
+  }
+  if (method === 'POST' && url === '/api/tasks/ask-fix' && ask) {
+    const b = await body();
+    const task = (await t.list()).find(x => x.id === b.id);
+    if (!task) return { status: 404, body: { error: 'That task is not in the list any more.' } };
+    if (task.status !== 'Failing' && task.status !== 'Warning') return { status: 409, body: { error: `It shows ${task.status} now, so there is nothing to fix.` } };
+    ask(fixMessage(task));
+    return { status: 200, body: { sent: true } };
   }
   return undefined;
 }

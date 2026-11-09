@@ -183,7 +183,7 @@ import { boxAfterSend, settleBox, withPictures } from '/dictate.js';
 import { sendOut, imageParams } from '/compose.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
-import { listHtml as tasksHtml, fixMessage, when as taskWhen } from '/tasks.js';
+import { listHtml as tasksHtml, when as taskWhen } from '/tasks.js';
 import { makeModelPicker } from '/modelpicker.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
@@ -849,8 +849,10 @@ tasksBody.addEventListener('click', async e => {
     const t = taskList.find(x => x.id === fix.dataset.id);
     if (!t || fix.disabled) return;
     fix.disabled = true; fix.textContent = 'Sending…';
-    const r = await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: fixMessage(t) }) }).catch(() => null);
-    for (const b of tasksBody.querySelectorAll(`.tk-fix[data-id="${CSS.escape(t.id)}"]`)) { b.textContent = r?.ok ? 'Sent to Jarvis' : 'Not sent. Try again'; b.disabled = !!r?.ok; }
+    // Its own route, not /api/send: the daemon builds the message from a fresh read, and it never takes pictures attached in the box.
+    const r = await fetch('/api/tasks/ask-fix', { method: 'POST', body: JSON.stringify({ id: t.id }) }).catch(() => null);
+    const err = r && !r.ok ? (await r.json().catch(() => ({}))).error : '';
+    for (const b of tasksBody.querySelectorAll(`.tk-fix[data-id="${CSS.escape(t.id)}"]`)) { b.textContent = r?.ok ? 'Sent to Jarvis' : 'Not sent. Try again'; b.title = err || ''; b.disabled = !!r?.ok; }
     return;
   }
   if (e.target.closest('.tk-open')) return;

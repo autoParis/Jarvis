@@ -587,7 +587,7 @@ function repos(): { name: string; path: string }[] {
 }
 
 // Routes that act as the owner. They need the secret of an open app page (access.ts).
-const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/approval/undo', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled', '/api/tasks/save']);
+const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/approval/undo', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled', '/api/tasks/save', '/api/tasks/ask-fix']);
 const ui = makeUiSessions();
 
 // ---- Project terminals from the new-session picker: tmux sessions, Touch ID on the Mac, the phone checks on the phone (terminal.ts, termgate.ts) ----
@@ -798,9 +798,9 @@ http.createServer(async (req, res) => {
       const added = today.add({ words: r.text, go: new URL(req.url ?? '/', 'http://x').searchParams.get('go') === '1' });
       return send(res, added.status, { words: r.text, ...added.body });
     }
-    // The Scheduled tasks screen: GET reads every source fresh, POST /api/tasks/save edits one launchd job (tasks.ts).
+    // The Scheduled tasks screen: GET reads every source fresh, POST /api/tasks/save edits one launchd job, POST /api/tasks/ask-fix tells the brain (tasks.ts).
     if (url.startsWith('/api/tasks')) {
-      const r = await tasksRoute(tasks, req.method ?? '', url, () => json(req));
+      const r = await tasksRoute(tasks, req.method ?? '', url, () => json(req), text => fromOwner(text));
       if (r) return send(res, r.status, r.body);
     }
     // The audit log panel: answered asks and decided approvals. Read-only.

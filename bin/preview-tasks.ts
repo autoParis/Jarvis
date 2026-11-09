@@ -3,6 +3,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fixMessage } from '../web/tasks.js';
 import { marks, statusOf, lastErrorOf, fromCron, toCron, schedSentence, makeTasks, execRun, type Task, type Outcome } from '../daemon/tasks.ts';
 
 const HOUR = 3_600_000;
@@ -63,6 +64,12 @@ export function makePreviewTasks() {
       if ('error' in s) return { status: 400, body: { error: s.error } };
       list = list.map(t => t.id === b.id ? { ...t, cron: toCron(s), schedule: schedSentence(s), description: String(b.description ?? '') } : t);
       return { status: 200, body: { task: list.find(t => t.id === b.id) } };
+    }
+    if (method === 'POST' && url === '/api/tasks/ask-fix') {
+      const b = await body(), t = (tasks ? await tasks.list() : list).find(x => x.id === b.id);
+      if (!t) return { status: 404, body: { error: 'That task is not in the list any more.' } };
+      console.log(`ask-fix (preview, not sent): ${fixMessage(t)}`);
+      return { status: 200, body: { sent: true } };
     }
     return undefined;
   };

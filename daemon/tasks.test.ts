@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   schedSentence, everySentence, fromCron, toCron, parsePrint, marks, statusOf, lastErrorOf, orcaOutcome, rruleSentence,
-  makeTasks, execRun, humanize, frequent, type Run, type Sched,
+  makeTasks, execRun, humanize, frequent, tasksRoute, type Run, type Sched,
 } from './tasks.ts';
 import { fixMessage, markLabel, listHtml } from '../web/tasks.js';
 
@@ -255,5 +255,20 @@ test('jarvisd serves the screen: Save needs an open app page, and the module is 
   assert.match(main, /'\/tasks\.js': 'tasks\.js'/);
   const page = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   assert.match(page, /<button id="tasksbtn" type="button">Scheduled tasks<\/button>/);
-  assert.match(page, /fetch\('\/api\/send', \{ method: 'POST', body: JSON\.stringify\(\{ text: fixMessage\(t\) \}\) \}\)/);
+  assert.match(main, /const AS_OWNER = new Set\(\[[^\]]*'\/api\/tasks\/ask-fix'/);
+  assert.match(page, /fetch\('\/api\/tasks\/ask-fix', \{ method: 'POST', body: JSON\.stringify\(\{ id: t\.id \}\) \}\)/);
+});
+
+test('Ask Jarvis to fix: the daemon builds the message from a fresh read, only for a failing or warning task', async () => {
+  const { tasks, jobs, pass } = setup();
+  const said: string[] = [];
+  const route = (id: string) => tasksRoute(tasks, 'POST', '/api/tasks/ask-fix', async () => ({ id }), t => said.push(t));
+  assert.equal((await route('launchd:io.test.nope'))?.status, 404);
+  assert.equal((await route('launchd:io.test.tick'))?.status, 409); // OK now: nothing to fix
+  await tasks.sample();
+  jobs['io.test.tick'] = { runs: 11, exit: 3 }; pass(60_000); await tasks.sample();
+  assert.equal((await route('launchd:io.test.tick'))?.status, 200);
+  assert.equal(said.length, 1);
+  assert.match(said[0], /^Scheduled task "Tick" shows Failing\. Source: launchd job io\.test\.tick \(.*io\.test\.tick\.plist\)\./);
+  assert.match(said[0], /Exit code 3\./);
 });
