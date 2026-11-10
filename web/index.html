@@ -222,8 +222,9 @@ const IMAGE_MARKER = /\[image:\s*([^\]\n]+?)\s*\]/g;
 function render(text) {
   return text.split(IMAGE_MARKER).map((part, i) => i % 2 ? shot(part) : links(part)).join('');
 }
-function shot(path) {
-  const src = '/image?path=' + encodeURIComponent(path), name = path.split('/').pop();
+// `alt` is the text of a report's `![alt](path)`: it names the picture in place of the file name.
+function shot(path, alt) {
+  const src = '/image?path=' + encodeURIComponent(path), name = alt || path.split('/').pop();
   return `<button type="button" class="shot" data-src="${esc(src)}"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" onerror="this.parentNode.classList.add('broken')"><span>${esc(name)}</span></button>`;
 }
 const viewer = $('viewer');
@@ -1466,7 +1467,6 @@ document.addEventListener('touchend', e => {
 document.addEventListener('touchcancel', () => { swipeFrom = null; }, { passive: true });
 // Back to the main conversation from a worker, from anywhere in the list.
 $('tojarvis').onclick = () => { closePane(); panel(false); };
-reportRoute(false);
 $('scrim').onclick = () => { panel(false); setPop(null); if (modelPicker.isOpen) modelPicker.open(false); };
 // ---- a project terminal (web/terminal.js, daemon/terminal.ts): fills the center. Back leaves it running, End kills it. ----
 const termEl = $('term'), termHost = $('term-host'), termIn = $('term-input');
@@ -2147,6 +2147,9 @@ if (pushReady) {
   showAlerts().then(sub => sub && postSub(sub)).catch(() => {});
   navigator.serviceWorker.addEventListener('message', e => { if (e.data?.type === 'item') showItem(e.data.id); });
 }
+// A page opened at a report's address (#report/<id>, #reports/<path>) shows it. Last, so every `let` it reaches exists:
+// above the terminal's `let term`, a report opened by its address threw and stopped the rest of this script.
+reportRoute(false);
 </script>
 </body>
 </html>

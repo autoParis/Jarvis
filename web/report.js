@@ -156,7 +156,8 @@ export function linkImages(text) {
   return lines.map((l, i) => mask[i] ? l : l.split('`').map((part, n) => n % 2 ? part : part.replace(IMAGE_PATH, '$1[image: $2]')).join('`')).join('\n');
 }
 
-const plain = s => s.replace(/\[image:[^\]\n]*\]/g, '').replace(/\[([^\]\n]+)\]\([^)\n]*\)/g, '$1').replace(/[*`]|__|^\s*(?:>|[-+]\s|\d+[.)]\s)+/g, '').replace(/\s+/g, ' ').trim();
+const MD_IMAGE = /!\[[^\]\n]*\]\([^)\n]*\)/g;
+const plain = s => s.replace(/\[image:[^\]\n]*\]/g, '').replace(MD_IMAGE, '').replace(/\[([^\]\n]+)\]\([^)\n]*\)/g, '$1').replace(/[*`]|__|^\s*(?:>|[-+]\s|\d+[.)]\s)+/g, '').replace(/\s+/g, ' ').trim();
 const addCount = (to, label, n = 1) => { to[label] = (to[label] ?? 0) + n; };
 
 /** A one-line idea of what a closed section holds. */
@@ -181,7 +182,7 @@ function describe(s) {
     if (b.type === 'table') b.rows.flat().forEach(c => { const hit = cellBadge(c); if (hit) addCount(counts, hit[0]); });
   }
   let lines = s.intro.filter(l => l.trim()).length;
-  let images = (linkImages(s.intro.join('\n')).match(/\[image:/g) ?? []).length;
+  let images = (linkImages(s.intro.join('\n')).match(/\[image:|!\[[^\]\n]*\]\(/g) ?? []).length;
   for (const c of sections) {
     for (const [k, n] of Object.entries(c.counts)) addCount(counts, k, n);
     lines += c.lines + 1;
@@ -294,9 +295,25 @@ export function docListHtml(list) {
   return `<article class="rp"><h2 class="rp-title">Reports</h2><div class="rp-stamp"><span>${list.length} ${list.length === 1 ? 'document' : 'documents'}, newest first</span></div><ul class="dl">${rows}</ul></article>`;
 }
 
+/**
+ * The absolute path of a picture a document names. A relative path is read against the document's folder, and `.` and
+ * `..` are folded here only to build the address: the daemon's /image check decides what it serves.
+ */
+export function resolveImage(path, folder) {
+  if (path.startsWith('/') || !folder) return path;
+  const parts = [];
+  for (const p of `${folder}/${path}`.split('/')) {
+    if (p === '..') parts.pop();
+    else if (p && p !== '.') parts.push(p);
+  }
+  return '/' + parts.join('/');
+}
+
 /** One document from GET /api/reports/file, all of it shown and nothing folded. Tables, badges and pictures as in a worker's report. */
 export function docHtml(d, ctx) {
   const lines = String(d.body ?? '').replace(/\r\n?/g, '\n').split('\n');
-  const name = String(d.path ?? '').split('/').pop();
-  return `<article class="rp rp-doc"><div class="rp-stamp"><span>${esc(formatStamp(d.at))}</span><span>${esc(name)}</span></div><div class="rp-doc-body">${blocksHtml(parseBlocks(lines), ctx)}</div></article>`;
+  const path = String(d.path ?? ''), name = path.split('/').pop();
+  const folder = path.startsWith('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+  const shot = (p, alt) => ctx.shot(resolveImage(p, folder), alt);
+  return `<article class="rp rp-doc"><div class="rp-stamp"><span>${esc(formatStamp(d.at))}</span><span>${esc(name)}</span></div><div class="rp-doc-body">${blocksHtml(parseBlocks(lines), { ...ctx, shot })}</div></article>`;
 }

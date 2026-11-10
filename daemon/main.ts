@@ -1,6 +1,6 @@
 import { OWNER_CAP, OWNER, cleanEnv } from './config.ts';
 import http from 'node:http';
-import { readFileSync, existsSync, createReadStream, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore, type Item, type Approval } from './store.ts';
@@ -15,7 +15,7 @@ import { makeTerminals } from './terminal.ts';
 import { makeTermGate } from './termgate.ts';
 import { termRoute } from './termroutes.ts';
 import { terminalRows } from './termrows.ts';
-import { imageFile, imageRoots, IMAGE_TYPES } from './images.ts';
+import { imageFile, imageRoots, imageRoute } from './images.ts';
 import { reportsDir, reportsRoute } from './reports.ts';
 import { saveUpload, uploadDir, UPLOAD_LIMIT } from './uploads.ts';
 import { loadVapid, pushAll, pushOpenAsks, makeNotifier, pushRoute } from './push.ts';
@@ -435,13 +435,8 @@ http.createServer(async (req, res) => {
     }
     // Rendered clips, one sentence of a stored message, and the TTS bake-off (voice.ts).
     if (await voiceFileRoute(voiceFileCtx, req, res, url)) return;
-    // Images named in Jarvis's `[image: ...]` markers, only from the folders in images.ts.
-    if (req.method === 'GET' && url === '/image') {
-      const file = imageFile(new URL(req.url ?? '/', 'http://x').searchParams.get('path') ?? '', IMAGE_ROOTS);
-      if (!file) return send(res, 404);
-      res.writeHead(200, { 'content-type': IMAGE_TYPES[extname(file).toLowerCase()], 'cache-control': 'private, max-age=300' });
-      return createReadStream(file).pipe(res);
-    }
+    // Pictures in `[image: ...]` markers and in reports, only from the folders in images.ts.
+    if (imageRoute(IMAGE_ROOTS, req, res, url)) return;
     if (req.method === 'GET' && url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       const history = store.recentTurns(80).filter(t => t.role === 'owner' || t.role === 'jarvis' || t.role === 'event' || t.role === 'jarvis-work')
