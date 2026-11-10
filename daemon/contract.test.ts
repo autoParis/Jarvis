@@ -65,7 +65,7 @@ test('every jarvis-* command, verb and flag the vault tells the brain to run exi
   const cmds = vaultCommands();
   assert.ok(cmds.length > 20, 'the vault names its commands in inline code');
   for (const { file, text } of cmds) {
-    for (const m of text.matchAll(/\bjarvis-([a-z]+)((?:\s+[^\s]+)*)/g)) {
+    for (const m of text.matchAll(/(?<!Repos\/)\bjarvis-([a-z]+)((?:\s+[^\s]+)*)/g)) {
       const bin = `bin/jarvis-${m[1]}`;
       assert.ok(existsSync(join(ROOT, bin)), `${file}: ${bin} exists (${text})`);
       const src = read(bin);
