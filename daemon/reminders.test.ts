@@ -18,10 +18,10 @@ function setup(start = DAY) {
   const store = openStore(':memory:');
   let clock = start;
   const wakes: string[] = [];
-  const fail = { orca: undefined as string | undefined, git: undefined as string | undefined, paused: false };
+  const fail = { git: undefined as string | undefined, paused: false };
   const check = makeCheck({
-    store, jarvisRun: 'run_j', log: () => {}, now: () => clock, paused: () => fail.paused,
-    poll: async () => ({ at: '', rows: [], done: [], ...(fail.orca ? { error: fail.orca } : {}) }) as any,
+    store, log: () => {}, now: () => clock, paused: () => fail.paused,
+    poll: async () => ({ at: '', rows: [] }),
     requests: { synced: async () => {}, closing: () => false },
     delivery: async () => { if (fail.git) throw new Error(fail.git); return { master: 'a', unmerged: [] }; },
     running: 'a', brainBusy: () => false, wake: t => wakes.push(t),
@@ -134,14 +134,7 @@ test('a fired reminder not done by 4 PM is told again at 8 AM', async () => {
   assert.equal(wakes.length, 2);
 });
 
-test('Orca or git failing does not hold back a reminder, and the kill switch does', async () => {
-  const orca = setup();
-  orca.add('A', 5);
-  orca.pass(10 * MIN);
-  orca.fail.orca = 'Orca: no answer';
-  await orca.check.tick();
-  assert.equal(orca.wakes.length, 1);
-
+test('git failing does not hold back a reminder, and the kill switch does', async () => {
   const git = setup();
   git.add('B', 5);
   git.pass(10 * MIN);

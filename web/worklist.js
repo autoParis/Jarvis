@@ -12,6 +12,7 @@
 //   while its request is open (working, waiting, failed), or while it has no finish time. The fold only hides; it deletes nothing.
 import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, STATE } from './requestlist.js';
 import { formatStamp } from './workfold.js';
+import { actionsWith } from './contract.js';
 
 export const GROUPS = [['story', 'Stories'], ['babysit', 'Babysitting'], ['side', 'Side chats'], ['terminal', 'Terminals'], ['other', 'Other']];
 // A project terminal's mark: a small screen with a prompt (daemon/termrows.ts).
@@ -81,11 +82,8 @@ function itemHtml(i, ctx) {
   const note = !req && idleNote && idleNote.length > 14 ? idleNote : !row && !req.row ? closedNote(req) : '';
   const isHidden = row && ctx.hidden.has(row.id);
   const openId = row?.id ?? openIdOf(req);
-  // On an idle side chat the × closes the chat. On every other row it only hides the row.
-  const closes = row?.sideChat && row.state === 'idle' && !isHidden;
-  const hide = closes
-    ? `<button type="button" class="hide" data-close="${esc(row.dispatch)}" aria-label="Close ${esc(title)}" title="Close this side chat. Its worker stops.">×</button>`
-    : `<button type="button" class="hide"${row ? ` data-hide-row="${esc(row.id)}"` : ''}${req ? ` data-hide="${req.id}"` : ''}${isHidden ? ' data-unhide' : ''} aria-label="${isHidden ? 'Show' : 'Hide'} ${esc(title)} in this list" title="${isHidden ? 'Show in the list again' : 'Hide from this list. Nothing in Orca stops.'}">${isHidden ? '↺' : '×'}</button>`;
+  // The × only hides the row.
+  const hide = `<button type="button" class="hide"${row ? ` data-hide-row="${esc(row.id)}"` : ''}${req ? ` data-hide="${req.id}"` : ''}${isHidden ? ' data-unhide' : ''} aria-label="${isHidden ? 'Show' : 'Hide'} ${esc(title)} in this list" title="${isHidden ? 'Show in the list again' : 'Hide from this list. Nothing stops.'}">${isHidden ? '↺' : '×'}</button>`;
   const state = failed ? 'failed' : row?.state ?? req.status;
   return `<div class="wrow s-${esc(state)}${openId && ctx.reading === openId ? ' reading' : ''}${isHidden ? ' hidden-row' : ''}"${openId ? ` data-id="${esc(openId)}" role="button" tabindex="0"` : ''} title="${esc(status)}${row?.note && row.state !== 'idle' ? `: ${esc(row.note)}` : ''}">`
     + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
@@ -144,7 +142,6 @@ export function approvalTag(action, args) {
   if (action === 'gmail-send') return args?.to ? `Email to ${args.to}${args.cc ? `, cc ${args.cc}` : ''}` : 'Send an email';
   if (action === 'worker-start') return story ? `Story ${story}` : 'Start a worker';
   if (action === 'terminal-send') return 'Send into a session';
-  if (action === 'worker-send') return 'Message a worker';
   if (action === 'worker-stop') return 'Stop a worker';
   if (action === 'gh-pr-close') return `Close PR ${args?.number ?? ''}`.trim();
   if (action === 'fbm-client-pause') return `Pause ${args?.client ?? 'a client'}`;
@@ -155,7 +152,7 @@ export function approvalTag(action, args) {
 }
 
 /** These read back what they did, so their result is worth showing. Other results are ids and raw output. */
-const READS_BACK = new Set(['gh-pr-close', 'fbm-client-pause', 'prod-mcp-call', 'terminal-send']);
+const READS_BACK = actionsWith('readsBack');
 
 /** The button labels of a pending card. A worker's permission prompt is allowed or denied, not approved. */
 export function approvalButtons(action) {

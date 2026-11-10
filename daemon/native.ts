@@ -1,15 +1,17 @@
 import { OWNER_CAP, OWNER } from './config.ts';
+import { WAITING_LINE, REPORT_NUDGE, outcomeOf } from './workercontract.ts';
+export { NATIVE_FOOTER, REPORT_NUDGE, WAITING_LINE } from './workercontract.ts';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { cleanEnv } from './orca.ts';
+import { cleanEnv } from './config.ts';
 import { classify, type NativeState, type WorkRow } from './work.ts';
 import type { Approval, NativeWorkerRow, Store } from './store.ts';
 import type { Log } from './log.ts';
 import { lastAssistantText, lastTurnMessages } from './transcript.ts';
 import { FRESH_WRITE_MS, holdersIn, lastModel, processTable, sessionName, tailOf, type Holder } from './resume.ts';
 
-// Claude Code background sessions (`claude --bg`) as Jarvis's own workers, with no Orca in the loop (Jarvis 2.0, stage B).
+// Claude Code background sessions (`claude --bg`) as Jarvis's own workers (Jarvis 2.0, stage B).
 // jarvisd starts one, the session's hooks post back here over http (a permission prompt becomes an Approve card, each
 // turn's last message becomes the report), `claude agents` tells us whether it lives, and a reply goes in through a
 // short-lived Claude session, because SendMessage from another session is the only way into a running background one.
@@ -97,17 +99,6 @@ export const DENY_MESSAGE = `${OWNER_CAP} denied it from the Jarvis app`;
  * reported to the brain once the report is this old. A Stop hook that arrives settles the turn at once (stopHook).
  */
 export const SILENT_DONE_MS = 2 * 60_000;
-/** A turn that ends on purpose before the work is done starts its last message with this: it waits for something. */
-export const WAITING_LINE = /^\s*WAITING\s*:/i;
-/**
- * The Stop hook's `decision: block` reason for a turn that ended with no DONE, FAILED or WAITING line, no ask to the brain
- * and no background task or scheduled wake-up: Claude Code sends the worker straight back with these words (proven live
- * on 2.1.316, 2026-11-09: the next message came about one second later). Given once per turn; the next stop is final.
- */
-export const REPORT_NUDGE = `Jarvis got no report from this turn. Your last message does not start with a DONE: or FAILED: line, so ${OWNER} sees nothing. Do one of these now. Do not do the work again.
-- The task is finished: write your final message again. Its first line is \`DONE: <one sentence>\` (or \`FAILED: <one sentence>\`), then the report.
-- You wait for a background task or for an answer: write one line that starts with \`WAITING:\` and says what you wait for. Then end your turn.
-- You need a decision from ${OWNER}: ask jarvis-brain with SendMessage in the ask format. Then end your turn.`;
 /** The state key that says a worker's report at this time needs no silent-turn notice: it was a pause, or the notice went out. */
 const quietKey = (id: string) => `nativeQuiet:${id}`;
 /** At most this many REPORT_NUDGE blocks per worker in this window, whatever Claude Code says about the chain. */
@@ -126,29 +117,6 @@ export const DESKTOP_WAITING = 'Open in the Claude desktop app';
 /** The first message of a resumed session whose task was unfinished when its terminal died. */
 export const NUDGE = 'Your terminal was restarted by Jarvis. Continue the task from where you stopped. Check the result of your last action before repeating it. Report DONE or FAILED as before.';
 
-/** What gate.ts appends to every background worker's brief. */
-export const NATIVE_FOOTER = `
-
-## You are a Jarvis worker
-You are a Claude Code session started by Jarvis, ${OWNER}'s assistant. Your coordinator is the Claude Code session named \`jarvis-brain\`; reach it with SendMessage (ListAgents shows it). AskUserQuestion is blocked.
-
-Ask only what needs a human decision, with SendMessage to jarvis-brain, in this shape:
-STORY: <number and topic, at most 8 words>
-WHERE: <what you are doing, one or two short sentences>
-QUESTION: <one sentence>
-CONTEXT: <optional, at most 3 sentences>
-OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
-Then end your turn. The answer arrives as a message from jarvis-brain or jarvis-brain-relay (${OWNER}'s words, carried by jarvisd) and starts a new turn.
-An ask must have OPTIONS. Jarvis sends an ask with no options back to you, and ${OWNER} does not see it.
-
-A notice is not a question. A notice tells ${OWNER} a status and asks nothing, for example "the switch starts now, jarvisd restarts in 1 minute". Send a notice only if ${OWNER} must know it now. Start it with \`NOTICE: <one sentence>\` and do not use the ask fields. Jarvis shows it as a status line, with nothing to answer, and no answer comes back. Do not wait for one.
-
-When the work is finished, your last message of the final turn must start with a line \`DONE: <one sentence>\` (or \`FAILED: <one sentence>\`), followed by the report: what changed, the branch and commit, the PR link if any, what was not proven. That exact text reaches ${OWNER} word for word.
-If you end a turn before the work is finished, because you wait for a background task or an answer, start your last message with \`WAITING: <what you wait for>\`.
-
-If a permission prompt appears, wait; ${OWNER} answers it from his app. If the permission layer refuses a command, do not retry or route around it; say so in your report.
-
-Before each batch of tool calls, write one plain sentence saying what you are about to do.`;
 
 /** The settings file every background worker starts with: its hooks point at jarvisd. */
 export function workerSettings(jarvisUrl: string): object {
@@ -178,10 +146,6 @@ export function summarize(tool: string, input: any): string {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const ago = (ms: number) => ms < 3_600_000 ? `${Math.max(1, Math.round(ms / 60_000))} min ago` : ms < 172_800_000 ? `${Math.round(ms / 3_600_000)} h ago` : `${Math.round(ms / 86_400_000)} d ago`;
-const outcomeOf = (report: string): 'done' | 'failed' | null => {
-  const m = report.match(/^\s*(DONE|FAILED)\b/i);
-  return m ? (m[1].toUpperCase() === 'DONE' ? 'done' : 'failed') : null;
-};
 
 /**
  * When a finished row finished, in ms: its DONE or FAILED report, else its last change. The report time does not move when
@@ -554,7 +518,7 @@ export function makeNative(o: {
      * so the Claude app reaches it and the work list keeps it as an `n:` row. Never `claude --bg --resume` with flags: on a
      * background session that keeps saved options, that starts a copy under a new id (approval 434, 2026-11-08, reproduced
      * on 2.1.316). A session jarvisd already runs is ended first and resumed with the flag. Any other process on the session
-     * (a terminal, the desktop app, an Orca tab, a background host) refuses it and is named, unless its pid is in `stop`:
+     * (a terminal, the desktop app, a background host) refuses it and is named, unless its pid is in `stop`:
      * then it is ended first, because two writers on one session lose a turn. No message goes in, so no turn starts.
      */
     async phone(a: { sessionId: string; cwd: string; title: string; transcript?: string; approvalId?: number; stop?: number[] }): Promise<PhoneResult> {
@@ -770,7 +734,7 @@ export function makeNative(o: {
         const r: WorkRow = {
           id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(task.title, task.spec),
           state: rowState(w, asking(w)),
-          worktree: basename(w.cwd), sideChat: false,
+          worktree: basename(w.cwd),
           // An interactive session takes a message in any state: a stopped or failed one is resumed first.
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
           native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}) },

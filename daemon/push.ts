@@ -2,6 +2,7 @@ import { createECDH, createCipheriv, createPrivateKey, generateKeyPairSync, hkdf
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Store, Item } from './store.ts';
+import type { RouteResult, Body } from './route.ts';
 
 // Web push without a library: VAPID (RFC 8292) signs who is sending, aes128gcm (RFC 8291) encrypts the payload.
 
@@ -176,4 +177,28 @@ export function askMessage(i: Item): PushMessage {
 export function urgent(text: string): { urgent: boolean; text: string } {
   const m = /^\s*\[urgent\]\s*/i.exec(text);
   return m ? { urgent: true, text: text.slice(m[0].length) } : { urgent: false, text };
+}
+
+/**
+ * Web push routes: the app subscribes with the daemon's VAPID public key (the Alerts button). The test push ignores quiet
+ * hours, because the owner just turned Alerts on and expects to see it.
+ */
+export async function pushRoute(o: { store: Pick<Store, 'addPushSub' | 'removePushSub'>; publicKey: string; log: (m: string) => void;
+  notify: (m: PushMessage, opts: { urgent: boolean }) => Promise<unknown> }, method: string, url: string, body: Body, userAgent = ''): Promise<RouteResult | undefined> {
+  if (method === 'GET' && url === '/api/push/key') return { status: 200, body: { publicKey: o.publicKey } };
+  if (method !== 'POST') return undefined;
+  if (url === '/api/push/subscribe') {
+    const sub = await body();
+    if (typeof sub?.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || typeof sub.keys?.p256dh !== 'string' || typeof sub.keys?.auth !== 'string') return { status: 400 };
+    o.store.addPushSub(sub, userAgent.slice(0, 200));
+    o.log(`push: subscribed ${new URL(sub.endpoint).host}`);
+    return { status: 204 };
+  }
+  if (url === '/api/push/unsubscribe') {
+    const { endpoint } = await body();
+    if (typeof endpoint === 'string') o.store.removePushSub(endpoint);
+    return { status: 204 };
+  }
+  if (url === '/api/push/test') return { status: 200, body: { reached: await o.notify({ title: 'Jarvis', body: 'Alerts are on. This is what an ask looks like.', url: '/', tag: 'test' }, { urgent: true }) } };
+  return undefined;
 }

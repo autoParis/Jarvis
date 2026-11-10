@@ -55,7 +55,7 @@ test('events carry no turn, and a failed turn reports its error', async () => {
   const { brain } = setup();
   try {
     let r = reply(brain);
-    brain.send('[orca event] New');
+    brain.send('[worker event] New');
     assert.deepEqual((await r).turns, []);
     r = reply(brain);
     brain.send('fail', 7);
@@ -119,7 +119,7 @@ test('the brain knows when its running turn holds a message from the owner', asy
   try {
     assert.equal(brain.answeringOwner, false);
     let r = once(brain, 'reply');
-    brain.send('[orca event] a worker stopped');
+    brain.send('[worker event] a worker stopped');
     assert.equal(brain.answeringOwner, false, 'an event turn is the brain on its own');
     await r;
     r = once(brain, 'reply');
@@ -409,14 +409,14 @@ test('a held notice starts no turn and rides as one line, after the brief, on th
     await new Promise(res => setTimeout(res, 100));
     assert.equal(starts().length, 0, 'no process started for the notices');
     const r = reply(brain);
-    brain.send('[orca event] New', undefined);
+    brain.send('[worker event] New', undefined);
     await r;
     const m = messages();
     assert.equal(m.length, 1);
     const parts = m[0].text.split('\n\n');
     assert.equal(parts[0], '[session start] brief');
     assert.equal(parts[1], '[held notices, no answer needed] [gate] The owner approved #4 with the button. | [ask card] The owner tapped "yes" on ask message_id=m1 in the app.');
-    assert.equal(parts[2], '[orca event] New');
+    assert.equal(parts[2], '[worker event] New');
     assert.equal(brain.heldCount, 0);
   } finally { brain.stop(); }
 });

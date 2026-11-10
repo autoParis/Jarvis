@@ -1,5 +1,6 @@
 import { realpathSync, statSync, readFileSync, readdirSync, mkdirSync } from 'node:fs';
 import { join, extname, sep, basename } from 'node:path';
+import type { RouteResult } from './route.ts';
 
 // Long documents for the owner to read in the app: story drafts, worker reports, research. The brain and workers write
 // markdown files here, and the chat links one with a `[report: /abs/path.md]` line. Only this folder is served.
@@ -64,4 +65,15 @@ export function readReport(path: string, dir: string): (ReportEntry & { body: st
     const body = readFileSync(real, 'utf8');
     return { path, title: reportTitle(body, real), at: statSync(real).mtime.toISOString(), body };
   } catch { return; }
+}
+
+/** Long documents in data/reports, read-only. A path outside that folder, or not a .md file, is refused. */
+export function reportsRoute(dir: string, method: string, url: string, query: URLSearchParams): RouteResult | undefined {
+  if (method !== 'GET') return undefined;
+  if (url === '/api/reports') return { status: 200, body: listReports(dir) };
+  if (url === '/api/reports/file') {
+    const r = readReport(query.get('path') ?? '', dir);
+    return r ? { status: 200, body: r } : { status: 404, body: { error: 'Only .md files in data/reports can be opened.' } };
+  }
+  return undefined;
 }

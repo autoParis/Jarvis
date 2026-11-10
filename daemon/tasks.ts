@@ -4,8 +4,7 @@
 // The one-line description lives in the plist itself (key JarvisDescription; launchd ignores keys it does not know,
 // checked on 2026-11-09 with a throwaway job), so it cannot drift from the job.
 // Run history: launchd keeps only the last exit code and a run count. jarvisd samples `launchctl print` every minute
-// and stores one row per new run it sees (task_runs). The Orca automation keeps its own run history. jarvisd's own
-// timers write a row when they tick.
+// and stores one row per new run it sees (task_runs). jarvisd's own timers write a row when they tick.
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, renameSync, copyFileSync, statSync, openSync, readSync, closeSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,7 +23,7 @@ export type Outcome = 'ok' | 'warn' | 'fail';
 export type Mark = { at: string; state: Outcome | 'none'; runs: number; note?: string };
 export type Status = 'OK' | 'Warning' | 'Failing' | 'Off';
 export type Task = {
-  id: string; source: 'launchd' | 'orca' | 'jarvisd'; sourceLabel: string; name: string;
+  id: string; source: 'launchd' | 'jarvisd'; sourceLabel: string; name: string;
   schedule: string; cron?: string; editable: boolean; editNote?: string; description: string;
   status: Status; strip: 'hourly' | 'runs'; marks: Mark[];
   lastError?: { at?: string; text: string; since?: string };
@@ -185,36 +184,13 @@ export function lastErrorOf(runs: RunRow[]): Task['lastError'] {
   return { at: new Date(bad.at).toISOString(), text: bad.note ?? 'The run failed.', ...(streak >= 2 && sorted.at(-1)!.outcome !== 'ok' ? { since: new Date(sorted[i].at).toISOString() } : {}) };
 }
 
-// ---- Orca automations (read-only) ----
-const RR_DAYS: Record<string, string> = { MO: 'Monday', TU: 'Tuesday', WE: 'Wednesday', TH: 'Thursday', FR: 'Friday', SA: 'Saturday', SU: 'Sunday' };
-export function rruleSentence(rrule: string): string {
-  const p = Object.fromEntries(rrule.split(';').map(kv => kv.split('=')));
-  const n = Number(p.INTERVAL ?? 1), h = p.BYHOUR !== undefined ? Number(p.BYHOUR) : undefined, m = Number(p.BYMINUTE ?? 0);
-  const at = h !== undefined && !p.BYHOUR.includes(',') ? ` at ${clock(h, m)}` : '';
-  if (p.FREQ === 'MINUTELY') return plural(n, 'minute');
-  if (p.FREQ === 'HOURLY') return plural(n, 'hour');
-  if (p.FREQ === 'DAILY') return `${plural(n, 'day')}${at}`;
-  if (p.FREQ === 'WEEKLY' && p.BYDAY) return `Every ${p.BYDAY.split(',').map((d: string) => RR_DAYS[d] ?? d).join(' and ')}${at}`;
-  return rrule;
-}
-type OrcaRun = { scheduledFor?: number; createdAt?: number; status?: string; error?: string | null; precheckResult?: { error?: string | null; timedOut?: boolean; exitCode?: number | null } | null };
-export function orcaOutcome(r: OrcaRun): RunRow | null {
-  const at = r.scheduledFor ?? r.createdAt;
-  if (!at || r.status === 'running' || r.status === 'pending' || r.status === 'queued') return null;
-  const pre = r.precheckResult;
-  const err = pre?.error || (pre?.timedOut ? 'The precheck timed out.' : '') || r.error || '';
-  if (r.status === 'completed' && !r.error) return { at, outcome: 'ok' };
-  if (r.status?.startsWith('skipped') && !err) return { at, outcome: 'ok', note: 'Skipped by its precheck.' };
-  return { at, outcome: 'fail', note: `${err || `Run ended as ${r.status}.`}${r.status === 'skipped_precheck' ? ' The run was skipped.' : ''}` };
-}
-
 // ---- the reader ----
 export type JarvisdTask = { id: string; name: string; schedule: string; everyMs: number; description: string };
 export type TasksDeps = {
   db: DatabaseSync; run: Run; uid: number; agentsDir: string; prefixes: string[];
   /** Labels never offered for editing: jarvisd's own job, which a reload would stop mid-request. */
   locked: string[];
-  jarvisd: JarvisdTask[]; orca: boolean; now?: () => number; log?: (m: string, f?: object) => void;
+  jarvisd: JarvisdTask[]; now?: () => number; log?: (m: string, f?: object) => void;
   getState: (k: string) => string | undefined; setState: (k: string, v: string) => void;
 };
 
@@ -294,25 +270,6 @@ export function makeTasks(d: TasksDeps) {
     };
   }
 
-  async function orcaTasks(): Promise<Task[]> {
-    const list = await d.run('orca', ['automations', 'list', '--json']);
-    if (list.code) { d.log?.('tasks: orca automations list failed', { error: list.stderr.slice(0, 200) }); return []; }
-    const autos = (JSON.parse(list.stdout).result?.automations ?? []) as { id: string; name: string; rrule: string; enabled: boolean }[];
-    return Promise.all(autos.map(async a => {
-      const r = await d.run('orca', ['automations', 'runs', '--id', a.id, '--limit', '100', '--json']);
-      const runs = r.code ? [] : ((JSON.parse(r.stdout).result?.runs ?? []) as OrcaRun[]).map(orcaOutcome).filter((x): x is RunRow => !!x);
-      const hourly = /FREQ=(HOURLY|MINUTELY)/.test(a.rrule);
-      const shown = marks(runs.filter(x => !hourly || x.at >= now() - 25 * HOUR), hourly, now());
-      const lastError = lastErrorOf(runs);
-      return {
-        id: `orca:${a.id}`, source: 'orca', sourceLabel: `Orca automation "${a.name}" (${a.id})`, name: sentenceCase(a.name),
-        schedule: rruleSentence(a.rrule), editable: false, editNote: 'Orca keeps this schedule. Change it in Orca.', description: '',
-        status: statusOf(runs, shown, !a.enabled), strip: hourly ? 'hourly' : 'runs', marks: shown,
-        ...(r.code ? { lastError: { text: `Could not read its run history: ${r.stderr.trim().slice(0, 200)}` } } : lastError ? { lastError } : {}),
-      } satisfies Task;
-    }));
-  }
-
   function jarvisdTask(t: JarvisdTask): Task {
     const hourly = t.everyMs <= HOUR, runs = stored(t.id, hourly), shown = marks(runs, hourly, now());
     const lastError = lastErrorOf(runs);
@@ -326,9 +283,9 @@ export function makeTasks(d: TasksDeps) {
   const hiddenIds = (): string[] => { try { const v = JSON.parse(d.getState('tasksHidden') ?? '[]'); return Array.isArray(v) ? v.filter(x => typeof x === 'string') : []; } catch { return []; } };
 
   async function list(): Promise<Task[]> {
-    const [jobs, orca] = await Promise.all([launchdJobs(), d.orca ? orcaTasks().catch(e => { d.log?.(`tasks: orca read failed: ${e}`); return []; }) : []]);
+    const jobs = await launchdJobs();
     const hidden = new Set(hiddenIds());
-    return [...jobs.map(launchdTask), ...orca, ...d.jarvisd.map(jarvisdTask)].map(t => hidden.has(t.id) ? { ...t, hidden: true } : t)
+    return [...jobs.map(launchdTask), ...d.jarvisd.map(jarvisdTask)].map(t => hidden.has(t.id) ? { ...t, hidden: true } : t)
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 

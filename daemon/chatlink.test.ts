@@ -7,11 +7,9 @@ import { makeGate } from './gate.ts';
 import { makeChatLinks } from './chatlink.ts';
 import { chatDecisionHtml } from '../web/worklist.js';
 
-const id = { run: 'run_x', handle: 'term_x' };
-
 function setup() {
   const s = openStore(':memory:');
-  const gate = makeGate(s, id, () => {});
+  const gate = makeGate(s, () => {});
   return { s, gate, links: makeChatLinks(s) };
 }
 

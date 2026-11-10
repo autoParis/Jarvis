@@ -1,5 +1,0 @@
-Worker term_00000000-0000-4000-a000-000000000007 ended its turn without sending worker_done for task "#4486 Prefill detected make in review queue" (task_000000000004).
-The Dispatch is still open. Answer it with your Orca CLI's `orchestration send --to dispatch:ctx_000000000009 --subject "<topic>" --body "<guidance>"`, retry it, or stop the worker.
-Last output:
-The worktree is clean at `0000000001`, and nothing beyond the claim commit has been pushed yet. The code review is still running in the background. It will wake this session when it finishes, and then I'll handle its findings, push, and start the review rounds.
-Full output: orchestration worker-read --dispatch ctx_000000000009

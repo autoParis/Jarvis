@@ -8,10 +8,8 @@ import { helpRun } from './fakeclaude.ts';
 import { askCard } from './asks.ts';
 import { makeNative, NATIVE_FOOTER, REPORT_NUDGE, type Claude } from './native.ts';
 import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId, workerMessageKind, NO_OPTIONS_REFUSAL } from './nativeroutes.ts';
-import { buildCommand, isNativeArgs, nativeName, WORKER_PERMISSION, BUTTON_ONLY } from './gate.ts';
+import { buildCommand, nativeName, WORKER_PERMISSION, BUTTON_ONLY } from './gate.ts';
 import { chatLines } from './transcript.ts';
-
-const id = { run: 'run_x', handle: 'term_x' };
 
 /** A fake `claude`: one background worker that starts, is listed alive, and a relay that always says SENT. */
 function fakeClaude() {
@@ -159,32 +157,21 @@ test('the native worker footer says an ask needs options and a notice is not a q
   assert.match(NATIVE_FOOTER, /NOTICE: <one sentence>/);
 });
 
-test('the gate routes native worker-start, stop and abandon to native.ts and never proposes a permission card', () => {
-  assert.ok(isNativeArgs('worker-start', { native: true }));
-  assert.ok(isNativeArgs('worker-start', {}), 'native by default since 2026-11-06');
-  assert.ok(!isNativeArgs('worker-start', { orca: true }));
-  assert.ok(isNativeArgs('question', {}) && isNativeArgs('side-chat', {}));
-  assert.ok(isNativeArgs('today-start', {}) && isNativeArgs('today-draft', {}), 'Today is native since 2026-11-08');
-  assert.ok(!isNativeArgs('today-start', { orca: true }));
-  assert.ok(isNativeArgs('terminal-send', { terminal: 'n:abc' }) && !isNativeArgs('terminal-send', { terminal: 'term_1' }));
-  const q = buildCommand('question', { repo: '/r', question: 'Why?' }, id);
+test('the gate routes worker-start, stop and abandon to native.ts and never proposes a permission card', () => {
+  const q = buildCommand('question', { repo: '/r', question: 'Why?' });
   assert.equal(q[0], 'native'); assert.match(q[3], /Read-only research/); assert.match(q[3], /first line is exactly `DONE: answered`/); assert.doesNotMatch(q[3], /worker_done/);
-  const sc = buildCommand('side-chat', { repo: '/r', text: 'hi there' }, id);
-  assert.equal(sc[0], 'native'); assert.match(sc[3], /Side chat with the owner/); assert.match(sc[3], /hi there/); assert.doesNotMatch(sc[3], /orca orchestration/);
-  assert.equal(buildCommand('question', { repo: '/r', orca: true, question: 'Why?' }, id)[0], 'orca');
-  assert.ok(isNativeArgs('worker-stop', { dispatch: 'n:abc' }));
-  assert.ok(!isNativeArgs('worker-stop', { dispatch: 'ctx_1' }));
-  const start = buildCommand('worker-start', { repo: '/r', spec: 'Do #1', native: true, taskTitle: '#1 topic' }, id);
+  const sc = buildCommand('side-chat', { repo: '/r', text: 'hi there' });
+  assert.equal(sc[0], 'native'); assert.match(sc[3], /Side chat with the owner/); assert.match(sc[3], /hi there/); assert.doesNotMatch(sc[3], /worker_done/);
+  const start = buildCommand('worker-start', { repo: '/r', spec: 'Do #1', native: true, taskTitle: '#1 topic' });
   assert.equal(start[0], 'native'); assert.equal(start[1], 'start'); assert.equal(start[2], '/r');
   assert.match(start[3], /Do #1\n\n## Filing issues/);
-  assert.doesNotMatch(start[3], /Orca brief above/);
+  assert.match(start[3], /One exception to not posting on GitHub/);
   assert.match(start[3], /## You are a Jarvis worker/);
   assert.match(start[3], /DONE: <one sentence>/);
-  assert.throws(() => buildCommand('worker-start', { repo: '/r', spec: 'x', native: true, permissionMode: 'plan' }, id), /permissionMode/);
-  assert.deepEqual(buildCommand('worker-stop', { dispatch: 'n:abc' }, id), ['native', 'stop', 'n:abc']);
-  assert.deepEqual(buildCommand('worker-abandon', { dispatch: 'n:abc' }, id), ['native', 'abandon', 'n:abc']);
-  assert.equal(buildCommand('worker-stop', { dispatch: 'ctx_1' }, id)[0], 'orca');
-  assert.throws(() => buildCommand(WORKER_PERMISSION, { worker: 'abc' }, id), /cannot be proposed/);
+  assert.throws(() => buildCommand('worker-start', { repo: '/r', spec: 'x', native: true, permissionMode: 'plan' }), /permissionMode/);
+  assert.deepEqual(buildCommand('worker-stop', { dispatch: 'n:abc' }), ['native', 'stop', 'n:abc']);
+  assert.deepEqual(buildCommand('worker-abandon', { dispatch: 'n:abc' }), ['native', 'abandon', 'n:abc']);
+  assert.throws(() => buildCommand(WORKER_PERMISSION, { worker: 'abc' }), /cannot be proposed/);
   assert.ok(BUTTON_ONLY.has(WORKER_PERMISSION));
   assert.equal(nativeName('#4412 Onboarding wizard!', 7), '4412-onboarding-wizard-7');
   assert.equal(nativeName(undefined, 8), 'worker-8');

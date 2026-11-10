@@ -1,6 +1,6 @@
 import { OWNER } from './config.ts';
 import { execFile } from 'node:child_process';
-import { cleanEnv } from './orca.ts';
+import { cleanEnv } from './config.ts';
 import { eastern } from './reminders.ts';
 import { sqlTime } from './push.ts';
 import type { Store, SupportReply } from './store.ts';

@@ -3,8 +3,9 @@ import { ROW_PREFIX } from './native.ts';
 import type { Store, Item } from './store.ts';
 import type { Log } from './log.ts';
 import type { PeerMessage } from './brain.ts';
-import { askCard, fields } from './asks.ts';
-import { OWNER } from './config.ts';
+import { askCard } from './asks.ts';
+import { fields, readReport, NO_OPTIONS_REFUSAL, noticeLine } from './workercontract.ts';
+export { NO_OPTIONS_REFUSAL, noticeLine } from './workercontract.ts';
 import { findSession } from './resume.ts';
 
 // The http side of native workers (Jarvis 2.0, stage B), kept out of main.ts so it can be tested: the three hooks a
@@ -80,10 +81,6 @@ export function answerOpenAsks(store: Store, worker: string, text: string, by: '
 /** What a worker's SendMessage is: an ask with options, a status notice, or an ask with no options (sent back). */
 export type WorkerMessageKind = 'ask' | 'notice' | 'no-options';
 
-/** Sent back to a worker whose ask has no options. Nothing reached the owner. */
-export const NO_OPTIONS_REFUSAL = `Jarvis did not show this message to ${OWNER}. It reads as a question, but it has no options.
-If you need a decision, send it again with an OPTIONS line: recommended first, at most 3, each "<choice> because <reason under 10 words>".
-If it is only a status update, start it with \`NOTICE:\` and ask nothing. It then shows as a status line, with nothing to answer.`;
 
 const LINK = /\bhttps?:\/\/\S+/g;
 
@@ -94,7 +91,8 @@ const LINK = /\bhttps?:\/\/\S+/g;
  */
 export function workerMessageKind(text: string): WorkerMessageKind {
   const body = text.trim();
-  if (/^(notice|done|failed)\s*:/i.test(body)) return 'notice';
+  const label = readReport(body).label;
+  if (label === 'NOTICE' || label === 'DONE' || label === 'FAILED') return 'notice';
   const probe = { id: 0, source: 'native', external_id: 'probe', kind: 'question', dispatch_id: null, subject: '', body, options: null,
     status: 'new', answer: null, created_at: '', pushes: 0, pushed_at: null, meta: null } as Item;
   if (askCard(probe)?.options.length) return 'ask';
@@ -102,8 +100,6 @@ export function workerMessageKind(text: string): WorkerMessageKind {
   return asks ? 'no-options' : 'notice';
 }
 
-/** A notice's text on one line without its `NOTICE:` label, for the worker's pane and the chat. */
-export const noticeLine = (text: string) => text.trim().replace(/^notice\s*:\s*/i, '').replace(/\s+/g, ' ').slice(0, 300);
 
 /**
  * The brain answered a turn that a cross-session message started. Only a session jarvisd started counts

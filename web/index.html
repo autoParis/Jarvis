@@ -17,7 +17,6 @@
 <aside id="work" aria-label="Work">
   <div class="w-head"><b>Work</b><span class="c-sub" id="workcount"></span></div>
   <button type="button" id="tojarvis" class="here"><b>Jarvis</b><span class="conn" id="status" title="connecting…"><span class="sr">connecting…</span></span><small>Main conversation</small></button>
-  <div id="workerr" hidden></div>
   <div class="list"><div id="worklist"></div></div>
   <div class="done-line" id="doneinfo"></div>
 </aside>
@@ -36,7 +35,7 @@
       <button type="button" class="need-btn need-mig" id="mig-btn" aria-expanded="false" aria-controls="pop-migration" aria-label="Leads, nobody to contact" title="Leads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M15 11h6M18 8l3 3-3 3"/></svg><span class="nl">Leads</span><em hidden></em></button>
     </div>
     <div class="tools">
-      <button type="button" class="ib" id="pane-open" hidden aria-label="Open in Orca" title="Open in Orca"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M18 14v5H5V6h5"/></svg></button>
+      <button type="button" class="ib" id="pane-open" hidden aria-label="Open in Terminal" title="Open in Terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M18 14v5H5V6h5"/></svg></button>
       <button type="button" class="ib" id="pane-desktop" hidden aria-label="Open in the Claude desktop app" title="Open in the Claude desktop app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
       <button type="button" class="ib" id="pane-phone" hidden aria-label="Continue on phone" title="Continue on phone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/></svg></button>
       <button type="button" class="term-act" id="term-copy" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg><span id="term-copy-label">Copy attach command</span></button>
@@ -49,7 +48,6 @@
   </header>
   <!-- The meeting toast (Leads, temporary): the Eastern day of the meeting only. The x closes it for that meeting, on every screen. -->
   <div class="mtoast-row"><div class="mtoast" id="mtoast" role="status" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></svg><b class="mt-who"></b><span class="mt-at"></span><button type="button" class="mt-x" id="mtoast-x" aria-label="Close the meeting reminder" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div></div>
-  <div id="doneline" hidden><span class="txt"></span><button type="button" aria-label="Dismiss">×</button></div>
   <section id="pop-requests" class="pop" role="dialog" aria-label="Requests" tabindex="-1" hidden>
     <div class="pop-head"><b>Requests</b><span class="c-sub" id="req-pos"></span><button type="button" class="ib pop-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     <div class="pop-body" id="req-body">
@@ -183,7 +181,7 @@
 <script type="module">
 import { DEFAULTS, makeSegmenter, levelDb, encodeWav } from '/listen.js';
 import { STATE as REQ_STATE, ago, requestMark, openIdOf } from '/requestlist.js';
-import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, messageFootHtml, toolRunHtml, toolRunSummary, briefFoldHtml, paneTag, COPY_ICON, COPIED_ICON, SPEAK, REPLY_ICON, quoteHtml, quoteSnippet, quoteWho } from '/workfold.js';
+import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, messageFootHtml, toolRunHtml, toolRunSummary, paneTag, COPY_ICON, COPIED_ICON, SPEAK, REPLY_ICON, quoteHtml, quoteSnippet, quoteWho } from '/workfold.js';
 import { makeSpeech } from '/speech.js';
 import { enterSends } from '/enterkey.js';
 import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
@@ -482,8 +480,8 @@ function renderRequests() {
     }
     drawnKey = current; drawnHtml = html;
   }
-  // Only a key answers a terminal menu. Words sent from a box would go to the worker as a message while it sits there.
-  free.hidden = !item?.ask || !!item.ask.prompt;
+  // The free-text box shows under a worker ask only.
+  free.hidden = !item?.ask;
   box.disabled = item?.ask?.status === 'sending';
   const rest = list.filter(x => x !== item);
   if (!rest.length) othersOpen = false;
@@ -777,7 +775,7 @@ function setPop(next) {
     p.btn.classList.toggle('is-open', name === next);
   }
   // Tab stays in the buttons and the popup while the page behind them is dimmed.
-  for (const el of [$('work'), $('chat'), $('pane'), $('doneline'), $('mtoast'), document.querySelector('.h-left'), document.querySelector('.c-head .tools')]) el.inert = !!next;
+  for (const el of [$('work'), $('chat'), $('pane'), $('mtoast'), document.querySelector('.h-left'), document.querySelector('.c-head .tools')]) el.inert = !!next;
   if (next) {
     panel(false); showMenu(false);
     if (next === 'messages') fitDraft();
@@ -840,7 +838,7 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// ---- Scheduled tasks: read fresh from launchd, Orca and jarvisd on every open (daemon/tasks.ts, web/tasks.js) ----
+// ---- Scheduled tasks: read fresh from launchd and jarvisd on every open (daemon/tasks.ts, web/tasks.js) ----
 const tasksEl = $('tasks'), tasksBody = $('tasks-body');
 let taskList = [], taskOpen = null, taskShowHidden = false;
 const closeTasks = () => { tasksEl.hidden = true; moreBtn.focus(); };
@@ -853,14 +851,14 @@ async function loadTasks() {
   if (!r.ok) throw new Error(`error ${r.status}`);
   const b = await r.json();
   taskList = b.tasks;
-  $('tasks-read').textContent = ` Read at ${taskWhen(b.at)} from launchd, Orca and jarvisd.`;
+  $('tasks-read').textContent = ` Read at ${taskWhen(b.at)} from launchd and jarvisd.`;
   paintTasks();
 }
 $('tasks-close').onclick = closeTasks;
 $('tasksbtn').onclick = async () => {
   showMenu(false);
   taskOpen = null; taskShowHidden = false;
-  tasksBody.innerHTML = '<p class="tk-empty">Reading launchd, Orca and jarvisd…</p>';
+  tasksBody.innerHTML = '<p class="tk-empty">Reading launchd and jarvisd…</p>';
   $('tasks-count').textContent = '';
   tasksEl.hidden = false;
   try { await loadTasks(); } catch (err) { tasksBody.innerHTML = `<p class="tk-empty">Could not read the tasks: ${esc(err.message)}</p>`; }
@@ -1026,10 +1024,10 @@ function showHistory(e) {
 const onMac = matchMedia('(pointer: fine)').matches;
 const worklist = $('worklist'), railbtn = $('railbtn');
 const STATE = { waiting: 'Waiting on you', idle: 'Idle', working: 'Working', exited: 'Exited' };
-let work = { rows: [], done: [] };
+let work = { rows: [] };
 let requests = [];
 const handedSeen = new Set();
-// Rows the owner hid. The daemon keeps the ids; hiding never stops or deletes anything in Orca.
+// Rows the owner hid. The daemon keeps the ids; hiding never stops or deletes anything.
 let hidden = new Set(), showHidden = false;
 const readSet = k => { try { return new Set(JSON.parse(localStorage.getItem(k) || '[]')); } catch { return new Set(); } };
 const shutGroups = readSet('workGroupsShut');
@@ -1045,8 +1043,6 @@ function renderWork() {
   $('workcount').textContent = working ? `${working} working` : '';
   railbtn.setAttribute('aria-label', seen.length ? `Work list, ${seen.length}${waiting ? `, ${waiting} waiting on you` : ''}` : 'Work list');
   railbtn.toggleAttribute('data-busy', waiting > 0);
-  $('workerr').hidden = !work.error;
-  $('workerr').textContent = work.error ? `${work.error}. Showing the last list.` : '';
   const merged = mergeWork(work.rows, requests, hidden, showHidden);
   lastMerged = merged;
   worklist.innerHTML = workListHtml(merged, { hidden, shut: shutGroups, closedWaiting, folders: reqFolders, reading: term ? `t:${term.name}` : pane.id, now: Date.now(), doneOpen })
@@ -1058,7 +1054,6 @@ let lastMerged = null;
 function showWork(w) {
   work = w;
   renderWork();
-  showDone();
   if (pane.id) paneHead();
   if (term) termHead();
 }
@@ -1103,14 +1098,6 @@ worklist.addEventListener('click', async e => {
   if (p) return togglePr(p.dataset.pr);
   const b = e.target.closest('button');
   if (!b) { const w = e.target.closest('[data-id], [data-row]'); if (w) openRow(w.dataset.id ?? w.dataset.row); return; }
-  if (b.dataset.close) {
-    b.disabled = true;
-    try {
-      const r = await fetch('/api/work/close', { method: 'POST', body: JSON.stringify({ dispatch: b.dataset.close }) });
-      if (!r.ok) { const j = await r.json().catch(() => ({})); add('event', 'Close: ' + (j.error || j.result || r.status)); }
-    } finally { b.disabled = false; }
-    return;
-  }
   if (b.classList.contains('hide')) {
     // A merged row is one thing to the owner: Hide takes the conversation and the request off together.
     const { hideRow, hide } = b.dataset, unhide = 'unhide' in b.dataset;
@@ -1166,22 +1153,20 @@ function paneHead() {
   const r = work.rows.find(x => x.id === pane.id);
   if (r) $('pane-title').textContent = r.title;
   if (pane.detail) $('pane-title').textContent = pane.detail.title;
-  const native = r?.native; // a background Claude Code session (daemon/native.ts), not an Orca worker
+  const native = r?.native; // a background Claude Code session (daemon/native.ts)
   const bits = r ? [r.label, r.pr, r.state === 'idle' && r.note ? r.note : STATE[r.state], r.worktree].filter(Boolean).map(esc) : pane.record ? ['Read-only'] : ['Not in the work list any more'];
-  // A question shows above the steer box instead; any other note (a prompt in Orca) stays here.
+  // A question shows above the steer box instead; any other note stays here.
   if (r && r.note && r.state !== 'idle' && !(r.steer === 'auto' && r.state === 'waiting')) bits.push(esc(r.note));
   // A native worker also says what claude reports: its state, and what it waits for.
   if (native) bits.push(...[native.state, native.waitingFor].filter(Boolean).map(esc));
   $('pane-sub').innerHTML = bits.map(b => `<span>${b}</span>`).join('') + (pane.error ? `<span class="err">${esc(pane.error)}</span>` : '');
   const stopBtn = $('pane-stop');
   stopBtn.hidden = !r || r.kind !== 'worker' || r.state === 'exited';
-  $('pane-stop-label').textContent = r?.sideChat ? 'Close' : 'Stop';
   // Open (`claude attach`) cannot reach an interactive session's own terminal; Desktop can take it over.
   const interactive = native?.kind === 'interactive';
-  $('pane-open').hidden = !(onMac && (r?.terminal || (native && !interactive)));
-  $('pane-open').title = $('pane-open').ariaLabel = native ? 'Open in Terminal' : 'Open in Orca';
+  $('pane-open').hidden = !(onMac && native && !interactive);
   $('pane-desktop').hidden = !(onMac && native);
-  // Continue on phone: any Claude session in the list (a native worker, an Orca chat or terminal agent), on the Mac or the phone.
+  // Continue on phone: any native worker in the list, on the Mac or the phone.
   // Hidden while it already runs in the Claude app.
   const onPhone = native?.remote && !['stopped', 'failed', 'abandoned'].includes(native.state);
   $('pane-phone').hidden = !r || !!r.tmux || !!onPhone;
@@ -1189,10 +1174,10 @@ function paneHead() {
   const hold = pane.phone && pane.phone.id === pane.id ? pane.phone : null;
   $('phone-box').hidden = !hold;
   if (hold) $('phone-what').textContent = hold.holders.length === 1 ? `Another process has this session open: ${hold.holders[0].what} (pid ${hold.holders[0].pid}).` : `${hold.holders.length} other processes have this session open: ${hold.holders.map(h => `pid ${h.pid}`).join(', ')}.`;
-  // The message box: straight to the session, except another Run's chat-tab worker, which needs an Approve card.
+  // The message box: straight to the session.
   const steer = r ? r.steer : 'none';
   $('steer-row').hidden = steer === 'none';
-  $('steer-text').placeholder = steer === 'card' ? 'Message (needs Approve)' : r?.state === 'waiting' && r.note && !native ? 'Answer it' : native ? 'Message' : 'Steer this session';
+  $('steer-text').placeholder = r?.state === 'waiting' && r.note && !native ? 'Answer it' : native ? 'Message' : 'Steer this session';
   // A native worker's pending permission card shows inside the pane too, with its Allow and Deny.
   const pc = native && permissionCard(r);
   if (pc?.approval) { paneCards.add(pc.approval.id); paneCard(pc.approval); }
@@ -1202,9 +1187,7 @@ function paneHead() {
     : native?.waitingFor === 'Open in the Claude desktop app' ? 'This session is open in the Claude desktop app. A message here takes it back into Jarvis.'
     : native?.waitingFor === 'Idle, resumes on a message' ? 'Idle for an hour, so its process was ended. A message here resumes it.'
     : onPhone ? `Open it in the Claude app on your phone: it is named "${esc(native.remote)}". A message here goes to it too.`
-    : (steer === 'auto' || steer === 'type') && r.state === 'waiting' && r.note && r.note !== 'Waiting at a prompt in Orca' ? `<b>Asks:</b> ${esc(r.note)}`
-    : r.note === 'Waiting at a prompt in Orca' && steer !== 'none' ? 'It is showing a permission prompt. Send the option number to answer it.'
-    : steer === 'card' ? 'Goes out only after you tap Approve on the card.'
+    : steer === 'auto' && r.state === 'waiting' && r.note ? `<b>Asks:</b> ${esc(r.note)}`
     : steer === 'none' ? 'This worker has exited.' : '';
   $('pane-working').hidden = !(pane.busy || r?.state === 'working');
   // Waiting on the owner, with a question to answer: a tinted line links to it. A native worker waits on its permission card.
@@ -1263,7 +1246,7 @@ async function continueOnPhone(stop) {
     const r = await fetch('/api/work/phone', { method: 'POST', body: JSON.stringify({ id, ...(stop ? { stop } : {}) }) });
     const j = await r.json().catch(() => ({}));
     pane.phone = null; pane.error = '';
-    // An Orca row becomes a native row: the pane moves to it, and the hint says where to find it.
+    // The pane moves to the row the daemon names, and the hint says where to find it.
     if (r.ok) { if (j.id && j.id !== id) openPane(j.id); pane.warning = `On your phone: open the Claude app and pick "${j.remote}".`; }
     else if (j.holders?.length) pane.phone = { id, holders: j.holders };
     else pane.error = 'Continue on phone: ' + (j.error || r.status);
@@ -1282,10 +1265,9 @@ $('steer').onsubmit = async e => {
     if (!ok) { pane.error = j.error || 'Not sent'; return paneHead(); }
     box.value = ''; box.style.height = '';
     pane.error = '';
-    pane.warning = j.warning || '';
+    pane.warning = '';
     // Shown until the same words come back from the session, which takes a few seconds.
     if (!j.approval) paneAppend([{ role: 'user pending', text }]);
-    if (j.done === 'resumed') pane.busy = true;
     paneHead();
     clearTimeout(pane.timer);
     pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
@@ -1312,7 +1294,7 @@ async function readPane(gen, first) {
     if (r.status === 404) { pane.error = j.error || 'Gone'; paneHead(); return; } // finished: stop polling
     if (j.reset) { pane.cursor = null; paneLines.innerHTML = ''; again = 0; }
     else {
-      pane.error = j.error || j.failure || '';
+      pane.error = j.error || '';
       pane.busy = !!j.busy;
       if (first) paneLines.innerHTML = '';
       if (j.detail) { pane.detail = j.detail; paneLines.querySelector('.rdetail')?.remove(); paneLines.querySelector('.empty')?.remove(); paneLines.insertAdjacentHTML('afterbegin', requestDetailHtml(j.detail)); }
@@ -1337,14 +1319,12 @@ function paneAppend(lines) {
     if (l.role === 'tool') { addToolRow(l.text); continue; }
     const d = document.createElement('div');
     d.className = 'pl ' + l.role;
-    if (l.kind === 'preamble') { d.className = 'pl fold brief'; d.innerHTML = briefFoldHtml(l.text); }
-    else if (l.kind === 'wake') { d.className = 'pl wake'; d.textContent = 'Jarvis sent a message'; }
-    else if (l.kind === 'event') { d.className = 'pl wake'; d.textContent = l.text; } // what jarvisd did to the session, such as a resume
+    if (l.kind === 'event') { d.className = 'pl wake'; d.textContent = l.text; } // what jarvisd did to the session, such as a resume
     else if (l.role === 'agent') { d.classList.add('md'); d.innerHTML = markdown(l.text, shot); }
     else d.textContent = l.text;
     const tag = paneTag(l);
-    if (tag) { d.classList.add('said'); if (l.failed) d.classList.add('failed'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
-    if (l.clipped) d.insertAdjacentHTML('beforeend', '<span class="clipped" title="Orca or Jarvis shortened this text">clipped</span>');
+    if (tag) { d.classList.add('said'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
+    if (l.clipped) d.insertAdjacentHTML('beforeend', '<span class="clipped" title="Jarvis shortened this text">clipped</span>');
     paneLines.appendChild(d);
   }
   while (paneLines.children.length > PANE_MAX) (paneLines.firstChild.matches('.rdetail') ? paneLines.children[1] : paneLines.firstChild).remove();
@@ -1694,19 +1674,6 @@ np.onsubmit = async e => {
     if (row) openRow(row);
   } finally { npBusy = false; if (!np.hidden) npRender(); }
 };
-// The newest finished worker, until dismissed. Quiet: no sound, no push, nothing to the brain.
-const doneline = $('doneline');
-const dismissed = new Set(JSON.parse(localStorage.getItem('doneDismissed') || '[]'));
-function showDone() {
-  const d = (work.done || []).find(x => !dismissed.has(x.dispatch));
-  doneline.hidden = !d;
-  if (!d) return;
-  const pr = d.url ? ` · <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.pr)}</a>` : d.pr && !d.subject.includes(d.pr) ? ` · ${esc(d.pr)}` : '';
-  doneline.querySelector('.txt').innerHTML = `<b>Done:</b> ${esc(d.subject)}${pr}`;
-  doneline.querySelector('.txt').title = d.subject;
-  doneline.querySelector('button').onclick = () => { dismissed.add(d.dispatch); localStorage.setItem('doneDismissed', JSON.stringify([...dismissed].slice(-50))); showDone(); };
-}
-
 // ---- attached pictures: uploaded on send, then passed to Jarvis as one [image: path] line each ----
 const IMAGE_OK = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], IMAGE_MAX = 10 * 1024 * 1024;
 const fileIn = $('file'), pending = $('pending');

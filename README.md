@@ -1,6 +1,6 @@
 # Jarvis
 
-A voice-first chief of staff for one person, built on Claude Code and Orca. You talk to it by voice or chat from a Mac
+A voice-first chief of staff for one person, built on Claude Code. You talk to it by voice or chat from a Mac
 or a phone. It starts coding workers, relays their questions to you, turns your answers into their next step, triages
 your email and keeps a Today list. Nothing goes out to another person without your tap.
 
@@ -9,7 +9,7 @@ reads [vault/SETUP.md](vault/SETUP.md) first: it lists every file and setting to
 
 ## Install
 
-Needs macOS, Node 22.18 or later, the Claude Code CLI, Orca, ffmpeg, and for voice the FluidAudio CLI built at
+Needs macOS, Node 22.18 or later, the Claude Code CLI, ffmpeg, and for voice the FluidAudio CLI built at
 `~/src/FluidAudio` (`swift build -c release --product fluidaudiocli`). Optional: the `gws` CLI signed in to your Gmail
 account (email triage), Tailscale (the app on your phone), `gh` (GitHub actions).
 
@@ -37,12 +37,11 @@ Then fill in the vault, the brain's memory:
 
 `npm start` in a terminal, or `bin/install-service` once for a login service plus a `tailscale serve` entry. Chat at
 http://127.0.0.1:7717, or from the phone at your `JARVIS_TERM_ORIGIN` URL. Tests: `npm test`. Sample data, without
-Orca or a brain: `npm run preview`.
+a brain: `npm run preview`.
 
-- The first start creates an idle Orca terminal titled JARVIS (its identity) and a Run. Leave that terminal open.
 - `touch data/KILL` stops the watcher and the brain. Chat keeps working.
 - Times are spoken and shown in Eastern time (`America/Toronto`), set in the code and in `vault/CLAUDE.md`.
-- Other settings: `JARVIS_PORT`, `JARVIS_ORCA` (off by default; `on` brings back the Orca link: the identity terminal, the Orca watcher, and the Orca guide `vault/orca.md` and worker snapshot in the brain prompt), `JARVIS_HOME_WORKTREE` (any Orca-managed worktree, as an Orca selector, used only with `JARVIS_ORCA=on`), `JARVIS_TTS_FR` / `JARVIS_TTS_EN` (`say:<voice>` or `<fluidaudio backend>:<voice>`, for example `supertonic3:M1`).
+- Other settings: `JARVIS_PORT`, `JARVIS_TTS_FR` / `JARVIS_TTS_EN` (`say:<voice>` or `<fluidaudio backend>:<voice>`, for example `supertonic3:M1`).
 - Voice samples to pick from: `/bakeoff`.
 - Hands-free listening: the app's "Hands-free" button. Wake word and thresholds come from `JARVIS_WAKE_WORD`, `JARVIS_VAD_*` and `JARVIS_LISTEN_*`.
 - Writes to one Google Sheet go through `bin/sheet-edit`: see [docs/sheet-edit.md](docs/sheet-edit.md).
