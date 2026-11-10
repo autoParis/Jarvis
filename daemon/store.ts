@@ -241,7 +241,7 @@ export function openStore(path: string) {
     },
     /** Questions and escalations from the last 7 days, answered or not, for the ask cards in the chat history. */
     recentAsks(): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native') AND kind IN ('question', 'escalation') AND created_at > datetime('now', '-7 days') ORDER BY id DESC LIMIT 100`).all() as Item[];
+      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native', 'brain') AND kind IN ('question', 'escalation') AND created_at > datetime('now', '-7 days') ORDER BY id DESC LIMIT 100`).all() as Item[];
     },
     /** What jarvisd did to a native session (kind `event` items, such as a resume), oldest first, for its pane's gap lines. */
     eventsFor(dispatch: string): Item[] {
@@ -253,7 +253,7 @@ export function openStore(path: string) {
     },
     /** Questions and escalations the owner answered, newest first, for the audit log. */
     answeredAsks(limit: number): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native') AND kind IN ('question', 'escalation') AND status = 'answered' ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?`).all(limit) as Item[];
+      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native', 'brain') AND kind IN ('question', 'escalation') AND status = 'answered' ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?`).all(limit) as Item[];
     },
     /** Approvals someone decided, newest first, for the audit log. Pending and automatic ones are left out. */
     decidedApprovals(limit: number): Approval[] {

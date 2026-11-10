@@ -8,6 +8,7 @@ import { isStopNotice } from './work.ts';
 import { namedActionIn, namedLabel, namedQuestion, refusedByPermissionLayer, type Named } from './namedactions.ts';
 import { readStopNotice, readScreen, stillAt, storedContext, type StopNotice, type PromptOption, type PromptContext } from './prompt.ts';
 import { explainCredentialCommand } from './promptexplain.ts';
+import { brainCard, answerBrainAsk, isBrainAsk } from './brainasks.ts';
 
 // A worker's question or escalation as a card in the chat: title, markdown body, and the options as buttons.
 // The card is built in code from the stored item. The brain still speaks the ask; nothing here is spoken.
@@ -296,6 +297,7 @@ function stopCard(i: Item, story: string | undefined, n: StopNotice): AskCard {
  */
 export function askCard(i: Item, story?: string, shown: (path: string) => boolean = looksLikeImage): AskCard | undefined {
   if (i.kind !== 'question' && i.kind !== 'escalation') return undefined;
+  if (isBrainAsk(i)) return brainCard(i);
   if (isStopNotice(i)) return stopCard(i, story, readStopNotice(i.body));
   const body = (i.body ?? '').trim();
   const f = fields(body);
@@ -485,6 +487,8 @@ export async function answerAsk(o: AnswerArgs): Promise<AnswerResult> {
   const item = store.item(id);
   if (!item || (item.kind !== 'question' && item.kind !== 'escalation')) return { status: 404, error: 'That ask is not known here.' };
   if (!value.trim()) return { status: 400, error: 'No answer to send.' };
+  // Jarvis's own question (brainasks.ts): the answer goes to the brain, not to a worker.
+  if (isBrainAsk(item)) return answerBrainAsk({ id, value, store, log, note: o.note });
   const ids = { item: id, dispatch: item.dispatch_id };
   if (isStopNotice(item)) {
     const n = readStopNotice(item.body);

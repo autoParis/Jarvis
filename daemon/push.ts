@@ -167,7 +167,7 @@ export async function pushOpenAsks(store: Store, send: (m: PushMessage, opts: { 
 }
 
 export function askMessage(i: Item): PushMessage {
-  const title = i.kind === 'escalation' ? 'Jarvis: a worker is stuck' : 'Jarvis: a worker is asking';
+  const title = i.source === 'brain' ? 'Jarvis is asking' : i.kind === 'escalation' ? 'Jarvis: a worker is stuck' : 'Jarvis: a worker is asking';
   const q = /QUESTION:\s*(.+)/.exec(i.body ?? '')?.[1];
   return { title, body: (q ?? i.subject ?? i.body ?? '').slice(0, 180), url: `/?item=${encodeURIComponent(i.external_id)}`, tag: `item-${i.external_id}` };
 }
