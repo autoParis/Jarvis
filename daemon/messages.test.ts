@@ -192,8 +192,8 @@ test('the page sends a push for an email to its popup, and keeps emails out of t
   assert.doesNotMatch(page, /id="tabs"|id="left"|setTab/);
   assert.match(read('./main.ts'), /notify\(emailPush\(i, meta\)/);
   const main = read('./main.ts');
-  assert.match(main, /'\/messages\.js': 'messages\.js'/);
-  assert.match(main, /'\/swipe\.js': 'swipe\.js'/);
+  assert.match(read('./webfiles.ts'), /'\/messages\.js': 'messages\.js'/);
+  assert.match(read('./webfiles.ts'), /'\/swipe\.js': 'swipe\.js'/);
   assert.match(main, /'\/api\/message\/send', '\/api\/message\/handled'[,\]]/);
 });
 
@@ -345,7 +345,7 @@ test('the brief line names the card, and the brain gets it from main.ts', () => 
   const main = read('./main.ts');
   assert.match(main, /store\.openOutbox\(\)/);
   assert.match(main, /outbox\.map\(outboxLine\)/);
-  assert.match(main, /url === '\/api\/internal\/messages'/);
+  assert.match(read('./messages.ts'), /url === '\/api\/internal\/messages'/);
   assert.doesNotMatch(main.match(/const AS_OWNER = .*/)![0], /internal/);
 });
 

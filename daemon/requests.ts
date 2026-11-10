@@ -10,6 +10,7 @@ import { readStopNotice } from './prompt.ts';
 import { findWorkerSession, readChatFile, type Read } from './transcript.ts';
 import { ROW_PREFIX } from './native.ts';
 import { readReport } from './workercontract.ts';
+import type { RouteResult, Body } from './route.ts';
 
 // The Requests sidebar: one row per thing the owner asked Jarvis for, from the worker start to its PR. A request is
 // recorded when the gate starts a worker for him, and its status follows the work poller. Nothing here touches
@@ -500,3 +501,21 @@ export function makeRequests(opts: {
 }
 
 export type Requests = ReturnType<typeof makeRequests>;
+
+/**
+ * The Requests sidebar's routes. Hiding a row changes only the requests table: no worktree, session or branch is touched.
+ * The report behind a row's Report link is read-only.
+ */
+export async function requestsRoute(o: { requests: Pick<Requests, 'list' | 'hide'>; store: Store }, method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+  if (method === 'GET' && url === '/api/requests') return { status: 200, body: o.requests.list() };
+  if (method === 'POST' && url === '/api/requests/hide') {
+    const { id } = await body();
+    return o.requests.hide(Number(id)) ? { status: 204 } : { status: 404, body: { error: 'It is not in the list any more.' } };
+  }
+  const reportOf = method === 'GET' && url.match(/^\/api\/requests\/(\d+)\/report$/);
+  if (reportOf) {
+    const r = requestReport(o.store, Number(reportOf[1]));
+    return r ? { status: 200, body: r } : { status: 404, body: { error: 'No report is stored for this request.' } };
+  }
+  return undefined;
+}

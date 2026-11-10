@@ -12,7 +12,10 @@ brain, skip this file.
 
 ## Daemon modules, one line each
 
-- `main.ts`: start-up, the timers, the brain's event handlers, and most http routes.
+- `main.ts`: start-up, the timers, the brain's event handlers, and the route table. Each concept module exports its
+  own `...Route()` (`route.ts` has the shared types), and main.ts tries them in turn. The work-list, ask, approval and
+  voice routes are still inline in main.ts.
+- `webfiles.ts`: the files jarvisd serves from `web/`. Add a new `web/*.js` module here.
 - `store.ts`: the SQLite store (`data/jarvis.db`). Items, approvals, requests, turns, state.
 - `brain.ts`, `brainmodel.ts`, `worksteps.ts`: the one long-lived Claude Code brain session, its model, and its turn steps.
 - `gate.ts`: the approval gate behind `bin/jarvis-act`. Every action the brain proposes, its tier, and what Approve runs.

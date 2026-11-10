@@ -7,6 +7,7 @@ import { ACTIONS, actionsWith, EVENTS, APPROVAL_STATUSES, REQUEST_STATUSES } fro
 import { buildCommand, BUTTON_ONLY, WORKER_PERMISSION } from './gate.ts';
 import { NAMED_ACTIONS } from './namedactions.ts';
 import { PROD_MCP_CALL } from './prodmcp.ts';
+import { STATIC } from './webfiles.ts';
 
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..');
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8');
@@ -41,10 +42,9 @@ test('the statuses the work list and the Requests sidebar compare against are in
 });
 
 test('jarvisd serves every page module', () => {
-  const main = read('daemon/main.ts');
   for (const f of files('web', '.js')) {
     const name = f.slice('web/'.length);
-    assert.ok(main.includes(`'/${name}': '${name}'`), `${name} is in main.ts STATIC`);
+    assert.equal(STATIC[`/${name}`], name, `${name} is in webfiles.ts STATIC`);
   }
 });
 

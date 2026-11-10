@@ -380,7 +380,7 @@ test('the record holds the request, its messages with answers, and stop events i
 });
 
 test('every web file is in the STATIC map, since the daemon serves nothing else', () => {
-  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('./webfiles.ts', import.meta.url), 'utf8');
   const map = /const STATIC[^=]*= (\{[^}]*\})/.exec(main)![1];
   for (const f of readdirSync(new URL('../web/', import.meta.url))) assert.ok(map.includes(`'${f}'`), `${f} is not in STATIC`);
 });

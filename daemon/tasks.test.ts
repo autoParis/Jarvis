@@ -252,7 +252,7 @@ test('Ask Jarvis to fix names the task, its source and its last error', () => {
 test('jarvisd serves the screen: Save needs an open app page, and the module is a static file', () => {
   const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
   assert.match(main, /const AS_OWNER = new Set\(\[[^\]]*'\/api\/tasks\/save'/);
-  assert.match(main, /'\/tasks\.js': 'tasks\.js'/);
+  assert.match(readFileSync(new URL('./webfiles.ts', import.meta.url), 'utf8'), /'\/tasks\.js': 'tasks\.js'/);
   const page = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   assert.match(page, /<button id="tasksbtn" type="button">Scheduled tasks<\/button>/);
   assert.match(main, /const AS_OWNER = new Set\(\[[^\]]*'\/api\/tasks\/ask-fix'/);

@@ -31,7 +31,7 @@ test('the touch default reads the pointer media query', () => {
 
 // The daemon serves only listed files. An unlisted module would stop the whole page script from loading.
 test('the daemon serves the module', () => {
-  assert.match(read('./main.ts'), /'\/enterkey\.js': 'enterkey\.js'/);
+  assert.match(read('./webfiles.ts'), /'\/enterkey\.js': 'enterkey\.js'/);
 });
 
 test('every box that sends on Enter goes through the rule', () => {

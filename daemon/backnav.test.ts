@@ -127,7 +127,7 @@ test('a draft survives leaving the pane and comes back on return, per pane', () 
 
 // The daemon serves only listed files. An unlisted module would stop the whole page script from loading.
 test('the daemon serves the module', () => {
-  assert.match(read('./main.ts'), /'\/backnav\.js': 'backnav\.js'/);
+  assert.match(read('./webfiles.ts'), /'\/backnav\.js': 'backnav\.js'/);
 });
 
 test('the page wires the back button to the pane, the terminal and the draft', () => {

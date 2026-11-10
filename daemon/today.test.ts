@@ -716,7 +716,7 @@ test('in main.ts the routes that act as the owner need an open page, and the bra
   const set = /const AS_OWNER = new Set\(\[(.*?)\]\)/s.exec(main)![1];
   for (const r of ['/api/today/add', '/api/today/act', '/api/today/voice']) assert.ok(set.includes(`'${r}'`), r);
   for (const a of ['today-issue', 'today-start', 'today-draft']) assert.ok(PRESSED.has(a), a);
-  assert.match(main, /'\/today\.js': 'today\.js'/);
+  assert.match(read('./webfiles.ts'), /'\/today\.js': 'today\.js'/);
 });
 
 test('the gate builds the three commands, with the footer on workers and no merge anywhere', () => {

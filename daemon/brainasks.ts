@@ -2,6 +2,7 @@ import type { Store, Item } from './store.ts';
 import type { Log } from './log.ts';
 import type { AskCard } from './asks.ts';
 import { OWNER } from './config.ts';
+import type { RouteResult, Body } from './route.ts';
 
 // Jarvis's own questions to the owner as ask cards: `jarvis-act ask` stores one, the app shows it beside the worker asks,
 // and a tap or a typed answer goes back to the brain as an `[ask card answer]` line. Nothing goes to a worker.
@@ -104,4 +105,13 @@ export function briefLine(i: Item): string {
 /** The check's line for a brain ask that waited `minutes`. */
 export function checkLine(i: Item, minutes: number): string {
   return `Your own ask unanswered for ${minutes} min: message_id=${i.external_id}${i.subject ? ` about=${JSON.stringify(i.subject)}` : ''} question=${JSON.stringify(i.body)}`;
+}
+
+/** jarvis-act ask stores Jarvis's own question as an ask card. jarvis-act ask-done closes one the owner answered in the chat. `changed` gets the card's id. */
+export async function brainAskRoute(o: { store: Store; log: Log; changed: (id: string) => void }, method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+  if (method !== 'POST' || (url !== '/api/internal/ask' && url !== '/api/internal/ask-done')) return undefined;
+  const done = url === '/api/internal/ask-done';
+  const r = done ? brainAskDone(o.store, await body()) : addBrainAsk(o.store, await body());
+  if (r.item) { o.log(done ? 'brain ask answered in the chat' : 'brain ask added', { item: r.item.external_id }); o.changed(r.item.external_id); }
+  return { status: r.status, body: r.body };
 }

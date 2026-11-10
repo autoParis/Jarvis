@@ -294,7 +294,7 @@ test('option H: four icon buttons in the bar, Leads among them, New session in t
   assert.match(phone, /\.need-btn \{ width: 44px; height: 44px; padding: 0; \}/, '44 px to tap');
   assert.match(phone, /\.need-btn \.nl \{ display: none; \}/);
   assert.match(phone, /#newchat \{ display: none; \}[\s\S]*#menu #menu-new \{ display: flex; \}/);
-  assert.match(read('./main.ts'), /'\/migration\.js': 'migration\.js'/);
+  assert.match(read('./webfiles.ts'), /'\/migration\.js': 'migration\.js'/);
   assert.match(read('./main.ts'), /'\/api\/migration\/add', '\/api\/migration\/act', '\/api\/migration\/dealer', '\/api\/migration\/toast-close'/, 'the page routes need the open-page secret');
 });
 

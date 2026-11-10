@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { openStore, type Item, type Approval } from './store.ts';
 import { watch, ensureIdentity, cleanEnv, orca } from './orca.ts';
 import { Brain, readSavedSession, gateFailed, SESSION_KEY } from './brain.ts';
-import { changeBrainModel, readBrainModel, MODELS, EFFORTS } from './brainmodel.ts';
+import { brainModelRoute, readBrainModel, MODELS, EFFORTS } from './brainmodel.ts';
+import { lazyBody, type RouteResult } from './route.ts';
+import { STATIC, TYPES } from './webfiles.ts';
 import { makeGate, PRESSED, NO_TASK, WORKER_PERMISSION, UNDO_MS } from './gate.ts';
 import { makeVoice, sentences, detectLang, byteRange } from './voice.ts';
 import { allowed, makeUiSessions, probePhone, phoneRefusal } from './access.ts';
@@ -15,26 +17,26 @@ import { makeTermGate } from './termgate.ts';
 import { termRoute } from './termroutes.ts';
 import { terminalRows } from './termrows.ts';
 import { imageFile, imageRoots, IMAGE_TYPES } from './images.ts';
-import { reportsDir, listReports, readReport, REPORT_MARKER } from './reports.ts';
+import { reportsDir, reportsRoute, REPORT_MARKER } from './reports.ts';
 import { saveUpload, uploadDir, UPLOAD_LIMIT, pictureLines } from './uploads.ts';
-import { loadVapid, pushAll, pushOpenAsks, makeNotifier, urgent } from './push.ts';
+import { loadVapid, pushAll, pushOpenAsks, makeNotifier, urgent, pushRoute } from './push.ts';
 import { makeLog } from './log.ts';
 import { watchGmail, gws, haiku, readPeople, withRecipients, POLL_MS as GMAIL_POLL_MS, type EmailMeta } from './gmail.ts';
 import { makeTasks, execRun, tasksRoute } from './tasks.ts';
 import { homedir } from 'node:os';
 import { makeWorkPoller, briefLines, githubRepo, isStopNotice, passedStopNotices, duplicateStopNotices, type WorkRow, type Work, type WorkerInfo } from './work.ts';
-import { makeRequests, backfillRequests, requestReport } from './requests.ts';
+import { makeRequests, backfillRequests, requestsRoute } from './requests.ts';
 import { readSource, chatFile, showReplies, type Read, type ReplyMemo } from './transcript.ts';
 import { makeResumer, sessionIdOf, sessionName, tailOf, type ResumeStart } from './resume.ts';
 import { steer, stop } from './steer.ts';
 import { listenConfig, judge } from './listen.ts';
 import { askCard, answerAsk, auditEntries, closeSteeredAsks, type AskCard } from './asks.ts';
-import { addBrainAsk, brainAskDone, briefLine as brainAskLine, isBrainAsk } from './brainasks.ts';
+import { brainAskRoute, briefLine as brainAskLine, isBrainAsk } from './brainasks.ts';
 import { gonePromptNotices, fillPromptContexts } from './prompt.ts';
 import { makeCheck, readDelivery, masterHead, CHECK_MS } from './check.ts';
 import { gitSelfCheck, gitNotice } from './gitcheck.ts';
 import { reminderRoute } from './reminders.ts';
-import { makeMessages, emailPush, outboxLine } from './messages.ts';
+import { makeMessages, emailPush, outboxLine, messagesRoute } from './messages.ts';
 import { makeToday, todayRoute, todayBrief, BACKSTOP_MS } from './today.ts';
 import { makeReplies, replyRoute, repliesBrief, gh } from './replies.ts';
 import { makeTicketWorker } from './replyworker.ts';
@@ -607,10 +609,19 @@ const termCtx = {
   onChange: () => { pollTerms().catch(() => {}); },
   phoneRefusal: async (req: http.IncomingMessage) => phoneRefusal(await probePhone(req, PORT)),
 };
-const STATIC: Record<string, string> = { '/': 'index.html', '/markdown.js': 'markdown.js', '/askcard.js': 'askcard.js', '/paste.js': 'paste.js', '/enterkey.js': 'enterkey.js', '/listen.js': 'listen.js', '/requestlist.js': 'requestlist.js', '/worklist.js': 'worklist.js', '/contract.js': 'contract.js', '/workfold.js': 'workfold.js', '/messages.js': 'messages.js', '/today.js': 'today.js', '/migration.js': 'migration.js', '/report.js': 'report.js', '/tasks.js': 'tasks.js', '/modelpicker.js': 'modelpicker.js', '/newpick.js': 'newpick.js', '/terminal.js': 'terminal.js', '/swipe.js': 'swipe.js', '/backnav.js': 'backnav.js', '/dictate.js': 'dictate.js', '/compose.js': 'compose.js', '/speech.js': 'speech.js', '/draw.js': 'draw.js', '/app.css': 'app.css', '/manifest.webmanifest': 'manifest.webmanifest', '/sw.js': 'sw.js', '/icon.svg': 'icon.svg' };
 const IMAGE_ROOTS = imageRoots(ROOT);
 const REPORTS_DIR = reportsDir(ROOT);
-const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.webmanifest': 'application/manifest+json', '.js': 'text/javascript', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.m4a': 'audio/mp4' };
+
+// The routes' context: what each concept route needs from the rest of jarvisd.
+const brainModelCtx = {
+  brain, setState: store.setState, killed: () => existsSync(KILL_FILE), info: brainInfo,
+  changed: () => { log('brain model set', { model: brain.setting.model, effort: brain.setting.effort }); broadcast({ type: 'brain', brain: brainInfo() }); },
+};
+const messagesCtx = {
+  messages,
+  approved: (a: Approval) => { if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`); },
+  handled: (id: string) => { if (!existsSync(KILL_FILE)) brain.hold(`[gate] ${OWNER} pressed "${id.startsWith('outbox:') ? 'Done' : "I'll handle it"}" on ${id}. It left the brief. Reply SILENT.`); },
+};
 
 http.createServer(async (req, res) => {
   const url = (req.url ?? '/').split('?')[0];
@@ -621,11 +632,27 @@ http.createServer(async (req, res) => {
   }
   try {
     if (url.startsWith('/api/term/')) return await termRoute(termCtx, req, res, url);
-    // A native worker's hooks (from its settings file) and the brain's jarvis-native commands.
-    if (url.startsWith('/api/hooks/') || url.startsWith('/api/internal/native/')) {
-      const r = await nativeRoute({ native, store, log, askChanged }, req.method ?? '', url, req.method === 'POST' ? await json(req) : {});
-      if (r) return send(res, r.status, r.body);
-    }
+    // Each concept owns its routes. A route answers for the URLs it owns and returns undefined for any other.
+    const method = req.method ?? '', body = lazyBody(() => json(req)), query = new URL(req.url ?? '/', 'http://x').searchParams;
+    const post = async () => method === 'POST' ? await body() : {};
+    const owner = { fromOwner: () => brain.answeringOwner };
+    const routes: (() => Promise<RouteResult | undefined> | RouteResult | undefined)[] = [
+      // A native worker's hooks (from its settings file) and the brain's jarvis-native commands.
+      async () => url.startsWith('/api/hooks/') || url.startsWith('/api/internal/native/') ? nativeRoute({ native, store, log, askChanged }, method, url, await post()) : undefined,
+      () => reportsRoute(REPORTS_DIR, method, url, query),
+      () => brainModelRoute(brainModelCtx, method, url, body),
+      () => messagesRoute(messagesCtx, method, url, body),
+      () => pushRoute({ store, publicKey: vapid.publicKey, log, notify }, method, url, body, String(req.headers['user-agent'] ?? '')),
+      () => requestsRoute({ requests, store }, method, url, body),
+      () => brainAskRoute({ store, log, changed: askChanged }, method, url, body),
+      // The Scheduled tasks screen (tasks.ts).
+      () => url.startsWith('/api/tasks') ? tasksRoute(tasks, method, url, body, text => fromOwner(text)) : undefined,
+      async () => url === '/api/today' || url.startsWith('/api/today/') || url.startsWith('/api/internal/today') ? todayRoute(today, method, url, await post(), owner) : undefined,
+      async () => url === '/api/migration' || url.startsWith('/api/migration/') || url.startsWith('/api/internal/migration') ? migrationRoute(migration, method, url, await post()) : undefined,
+      async () => url.startsWith('/api/internal/replies') ? replyRoute(store, log, method, url, await post(), owner) : undefined,
+      async () => url.startsWith('/api/internal/reminders') ? reminderRoute(store, log, method, url, await post()) : undefined,
+    ];
+    for (const route of routes) { const r = await route(); if (r) return send(res, r.status, r.body); }
     if (req.method === 'GET' && STATIC[url]) {
       const file = join(ROOT, 'web', STATIC[url]);
       res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
@@ -651,12 +678,6 @@ http.createServer(async (req, res) => {
       if (!file) return send(res, 404);
       res.writeHead(200, { 'content-type': IMAGE_TYPES[extname(file).toLowerCase()], 'cache-control': 'private, max-age=300' });
       return createReadStream(file).pipe(res);
-    }
-    // Long documents in data/reports, read-only. A path outside that folder, or not a .md file, is refused.
-    if (req.method === 'GET' && url === '/api/reports') return send(res, 200, listReports(REPORTS_DIR));
-    if (req.method === 'GET' && url === '/api/reports/file') {
-      const r = readReport(new URL(req.url ?? '/', 'http://x').searchParams.get('path') ?? '', REPORTS_DIR);
-      return r ? send(res, 200, r) : send(res, 404, { error: 'Only .md files in data/reports can be opened.' });
     }
     // Voice samples for picking the TTS model by ear (data/bakeoff/*.m4a).
     if (req.method === 'GET' && url === '/bakeoff') {
@@ -684,14 +705,6 @@ http.createServer(async (req, res) => {
       const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); ui.close(secret); termGate.dropPage(secret); });
       return;
-    }
-    // The brain's model and effort (the picker by the chat box). Only the brain: workers are not touched.
-    if (req.method === 'GET' && url === '/api/brain/model') return send(res, 200, brainInfo());
-    if (req.method === 'POST' && url === '/api/brain/model') {
-      const body = await json(req);
-      const r = await changeBrainModel({ body, brain, setState: store.setState, killed: existsSync(KILL_FILE) });
-      if (r.status === 200) { log('brain model set', { model: brain.setting.model, effort: brain.setting.effort }); broadcast({ type: 'brain', brain: brainInfo() }); }
-      return send(res, r.status, { error: r.error, ...brainInfo() });
     }
     if (req.method === 'POST' && url === '/api/send') {
       const { text, replyTo } = await json(req);
@@ -775,23 +788,6 @@ http.createServer(async (req, res) => {
       if (!existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} pressed Stop on #${id}, the worker you started at once, within ${UNDO_MS / 1000} seconds. ${queued ? 'It stops as soon as its start ends.' : `Stop #${a.id}: ${a.status}${a.result ? `, ${a.result}` : ''}.`} He does not want it as it was. Ask him in one short sentence what to change, unless he already said.`);
       return send(res, 200, a);
     }
-    // Send reply in the Messages popup: The owner's Approve for this email, with the words now in the box.
-    if (req.method === 'POST' && url === '/api/message/send') {
-      const { id, text } = await json(req);
-      if (typeof id !== 'string' || typeof text !== 'string') return send(res, 400, { error: 'id and text are required' });
-      const r = await messages.send(id, text);
-      const a = r.body.approval;
-      if (a && !existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
-      return send(res, r.status, r.body);
-    }
-    // I'll handle it in the Messages popup, or Done on a message the owner sends himself.
-    if (req.method === 'POST' && url === '/api/message/handled') {
-      const { id } = await json(req);
-      if (typeof id !== 'string') return send(res, 400, { error: 'id is required' });
-      const r = messages.handled(id);
-      if (r.status === 200 && !existsSync(KILL_FILE)) brain.hold(`[gate] ${OWNER} pressed "${id.startsWith('outbox:') ? 'Done' : "I'll handle it"}" on ${id}. It left the brief. Reply SILENT.`);
-      return send(res, r.status, r.body);
-    }
     // The microphone in the Today popup: the words become one item, and nothing goes to the chat.
     if (req.method === 'POST' && url === '/api/today/voice') {
       const audio = await readBody(req, 20e6);
@@ -801,43 +797,8 @@ http.createServer(async (req, res) => {
       const added = today.add({ words: r.text, go: new URL(req.url ?? '/', 'http://x').searchParams.get('go') === '1' });
       return send(res, added.status, { words: r.text, ...added.body });
     }
-    // The Scheduled tasks screen: GET reads every source fresh, POST /api/tasks/save edits one launchd job, POST /api/tasks/hide hides a row, POST /api/tasks/ask-fix tells the brain (tasks.ts).
-    if (url.startsWith('/api/tasks')) {
-      const r = await tasksRoute(tasks, req.method ?? '', url, () => json(req), text => fromOwner(text));
-      if (r) return send(res, r.status, r.body);
-    }
     // The audit log panel: answered asks and decided approvals. Read-only.
     if (req.method === 'GET' && url === '/api/audit') return send(res, 200, auditEntries(store, cardOf, PRESSED));
-    // Web push: the app subscribes with the daemon's VAPID public key (the Alerts button).
-    if (req.method === 'GET' && url === '/api/push/key') return send(res, 200, { publicKey: vapid.publicKey });
-    if (req.method === 'POST' && url === '/api/push/subscribe') {
-      const sub = await json(req);
-      if (typeof sub?.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || typeof sub.keys?.p256dh !== 'string' || typeof sub.keys?.auth !== 'string') return send(res, 400);
-      store.addPushSub(sub, String(req.headers['user-agent'] ?? '').slice(0, 200));
-      log(`push: subscribed ${new URL(sub.endpoint).host}`);
-      return send(res, 204);
-    }
-    if (req.method === 'POST' && url === '/api/push/unsubscribe') {
-      const { endpoint } = await json(req);
-      if (typeof endpoint === 'string') store.removePushSub(endpoint);
-      return send(res, 204);
-    }
-    if (req.method === 'POST' && url === '/api/push/test') {
-      // the owner just turned Alerts on and expects to see it, so the test push ignores quiet hours.
-      return send(res, 200, { reached: await notify({ title: 'Jarvis', body: 'Alerts are on. This is what an ask looks like.', url: '/', tag: 'test' }, { urgent: true }) });
-    }
-    // ---- Requests sidebar. Hiding a row changes only the requests table: no worktree, session or branch is touched. ----
-    if (req.method === 'GET' && url === '/api/requests') return send(res, 200, requests.list());
-    if (req.method === 'POST' && url === '/api/requests/hide') {
-      const { id } = await json(req);
-      return requests.hide(Number(id)) ? send(res, 204) : send(res, 404, { error: 'It is not in the list any more.' });
-    }
-    // The page behind a row's Report link: the worker's last worker_done. Read-only.
-    const reportOf = req.method === 'GET' && url.match(/^\/api\/requests\/(\d+)\/report$/);
-    if (reportOf) {
-      const r = requestReport(store, Number(reportOf[1]));
-      return r ? send(res, 200, r) : send(res, 404, { error: 'No report is stored for this request.' });
-    }
     // ---- Work list ----
     if (req.method === 'GET' && url === '/api/work') return send(res, 200, { ...mergedWork(), hidden: hiddenIds(), repos: repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL }, owner: { called: OWNER, cap: OWNER_CAP } });
     // Hide or show a row in the app. Only the list of hidden ids changes.
@@ -999,18 +960,6 @@ http.createServer(async (req, res) => {
       work.poll().catch(() => {}); // the answered ask leaves "waiting" (and the Requests badge) now, not in up to 30 s
       return send(res, 204);
     }
-    // jarvis-act ask: Jarvis's own question to the owner as an ask card, the same as a worker's (brainasks.ts).
-    if (req.method === 'POST' && url === '/api/internal/ask') {
-      const r = addBrainAsk(store, await json(req));
-      if (r.item) { log('brain ask added', { item: r.item.external_id }); askChanged(r.item.external_id); }
-      return send(res, r.status, r.body);
-    }
-    // jarvis-act ask-done: the owner answered a brain ask in the chat, so its card closes.
-    if (req.method === 'POST' && url === '/api/internal/ask-done') {
-      const r = brainAskDone(store, await json(req));
-      if (r.item) { log('brain ask answered in the chat', { item: r.item.external_id }); askChanged(r.item.external_id); }
-      return send(res, r.status, r.body);
-    }
     // jarvis-orca steer went out: it closes that worker's open escalations, in the owner's name or Jarvis's own.
     if (req.method === 'POST' && url === '/api/internal/steered') {
       const { id, answer } = await json(req);
@@ -1039,26 +988,6 @@ http.createServer(async (req, res) => {
       log('orca reply refused, ask reopened', { item: id });
       askChanged(id);
       return send(res, 204);
-    }
-    if (req.method === 'POST' && url === '/api/internal/messages') {
-      const r = messages.add(await json(req));
-      return send(res, r.status, r.body);
-    }
-    if (url === '/api/today' || url.startsWith('/api/today/') || url.startsWith('/api/internal/today')) {
-      const r = await todayRoute(today, req.method ?? '', url, req.method === 'POST' ? await json(req) : {}, { fromOwner: () => brain.answeringOwner });
-      if (r) return send(res, r.status, r.body);
-    }
-    if (url === '/api/migration' || url.startsWith('/api/migration/') || url.startsWith('/api/internal/migration')) {
-      const r = migrationRoute(migration, req.method ?? '', url, req.method === 'POST' ? await json(req) : {});
-      if (r) return send(res, r.status, r.body);
-    }
-    if (url.startsWith('/api/internal/replies')) {
-      const r = replyRoute(store, log, req.method ?? '', url, req.method === 'POST' ? await json(req) : {}, { fromOwner: () => brain.answeringOwner });
-      if (r) return send(res, r.status, r.body);
-    }
-    if (url.startsWith('/api/internal/reminders')) {
-      const r = reminderRoute(store, log, req.method ?? '', url, req.method === 'POST' ? await json(req) : {});
-      if (r) return send(res, r.status, r.body);
     }
     if (url.startsWith('/api/internal/gate/')) {
       const op = url.slice('/api/internal/gate/'.length);
