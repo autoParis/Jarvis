@@ -2,7 +2,7 @@
 // self-contained: its own tables (created here, prefixed migration_), its own routes, CLI (bin/jarvis-migration) and page
 // module (web/migration.js). docs/migration/README.md lists every piece, so it comes out in one go.
 // Rules, enforced here and not only in the prompt:
-// - The brain can add a person, list, set a status and write a note. Only the owner's page can remove a row or add a dealership.
+// - The brain can add a person, list, set a status, write a note and edit a person's name, dealership, source and contact. Only the owner's page can remove a row or add a dealership.
 // - A dealership is picked from the list, never typed by the brain, so names match the migration sheet exactly.
 // - Every status change is kept with its time (migration_status_log), so a later sheet sync never has to guess.
 // - Meeting set carries the meeting time (meeting_at, UTC). The owner's page cannot set Meeting set without one; the brain may,
@@ -24,12 +24,14 @@ export type Dealer = { id: number; name: string; sheet_key: string | null; on_sh
 export type PersonRow = {
   id: number; uid: string; name: string; dealer_id: number; source: string; status: Status; note: string;
   added_by: 'owner' | 'jarvis'; added_from: string | null; created_at: string; updated_at: string; status_at: string; note_at: string | null; removed_at: string | null;
-  meeting_at: string | null; by_hidden_at: string | null;
+  meeting_at: string | null; by_hidden_at: string | null; contact: string | null;
 };
 export type StatusChange = { status: Status; at: string; by: string; meetingAt?: string };
 export type PersonView = {
   id: number; uid: string; name: string; dealership: string; dealerId: number; dealerKey: string | null; onSheet: boolean;
   source: string; sourceWords: string; status: Status; statusWords: string; note: string;
+  /** A phone number or an email to reach the person. Null when nobody gave one. */
+  contact: string | null;
   addedBy: 'owner' | 'jarvis'; addedFrom: string | null; createdAt: string; updatedAt: string; statusAt: string; noteAt: string | null;
   /** The meeting time in UTC, only while the status is Meeting set. Null when the brain set Meeting set without one. */
   meetingAt: string | null;
@@ -66,6 +68,19 @@ export function sourceOf(v: unknown): string | undefined {
   const s = text(v).toLowerCase();
   return s === 'email' || s === 'e-mail' ? 'email' : s === 'text' || s === 'sms' || s === 'text message' ? 'text' : undefined;
 }
+const CONTACT_FORMAT = 'contact must be a phone number (7 digits or more) or an email address';
+/**
+ * A contact as stored: an email, or a phone number with at least 7 digits and only phone signs. Spaces are folded, the rest
+ * stays as typed ("581-232-9500"). '' means clear it. Undefined when it is neither.
+ */
+export function contactOf(v: unknown): string | undefined {
+  const s = text(v).replace(/\s+/g, ' ');
+  if (!s) return '';
+  if (s.length > 120) return undefined;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return s;
+  if (/^\+?[\d\s().-]+(\s*(x|ext\.?)\s*\d+)?$/i.test(s) && (s.match(/\d/g) ?? []).length >= 7) return s;
+  return undefined;
+}
 /** Lowercase, no accents, letters and digits only, for matching a name typed in the chat against the list. */
 export const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -94,6 +109,7 @@ export function createTables(db: DatabaseSync) {
   const has = (table: string, col: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(c => c.name === col);
   if (!has('migration_people', 'meeting_at')) db.exec('ALTER TABLE migration_people ADD COLUMN meeting_at TEXT');
   if (!has('migration_people', 'by_hidden_at')) db.exec('ALTER TABLE migration_people ADD COLUMN by_hidden_at TEXT');
+  if (!has('migration_people', 'contact')) db.exec('ALTER TABLE migration_people ADD COLUMN contact TEXT');
   if (!has('migration_status_log', 'meeting_at')) db.exec('ALTER TABLE migration_status_log ADD COLUMN meeting_at TEXT');
 }
 
@@ -119,7 +135,7 @@ export function makeMigration(o: { db: DatabaseSync; log: Log; onChange: () => v
     return {
       id: p.id, uid: p.uid, name: p.name, dealership: d.name, dealerId: d.id, dealerKey: d.sheet_key, onSheet: !!d.on_sheet,
       source: p.source, sourceWords: SOURCE_WORDS[p.source] ?? p.source, status: p.status, statusWords: STATUS_WORDS[p.status], note: p.note,
-      addedBy: p.added_by, addedFrom: p.added_from, createdAt: iso(p.created_at)!, updatedAt: iso(p.updated_at)!, statusAt: iso(p.status_at)!, noteAt: iso(p.note_at),
+      contact: p.contact || null, addedBy: p.added_by, addedFrom: p.added_from, createdAt: iso(p.created_at)!, updatedAt: iso(p.updated_at)!, statusAt: iso(p.status_at)!, noteAt: iso(p.note_at),
       meetingAt: iso(p.meeting_at), byHidden: !!p.by_hidden_at,
       history: historyOf(p.id),
     };
@@ -229,6 +245,15 @@ export function makeMigration(o: { db: DatabaseSync; log: Log; onChange: () => v
     return at ? { at } : MEETING_FORMAT;
   }
 
+  /** The dealership a request names: the owner's page sends its id from the dropdown, the brain a name that must be on the list. */
+  function dealerFor(b: any, by: 'owner' | 'jarvis'): Dealer | string {
+    const d = by === 'owner' && b?.dealerId !== undefined ? dealer(Number(b.dealerId)) : findDealer(text(b?.dealership));
+    if (d) return d;
+    if (by === 'owner' && b?.dealerId !== undefined) return 'That dealership is not on the list any more. Pick another.';
+    const near = closeTo(text(b?.dealership));
+    return `"${text(b?.dealership)}" is not on the dealership list.${near.length ? ` Close: ${near.join('; ')}.` : ''} Only ${OWNER} adds a dealership, from the app.`;
+  }
+
   const api = {
     state,
     view: (id: number) => { const p = person(id); return p && view(p); },
@@ -246,19 +271,16 @@ export function makeMigration(o: { db: DatabaseSync; log: Log; onChange: () => v
       if (typeof meeting === 'string') return refuse(400, meeting);
       const note = text(b?.note);
       if (note.length > 4000) return refuse(400, 'the note is too long');
-      let d: Dealer | undefined;
-      if (by === 'owner' && b?.dealerId !== undefined) d = dealer(Number(b.dealerId));
-      else d = findDealer(text(b?.dealership));
-      if (!d) {
-        const near = closeTo(text(b?.dealership));
-        return refuse(400, `"${text(b?.dealership)}" is not on the dealership list.${near.length ? ` Close: ${near.join('; ')}.` : ''} Only ${OWNER} adds a dealership, from the app.`);
-      }
+      const contact = b?.contact === undefined || b?.contact === null ? '' : contactOf(b.contact);
+      if (contact === undefined) return refuse(400, CONTACT_FORMAT);
+      const d = dealerFor(b, by);
+      if (typeof d === 'string') return refuse(400, d);
       const from = by === 'jarvis' ? text(b?.from) : '';
       if (by === 'jarvis' && !from) return refuse(400, '--from is required: where the person came from, such as "an email from Max" or "chat"');
       const same = people().find(p => fold(p.name) === fold(name) && p.dealer_id === d!.id);
       if (same) return reply(200, { person: view(same), existing: true });
-      const r = db.prepare(`INSERT INTO migration_people (uid, name, dealer_id, source, status, meeting_at, note, note_at, added_by, added_from) VALUES (?, ?, ?, ?, ?, ?, ?, ${note ? "datetime('now')" : 'NULL'}, ?, ?)`)
-        .run(randomUUID(), name, d.id, source, status, meeting.at, note, by, from || null);
+      const r = db.prepare(`INSERT INTO migration_people (uid, name, dealer_id, source, status, meeting_at, note, note_at, added_by, added_from, contact) VALUES (?, ?, ?, ?, ?, ?, ?, ${note ? "datetime('now')" : 'NULL'}, ?, ?, ?)`)
+        .run(randomUUID(), name, d.id, source, status, meeting.at, note, by, from || null, contact || null);
       const id = Number(r.lastInsertRowid);
       db.prepare('INSERT INTO migration_status_log (person_id, status, by, meeting_at) VALUES (?, ?, ?, ?)').run(id, status, by, meeting.at);
       log('migration person added', { person: id, by, dealer: d.id });
@@ -295,6 +317,47 @@ export function makeMigration(o: { db: DatabaseSync; log: Log; onChange: () => v
         log('migration added-by line hidden', { person: id });
         o.onChange();
       }
+      return reply(200, { person: view(person(id)!) });
+    },
+    /**
+     * Changes who the person is: name, dealership, source and contact. A field left out stays as it was; an empty contact
+     * clears it. The status, its history, the note and the uid never change here. The same name at the same dealership as
+     * another row is refused, so an edit never makes the duplicate that add avoids.
+     */
+    edit(id: number, b: any, by: 'owner' | 'jarvis'): RouteResult {
+      const p = person(id);
+      if (!p) return refuse(404, `no person ${id} on the migration list`);
+      const has = (k: string) => b?.[k] !== undefined && b?.[k] !== null;
+      const next = { name: p.name, dealer_id: p.dealer_id, source: p.source, contact: p.contact ?? '' };
+      if (has('name')) {
+        next.name = text(b.name).replace(/\s+/g, ' ');
+        if (!next.name) return refuse(400, 'name cannot be empty');
+        if (next.name.length > 120) return refuse(400, 'name is too long');
+      }
+      if (has('dealership') || (by === 'owner' && has('dealerId'))) {
+        const d = dealerFor(b, by);
+        if (typeof d === 'string') return refuse(400, d);
+        next.dealer_id = d.id;
+      }
+      if (has('source')) {
+        const src = sourceOf(b.source);
+        if (!src) return refuse(400, 'source must be email or text');
+        next.source = src;
+      }
+      if (has('contact')) {
+        const c = contactOf(b.contact);
+        if (c === undefined) return refuse(400, CONTACT_FORMAT);
+        next.contact = c;
+      }
+      if (!['name', 'dealership', ...(by === 'owner' ? ['dealerId'] : []), 'source', 'contact'].some(has)) return refuse(400, 'nothing to change: give a name, dealership, source or contact');
+      const changed = (Object.keys(next) as (keyof typeof next)[]).filter(k => next[k] !== (k === 'contact' ? p.contact ?? '' : p[k]));
+      if (!changed.length) return reply(200, { person: view(p) });
+      const same = people().find(x => x.id !== id && fold(x.name) === fold(next.name) && x.dealer_id === next.dealer_id);
+      if (same) return refuse(409, `${same.name} is already on the list at ${dealer(same.dealer_id)!.name} (id ${same.id}).`);
+      db.prepare(`UPDATE migration_people SET name = ?, dealer_id = ?, source = ?, contact = ?, updated_at = datetime('now') WHERE id = ?`)
+        .run(next.name, next.dealer_id, next.source, next.contact || null, id);
+      log('migration person edited', { person: id, by, changed, from: Object.fromEntries(changed.map(k => [k, k === 'contact' ? p.contact : p[k]])), to: Object.fromEntries(changed.map(k => [k, next[k] || null])) });
+      o.onChange();
       return reply(200, { person: view(person(id)!) });
     },
     /** Replaces the note. An empty note clears it. */
@@ -365,7 +428,7 @@ export function migrationBrief(people: PersonView[]): string {
 
 /**
  * The routes. `/api/migration/*` act as the owner and sit behind the open-page secret in main.ts. `/api/internal/migration*` is what
- * bin/jarvis-migration calls: add, list, status, meeting time, note and the dealership import. It has no route to remove a person or add a dealership.
+ * bin/jarvis-migration calls: add, list, status, meeting time, note, edit and the dealership import. It has no route to remove a person or add a dealership.
  * Undefined when the URL is not one of these.
  */
 export function migrationRoute(m: Migration, method: string, url: string, b: any): RouteResult | undefined {
@@ -379,6 +442,7 @@ export function migrationRoute(m: Migration, method: string, url: string, b: any
     if (b?.action === 'status') return m.status(id, b, 'owner');
     if (b?.action === 'note') return m.note(id, b, 'owner');
     if (b?.action === 'meeting') return m.meeting(id, b, 'owner');
+    if (b?.action === 'edit') return m.edit(id, b, 'owner');
     if (b?.action === 'hide-by') return m.hideBy(id);
     if (b?.action === 'remove') return m.remove(id);
     return { status: 400, body: { error: `unknown action ${b?.action}` } };
@@ -388,8 +452,8 @@ export function migrationRoute(m: Migration, method: string, url: string, b: any
     const r = m.importDealers(Array.isArray(b) ? b : b?.dealerships);
     return typeof r === 'string' ? { status: 400, body: { error: r } } : { status: 200, body: { imported: r } };
   }
-  const x = /^\/api\/internal\/migration\/(\d+)\/(status|note|meeting)$/.exec(url);
+  const x = /^\/api\/internal\/migration\/(\d+)\/(status|note|meeting|edit)$/.exec(url);
   if (!x) return undefined;
   const id = Number(x[1]);
-  return x[2] === 'status' ? m.status(id, b, 'jarvis') : x[2] === 'meeting' ? m.meeting(id, b, 'jarvis') : m.note(id, b, 'jarvis');
+  return x[2] === 'status' ? m.status(id, b, 'jarvis') : x[2] === 'meeting' ? m.meeting(id, b, 'jarvis') : x[2] === 'edit' ? m.edit(id, b, 'jarvis') : m.note(id, b, 'jarvis');
 }

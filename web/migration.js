@@ -12,6 +12,8 @@ const ICON = {
   right: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
   cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 2"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.5 5.5l3 3L8 19H5v-3z"/><path d="M13.5 7.5l3 3"/></svg>',
+  phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5h3l1.5 4-2 1.5a11 11 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2 2A16 16 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>',
 };
 
@@ -202,7 +204,7 @@ function sideHtml(p, now) {
  * note, cut to the width. `inShop` leaves the dealership out, its subheader names it.
  */
 export function rowHtml(p, s = {}, now = Date.now(), inShop = false) {
-  const open = s.open === p.id, pick = s.pick?.id === p.id ? s.pick : null;
+  const open = s.open === p.id, editing = open && s.edit?.id === p.id ? s.edit : null, pick = s.pick?.id === p.id ? s.pick : null;
   const shop = `${esc(p.dealership)}${p.onSheet ? '' : ' <small class="m-off">not on sheet</small>'}`;
   const sub = [inShop ? '' : shop, p.note && !open ? esc(p.note) : ''].filter(Boolean).join(' · ');
   const by = p.byHidden ? '' : byLine(p, now);
@@ -213,11 +215,31 @@ export function rowHtml(p, s = {}, now = Date.now(), inShop = false) {
     + `<div class="m-line">${sideHtml(p, now)}${sub ? `<span class="m-sub" data-toggle>${sub}</span>` : ''}</div>` + statusSelect(p, pick?.mode === 'status')
     + (by ? `<div class="m-by"><span>${esc(by)}</span><button type="button" class="m-by-x" data-hide-by aria-label="Hide this line" title="Hide this line">${ICON.x}</button></div>` : '') + `</div>`
     + (pick ? `<div class="m-popover">${pickerHtml(pick, { head: `Meeting with ${first}`, set: true, note: pick.mode === 'status' ? `Stays ${p.statusWords} until you set the time. Cancel changes nothing.` : '' }, now)}</div>` : '')
-    + (open ? `<div class="m-note"><label for="m-note-${p.id}">Notes</label><textarea id="m-note-${p.id}" class="in" rows="3" data-note>${esc(s.noteText ?? p.note)}</textarea>`
+    + (editing ? `<div class="m-note">${editHtml(p, editing, s.dealers ?? [])}</div>` : '')
+    + (open && !editing ? `<div class="m-note"><div class="m-open-head">${contactHtml(p.contact)}<button type="button" class="m-edit-btn" data-edit aria-label="Edit ${esc(p.name)}">${ICON.pencil}Edit</button></div><label for="m-note-${p.id}">Notes</label><textarea id="m-note-${p.id}" class="in" rows="3" data-note>${esc(s.noteText ?? p.note)}</textarea>`
       + `<div class="acts"><button type="button" class="act primary" data-save>Save</button><button type="button" class="act" data-cancel>Cancel</button><small>${esc(editedAgo(p.noteAt, now))}</small></div>`
       + (s.error ? `<p class="m-err" role="alert">${esc(s.error)}</p>` : '')
       + `<div class="m-meta"><span>${esc(meta)} · ${esc(p.statusWords)} since ${esc(when(p.statusAt, now))}</span><button type="button" class="m-remove" data-remove>${s.confirmRemove ? 'Tap again to remove' : 'Remove'}</button></div></div>` : '')
     + `</li>`;
+}
+
+/** The contact as a link: an email opens the mail app, a phone number the dialer. */
+export function contactHtml(c) {
+  if (!c) return '';
+  const mail = c.includes('@');
+  const href = mail ? `mailto:${c}` : `tel:${c.replace(/[^\d+]/g, '')}`;
+  return `<a class="m-contact" href="${esc(href)}">${mail ? ICON.mail : ICON.phone}<span>${esc(c)}</span></a>`;
+}
+
+/** The open row in edit mode: name, dealership from the list, source and contact, then Save and Cancel. */
+export function editHtml(p, e, dealers) {
+  return `<div class="m-edit" data-edit-form><div class="m-edit-head">Edit ${esc(p.name)}</div>`
+    + `<label>Name<input class="in" data-e="name" value="${esc(e.name)}" enterkeyhint="next" autocomplete="off"></label>`
+    + `<label>Dealership<select class="in" data-e="dealer">${dealerOptions(dealers, e.dealer, false)}</select></label>`
+    + `<label>Source<div class="seg" role="group" aria-label="Source">${[['email', 'Email'], ['text', 'Text message']].map(([k, v]) => `<button type="button" data-esrc="${k}" aria-pressed="${e.source === k}"${e.source === k ? ' class="on"' : ''}>${v}</button>`).join('')}</div></label>`
+    + `<label><span>Contact <span class="opt">optional</span></span><input class="in" data-e="contact" value="${esc(e.contact)}" placeholder="Phone number or email" inputmode="email" autocomplete="off"></label>`
+    + (e.error ? `<p class="m-err" role="alert">${esc(e.error)}</p>` : '')
+    + `<div class="acts"><button type="button" class="act primary" data-edit-save>Save</button><button type="button" class="act" data-edit-cancel>Cancel</button></div></div>`;
 }
 
 /** A dealership's subheader with its people under it, inside a status. */
@@ -239,11 +261,11 @@ export function listHtml(people, s = {}, now = Date.now()) {
   }).join('');
 }
 
-/** The dealership dropdown: the sheet's names exactly as written, the owner's own flagged, then Other. */
-export function dealerOptions(dealers, picked) {
+/** The dealership dropdown: the sheet's names exactly as written, the owner's own flagged, then Other (the add form only). */
+export function dealerOptions(dealers, picked, other = true) {
   return `<option value=""${picked ? '' : ' selected'} disabled>Pick a dealership</option>`
     + dealers.map(d => `<option value="${d.id}"${String(picked) === String(d.id) ? ' selected' : ''}>${esc(d.name)}${d.onSheet ? '' : ' (not on sheet)'}</option>`).join('')
-    + `<option value="other"${picked === 'other' ? ' selected' : ''}>Other...</option>`;
+    + (other ? `<option value="other"${picked === 'other' ? ' selected' : ''}>Other...</option>` : '');
 }
 
 export function addFormHtml(dealers, f, now = Date.now()) {
@@ -254,6 +276,7 @@ export function addFormHtml(dealers, f, now = Date.now()) {
     + `<label>Source<div class="seg" role="group" aria-label="Source">${[['email', 'Email'], ['text', 'Text message']].map(([k, v]) => `<button type="button" data-src="${k}" aria-pressed="${f.source === k}"${f.source === k ? ' class="on"' : ''}>${v}</button>`).join('')}</div></label>`
     + `<label>Status<select class="in" data-f="status">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}"${k === f.status ? ' selected' : ''}>${v}</option>`).join('')}</select></label>`
     + (f.status === 'meeting' ? `<div class="full">${pickerHtml({ date: f.date, time: f.time }, { head: 'Meeting time' }, now)}</div>` : '')
+    + `<label class="full"><span>Contact <span class="opt">optional</span></span><input class="in" data-f="contact" value="${esc(f.contact ?? '')}" placeholder="Phone number or email" inputmode="email"></label>`
     + `<label class="full">Note<textarea class="in" rows="2" data-f="note">${esc(f.note)}</textarea></label>`
     + (f.error ? `<p class="m-err full" role="alert">${esc(f.error)}</p>` : '')
     + `<div class="acts"><button type="submit" class="act primary"${addReady(f) ? '' : ' disabled'}>Add</button><button type="button" class="act" data-add-cancel>Cancel</button></div></form>`;
@@ -261,7 +284,7 @@ export function addFormHtml(dealers, f, now = Date.now()) {
 
 /** Meeting set needs its day and time before Add. */
 export const addReady = f => f.status !== 'meeting' || !!easternIso(f.date, f.time);
-const BLANK = () => ({ name: '', dealer: '', other: '', source: 'email', status: 'todo', date: '', time: '', note: '', error: '' });
+const BLANK = () => ({ name: '', dealer: '', other: '', source: 'email', status: 'todo', date: '', time: '', note: '', contact: '', error: '' });
 
 /** The popup's behavior. `d.fetch` carries the page's secret, `d.paint` redraws the buttons. */
 export function makeMigrationPop(d) {
@@ -269,16 +292,21 @@ export function makeMigrationPop(d) {
   const listEl = $('mig-list'), addEl = $('mig-add');
   let state = { people: [], dealers: [] }, adding = false, form = BLANK();
   // pick: the open meeting picker, { id, mode: 'status' (the status waits for the time) | 'move', date, time, error }
-  const s = { open: null, noteText: undefined, shut: { migrated: true }, error: '', confirmRemove: false, pick: null };
+  // edit: the open row in edit mode, { id, name, dealer (id as a string), source, contact, error }
+  const s = { open: null, noteText: undefined, shut: { migrated: true }, error: '', confirmRemove: false, pick: null, edit: null, dealers: [] };
 
   function drawList() {
     const focused = document.activeElement?.matches?.('[data-note]');
     const at = focused ? document.activeElement.selectionStart : null;
     const picking = document.activeElement?.closest?.('#mig-list') && document.activeElement.dataset?.pick;
+    const typing = document.activeElement?.closest?.('#mig-list') && document.activeElement.dataset?.e;
+    const caret = typing && document.activeElement.selectionStart;
+    s.dealers = state.dealers;
     listEl.innerHTML = listHtml(state.people, s);
     $('mig-sub').textContent = migrationSub(state.people);
     if (focused) { const n = listEl.querySelector('[data-note]'); n?.focus(); n?.setSelectionRange(at, at); }
     if (picking) listEl.querySelector(`[data-pick="${picking}"]`)?.focus({ preventScroll: true });
+    if (typing) { const f = listEl.querySelector(`[data-e="${typing}"]`); f?.focus({ preventScroll: true }); if (caret != null) try { f?.setSelectionRange(caret, caret); } catch { /* a select has no caret */ } }
   }
   /** Typing in a picker changes only its read-back line and its Set or Add button, so the field keeps focus and its native picker. */
   function repaintPick(root, pk, button, ready) {
@@ -304,7 +332,24 @@ export function makeMigrationPop(d) {
     if (adding) { const sel = addEl.querySelector('[data-f="dealer"]'); if (sel) sel.innerHTML = dealerOptions(state.dealers, form.dealer); } else drawAdd();
     d.paint();
   }
-  function closeRow() { s.open = null; s.noteText = undefined; s.error = ''; s.confirmRemove = false; s.pick = null; }
+  function closeRow() { s.open = null; s.noteText = undefined; s.error = ''; s.confirmRemove = false; s.pick = null; s.edit = null; }
+  function openEdit(id) {
+    const p = state.people.find(x => x.id === id);
+    if (!p) return;
+    s.edit = { id, name: p.name, dealer: String(p.dealerId), source: p.source, contact: p.contact ?? '', error: '' };
+    drawList();
+    listEl.querySelector('[data-e="name"]')?.focus({ preventScroll: true });
+    listEl.querySelector('[data-edit-form]')?.scrollIntoView?.({ block: 'nearest' });
+  }
+  async function saveEdit() {
+    const e = s.edit;
+    if (!e.name.trim()) { e.error = 'Type a name first.'; return drawList(); }
+    try {
+      await post('/api/migration/act', { id: e.id, action: 'edit', name: e.name, dealerId: Number(e.dealer), source: e.source, contact: e.contact });
+      s.edit = null;
+    } catch (err) { e.error = `Not saved: ${err.message}`; }
+    show();
+  }
   function openPick(id, mode) {
     const p = state.people.find(x => x.id === id);
     if (!p) return;
@@ -348,7 +393,7 @@ export function makeMigrationPop(d) {
     try {
       let dealerId = form.dealer;
       if (dealerId === 'other') dealerId = (await post('/api/migration/dealer', { name: form.other })).dealer.id;
-      await post('/api/migration/add', { name: form.name, dealerId: Number(dealerId), source: form.source, status: form.status, meetingAt, note: form.note });
+      await post('/api/migration/add', { name: form.name, dealerId: Number(dealerId), source: form.source, status: form.status, meetingAt, note: form.note, contact: form.contact });
       adding = false; form = BLANK();
     } catch (e) { form.error = `Not added: ${e.message}`; }
     drawAdd(); show();
@@ -389,6 +434,11 @@ export function makeMigrationPop(d) {
       return same ? undefined : listEl.querySelector('[data-note]')?.focus({ preventScroll: true });
     }
     if (e.target.closest('[data-cancel]')) { closeRow(); return drawList(); }
+    if (e.target.closest('[data-edit]')) return openEdit(id);
+    if (e.target.closest('[data-edit-cancel]')) { s.edit = null; return drawList(); }
+    if (e.target.closest('[data-edit-save]')) return void saveEdit();
+    const esrc = e.target.closest('[data-esrc]');
+    if (esrc && s.edit) { s.edit.source = esrc.dataset.esrc; return drawList(); }
     if (e.target.closest('[data-pick-open]')) return openPick(id, 'move');
     if (e.target.closest('[data-pick-cancel]')) { s.pick = null; return drawList(); }
     if (e.target.closest('[data-pick-set]')) return void setPick();
@@ -407,9 +457,15 @@ export function makeMigrationPop(d) {
     repaintPick(e.target.closest('[data-picker]'), s.pick, '[data-pick-set]', !!easternIso(s.pick.date, s.pick.time));
     return true;
   }
-  listEl.addEventListener('input', e => { if (e.target.matches('[data-note]')) s.noteText = e.target.value; else typedPick(e); });
+  listEl.addEventListener('input', e => {
+    if (e.target.matches('[data-note]')) s.noteText = e.target.value;
+    else if (e.target.dataset?.e && s.edit) s.edit[e.target.dataset.e] = e.target.value;
+    else typedPick(e);
+  });
+  listEl.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches?.('input[data-e]')) { e.preventDefault(); void saveEdit(); } });
   listEl.addEventListener('change', e => {
     if (typedPick(e)) return;
+    if (e.target.dataset?.e && s.edit) { s.edit[e.target.dataset.e] = e.target.value; return; }
     const sel = e.target.closest('[data-status]');
     if (!sel) return;
     const id = Number(sel.closest('.m-item').dataset.id), p = state.people.find(x => x.id === id);
