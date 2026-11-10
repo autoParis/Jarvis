@@ -37,6 +37,12 @@ export const TEAM = list(env.JARVIS_TEAM);
 export const CLIENT_WORD = env.JARVIS_CLIENT_WORD?.trim() || 'client';
 export const CLIENTS_WORD = env.JARVIS_CLIENTS_WORD?.trim() || 'clients';
 /** Refs whose merged branches count as delivered, besides master, such as an archived history kept only on this Mac. */
+/** The launchd label jarvisd runs under. bin/install-service installs it, bin/jarvis-restart restarts it, and the Scheduled tasks
+ * screen never lets the owner disable it. */
+const label = env.JARVIS_SERVICE_LABEL?.trim() || '';
+export const SERVICE_LABEL = /^[\w.-]{1,100}$/.test(label) ? label : 'local.jarvis';
+/** The launchd label prefixes the Scheduled tasks screen lists. The default is the service label's own prefix. */
+export const LAUNCHD_PREFIXES = list(env.JARVIS_LAUNCHD_PREFIXES).length ? list(env.JARVIS_LAUNCHD_PREFIXES) : [SERVICE_LABEL.replace(/[^.]*$/, '')];
 export const DONE_REFS = list(env.JARVIS_DONE_REFS).filter(r => /^[\w./-]+$/.test(r) && !r.startsWith('-'));
 /** The environment for every command jarvisd runs: its own, a copy taken at start. */
 export const cleanEnv: NodeJS.ProcessEnv = { ...env };

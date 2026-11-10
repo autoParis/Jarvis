@@ -141,7 +141,7 @@ test('the list shows every scheduled launchd job, leaves out always-on services,
   const again = (await tasks.list()).find(t => t.id === 'launchd:io.test.weekly')!;
   assert.equal(again.schedule, 'Every day at 2 AM');
   assert.equal(again.description, 'Weekly ship.');
-  assert.equal(humanize('io.autoroot.repo-context-harvest'), 'Repo context harvest');
+  assert.equal(humanize('local.repo-context-harvest'), 'Repo context harvest');
   assert.equal(frequent({ calendar: [{ Hour: 2 }] }), false);
 });
 

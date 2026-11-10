@@ -43,6 +43,7 @@ import { readChatFile, withEvents, fileCursor } from './transcript.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { voiceMessage, withPictures } from '../web/dictate.js';
+import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
 import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
 
@@ -365,8 +366,8 @@ function fromOwner(text: string, replyTo?: number) {
 const tasks = makeTasks({
   db: store.db, run: execRun(cleanEnv), uid: process.getuid?.() ?? 501, log, getState: store.getState, setState: store.setState,
   agentsDir: join(homedir(), 'Library', 'LaunchAgents'),
-  prefixes: (process.env.JARVIS_LAUNCHD_PREFIXES || 'io.autoroot.,com.fbm.').split(',').filter(Boolean),
-  locked: [process.env.JARVIS_LAUNCHD_LABEL || 'io.autoroot.jarvis'],
+  prefixes: LAUNCHD_PREFIXES,
+  locked: [SERVICE_LABEL],
   jarvisd: [
     { id: 'jarvisd:check', name: 'Ten-minute check', schedule: 'Every 10 minutes, 8 AM to 4 PM', everyMs: CHECK_MS, description: 'Wakes the brain on a new finding or a due reminder, and sends approved support replies.' },
     { id: 'jarvisd:today', name: 'Today list backstop', schedule: `Every ${BACKSTOP_MS / 60_000} minutes`, everyMs: BACKSTOP_MS, description: 'Catches Today items that an event missed.' },

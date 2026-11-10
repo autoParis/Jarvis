@@ -30,7 +30,7 @@ brain, skip this file.
 - `gmail.ts`, `messages.ts`, `replies.ts`, `replyworker.ts`: email triage, the Messages popup, support replies.
 - `push.ts`, `access.ts`: web push, and who may reach the app.
 - `terminal.ts`, `termroutes.ts`, `termgate.ts`, `termrows.ts`: project terminals and the passkey gate in front of them.
-- `transcript.ts`, `resume.ts`, `steer.ts`: the conversation pane, resuming a session, the message box under it.
+- `transcript.ts`, `resume.ts`, `steer.ts`: the conversation pane, reading a Claude session from outside, the Stop button.
 - `voice.ts`, `listen.ts`: speech to text and text to speech, hands-free listening.
 - `reports.ts`, `artifactshots.ts`, `images.ts`, `uploads.ts`: documents, previews and pictures in the chat.
 - `namedactions.ts`, `prodmcp.ts`, `sheet-edit.ts`, `migration.ts`: actions jarvisd runs itself on Approve.
@@ -46,7 +46,8 @@ brain, skip this file.
 - A name that more than one layer uses (an action, an event type, a status, a worker label) lives in `web/contract.js`
   or `daemon/workercontract.ts`. Do not write the bare string again. `daemon/contract.test.ts` checks the layers
   against the catalog, and checks that every `jarvis-*` command, verb and flag in `vault/*.md` exists in `bin/`.
-- Restart jarvisd with the launchd command in `vault/projects/jarvis.md`. A restart ends the brain's session.
+- Restart jarvisd: `bin/jarvis-restart`. It reads the launchd label from `JARVIS_SERVICE_LABEL` (default `local.jarvis`)
+  through `daemon/config.ts`, the same setting `bin/install-service` uses. A restart ends the brain's session.
 - Commit on your worktree branch. Jarvis merges it into `master` itself.
 
 ## The design spec
