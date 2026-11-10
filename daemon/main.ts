@@ -44,6 +44,7 @@ import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
 import { DEALERS_FILE } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
+import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll } from './timers.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OWNER_NOTE = join(ROOT, 'vault', 'owner.md');
@@ -167,13 +168,7 @@ async function nativeSync() {
   await requests.sync(nativeWork());
   today.sync();
 }
-const nativePoll = () => native.poll().then(() => {
-  closeItems(store.closeEarlierAsks(), 'an ask closed by a later answer');
-  return nativeSync();
-}).catch(e => log(`native poll failed: ${e}`));
-// Native workers: `claude agents` every 30 s (native.ts poll).
-setInterval(nativePoll, 30_000);
-nativePoll();
+startNativePoll({ poll: () => native.poll(), closeEarlier: () => closeItems(store.closeEarlierAsks(), 'an ask closed by a later answer'), sync: nativeSync, log });
 
 // ---- Ask cards: each worker question or escalation shows as a card with its options as buttons (asks.ts) ----
 const storyOf = (dispatch: string | null) => dispatch ? mergedWork().rows.find(r => r.dispatch === dispatch)?.title : undefined;
@@ -312,9 +307,7 @@ const tasks = makeTasks({
     ...(process.env.JARVIS_GMAIL !== 'off' ? [{ id: 'jarvisd:gmail', name: 'Gmail watcher', schedule: `Every ${GMAIL_POLL_MS / 60_000} minutes`, everyMs: GMAIL_POLL_MS, description: 'Reads new mail from the people in vault/people.md and stores it.' }] : []),
   ],
 });
-const sampleTasks = () => { if (!existsSync(KILL_FILE)) tasks.sample().catch(e => log(`tasks: sample failed: ${e}`)); };
-setInterval(sampleTasks, 60_000);
-sampleTasks();
+startTaskSampler({ sample: () => tasks.sample(), killed: () => existsSync(KILL_FILE), log });
 
 // ---- Gmail: mail from people in vault/people.md (rules in gmail.ts). JARVIS_GMAIL=off turns it off. ----
 if (process.env.JARVIS_GMAIL !== 'off') watchGmail({
@@ -345,23 +338,14 @@ if (process.env.JARVIS_GMAIL !== 'off') (async () => {
 })();
 
 // ---- Push: pushes held for quiet hours, then open asks and escalations the owner has not answered (rules in push.ts) ----
-let sweeping = false;
-setInterval(async () => {
-  if (sweeping || existsSync(KILL_FILE)) return;
-  sweeping = true;
-  try { await flushHeldPushes(); await pushOpenAsks(store, notify); } catch (e) { log(`push sweep: ${e}`); } finally { sweeping = false; }
-}, 30_000);
+startPushSweep({ flush: flushHeldPushes, openAsks: () => pushOpenAsks(store, notify), killed: () => existsSync(KILL_FILE), log });
 
 // ---- Ten-minute check, 8 AM to 4 PM Eastern: reads the state in code, wakes the brain only on a new finding or a due reminder (rules in check.ts) ----
 // Pending support replies are a step of that check: each goes out once its fix is in production (rules in replies.ts).
 const replies = makeReplies({ store, log, api: gh, worker: makeTicketWorker({ dataDir: join(ROOT, 'data') }), wake: text => brain.send(text), paused: () => existsSync(KILL_FILE) });
 replies.recover();
 const check = makeCheck({ store, poll: async () => nativeWork(), requests, delivery: () => readDelivery(ROOT), running: startCommit, brainBusy: () => brain.busy, wake: text => brain.send(text), paused: () => existsSync(KILL_FILE), replies: () => replies.tick(), log });
-setInterval(() => {
-  check.tick().then(r => { if (r) tasks.record('jarvisd:check', 'ok'); },
-    e => { log(`check: ${e}`); tasks.record('jarvisd:check', 'fail', String(e).slice(0, 300)); });
-}, CHECK_MS);
-check.start();
+startCheck({ check, everyMs: CHECK_MS, record: tasks.record, log });
 
 // ---- Today list: The owner's thoughts, worked up in code-decided passes. Nothing outward without his tap (rules in today.ts) ----
 const today = makeToday({
@@ -373,11 +357,7 @@ const today = makeToday({
   released: i => { if (i.dispatch && !existsSync(KILL_FILE)) brain.send(`[today] ${OWNER} released item ${i.id}, dispatch ${i.dispatch}. Close the loop on its worker and branch ("Today list" in CLAUDE.md). Reply SILENT unless something needs him.`); },
 });
 todayReady = true;
-setInterval(() => {
-  if (existsSync(KILL_FILE)) return;
-  today.tick().then(() => tasks.record('jarvisd:today', 'ok'), e => { log(`today timer: ${e}`); tasks.record('jarvisd:today', 'fail', String(e).slice(0, 300)); });
-}, BACKSTOP_MS);
-today.pass('daemon started').catch(e => log(`today pass: ${e}`));
+startTodayBackstop({ today, everyMs: BACKSTOP_MS, killed: () => existsSync(KILL_FILE), record: tasks.record, log });
 
 // ---- HTTP ----
 async function readBody(req: http.IncomingMessage, limit = 1e6): Promise<Buffer> {
@@ -407,13 +387,7 @@ const ui = makeUiSessions();
 
 // ---- Project terminals from the new-session picker: tmux sessions, Touch ID on the Mac, the phone checks on the phone (terminal.ts, termgate.ts) ----
 const termGate = makeTermGate({ store, log });
-let termKey = '';
-async function pollTerms() {
-  const key = JSON.stringify(await terms.list().catch(() => terms.current()));
-  if (key !== termKey) { termKey = key; publishWork(); }
-}
-setInterval(() => { pollTerms().catch(() => {}); }, 15_000);
-pollTerms().catch(() => {});
+const pollTerms = startTermPoll({ list: () => terms.list(), current: () => terms.current(), publish: publishWork });
 const termCtx = {
   terms, gate: termGate, log, uiOk: (h: http.IncomingHttpHeaders) => ui.ok(h), repos,
   onChange: () => { pollTerms().catch(() => {}); },
