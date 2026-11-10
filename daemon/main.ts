@@ -9,7 +9,7 @@ import { brainModelRoute, readBrainModel, MODELS, EFFORTS } from './brainmodel.t
 import { lazyBody, type RouteResult } from './route.ts';
 import { STATIC, TYPES } from './webfiles.ts';
 import { makeGate, gateRoute, PRESSED } from './gate.ts';
-import { makeVoice, makeSpeaker, voiceRoute, voiceFileRoute, detectLang, IMAGE_MARKER, unmarked, spokenSentences } from './voice.ts';
+import { makeVoice, makeSpeaker, voiceRoute, voiceFileRoute, detectLang, IMAGE_MARKER, spokenSentences } from './voice.ts';
 import { allowed, makeUiSessions, probePhone, phoneRefusal } from './access.ts';
 import { makeTerminals } from './terminal.ts';
 import { makeTermGate } from './termgate.ts';
@@ -18,7 +18,7 @@ import { terminalRows } from './termrows.ts';
 import { imageFile, imageRoots, IMAGE_TYPES } from './images.ts';
 import { reportsDir, reportsRoute } from './reports.ts';
 import { saveUpload, uploadDir, UPLOAD_LIMIT } from './uploads.ts';
-import { loadVapid, pushAll, pushOpenAsks, makeNotifier, urgent, pushRoute } from './push.ts';
+import { loadVapid, pushAll, pushOpenAsks, makeNotifier, pushRoute } from './push.ts';
 import { makeLog } from './log.ts';
 import { watchGmail, gws, haiku, readPeople, withRecipients, POLL_MS as GMAIL_POLL_MS, type EmailMeta } from './gmail.ts';
 import { makeTasks, execRun, tasksRoute } from './tasks.ts';
@@ -38,12 +38,12 @@ import { makeReplies, replyRoute, repliesBrief, gh } from './replies.ts';
 import { makeTicketWorker } from './replyworker.ts';
 import { makeMigration, migrationRoute, migrationBrief, readDealerFile } from './migration.ts';
 import { makeNative, ROW_PREFIX, type NativeWorker } from './native.ts';
-import { nativeRoute, routeWorkerTurn } from './nativeroutes.ts';
-import type { PeerMessage } from './brain.ts';
+import { nativeRoute } from './nativeroutes.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
 import { DEALERS_FILE } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
+import { wireBrain } from './brainevents.ts';
 import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll } from './timers.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -236,44 +236,8 @@ const brain = new Brain({
 });
 // The proposals of a turn get Approve and Reject on the reply that asks for them (chatlink.ts).
 const chatLinks = makeChatLinks(store);
-const linkReply = (turnId: number | undefined) => { for (const a of chatLinks.replied(turnId)) broadcast({ type: 'approval', approval: a }); };
-brain.on('reply', (raw: string, usage: any, turns: number[]) => {
-  store.addTurn({ role: 'jarvis-usage', text: usage.is_error ? 'error' : '', ...usage });
-  if (!usage.is_error) store.settleTurns(turns);
-  if (!raw || raw === 'SILENT') return linkReply(undefined);
-  const { urgent: isUrgent, text } = urgent(raw);
-  linkReply(say('jarvis', text));
-  if (isUrgent) notify({ title: 'Jarvis', body: unmarked(text).trim().slice(0, 180), url: '/', tag: `urgent-${Date.now()}` }, { urgent: true });
-});
-// One stored row per turn, the same way as jarvis-usage. The chat gets only the duration; the steps load when the owner opens the row.
-brain.on('worked', (w: { steps: unknown[]; ms: number }) => {
-  const id = store.addTurn({ role: 'jarvis-work', text: JSON.stringify(w) });
-  broadcast({ type: 'fold', id, ms: w.ms, at: new Date().toISOString() });
-});
-// A turn a worker's SendMessage started. An ask with options becomes an ask card, and the brain's words are spoken as
-// its answer. A notice is a status line in the chat with nothing to answer. An ask with no options goes back to the worker.
-brain.on('worker', (raw: string, usage: any, peer: PeerMessage | undefined) => {
-  store.addTurn({ role: 'jarvis-usage', text: usage.is_error ? 'error' : '', ...usage });
-  const r = routeWorkerTurn({ native, store, log }, peer, raw);
-  if (r.item) { const card = cardOf(r.item); broadcast({ type: 'event', text: `[native question] ${r.worker!.name}: ${peer!.text}`, at: new Date().toISOString(), asks: card ? [card] : [] }); publishWork(); }
-  if (r.notice) {
-    const line = `[worker event] ${r.worker!.name}: ${r.notice}`;
-    store.addTurn({ role: 'event', text: line });
-    broadcast({ type: 'event', text: line, at: new Date().toISOString() });
-    publishWork();
-  }
-  if (r.refusal) {
-    const w = r.worker!;
-    native.reply(w.id, r.refusal, 'jarvis')
-      .then(x => log('native ask without options: sent back', { worker: w.id, ok: x.ok, ...(x.ok ? {} : { error: x.error }) }))
-      .catch(e => log('native ask without options: send back failed', { worker: w.id, error: String(e) }));
-  }
-  linkReply(r.speak ? say('jarvis', urgent(raw).text) : undefined);
-});
-brain.on('working', (on: boolean) => { if (on) chatLinks.turnStarted(); broadcast({ type: 'working', on }); });
-brain.on('notice', (s: string) => say('jarvis', s));
-brain.on('log', log);
-brain.on('model', () => broadcast({ type: 'brain', brain: brainInfo() }));
+// The brain's replies, worker turns and state, into the store, the chat and every open page (brainevents.ts).
+wireBrain(brain, { store, log, broadcast, say, notify, chatLinks, native, cardOf, publish: publishWork, info: () => brainInfo() });
 /** A gate button's outcome: a failure or an unknown result wakes the brain at once, anything else waits for the next turn. */
 function gateNotice(a: Approval, text: string) {
   if (gateFailed(a.status)) brain.send(text); else brain.hold(text);
