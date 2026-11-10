@@ -2,7 +2,7 @@ import type { Approval } from './store.ts';
 import type { Gate } from './gate.ts';
 import type { WorkRow } from './work.ts';
 
-// The Stop button under the conversation pane. The message box above it types into a native worker directly (main.ts).
+// The Stop button under the conversation pane. The message box above it types into a native worker directly (workroutes.ts).
 
 export type SteerResult = { status: number; body: { approval?: Approval; error?: string } };
 

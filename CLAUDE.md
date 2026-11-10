@@ -12,26 +12,34 @@ brain, skip this file.
 
 ## Daemon modules, one line each
 
-- `main.ts`: start-up, the timers, the brain's event handlers, and the route table. Each concept module exports its
-  own `...Route()` (`route.ts` has the shared types), and main.ts tries them in turn. The work-list, ask, approval and
-  voice routes are still inline in main.ts.
+- `main.ts`: start-up and wiring. It makes the store, the brain and the modules, and holds the route table. Each concept
+  module exports its own `...Route()` (`route.ts` has the shared types), and main.ts tries them in turn. Still inline:
+  the live-update stream (`/api/events`), `/api/send`, `/api/upload`, `/image` and the static files.
+- `timers.ts`: jarvisd's own timers (native poll, task sampler, push sweep, ten-minute check, Today backstop, terminal
+  poll), one start function each.
+- `brainevents.ts`: what jarvisd does with each brain event (a reply, a worker's turn, the model, the working state).
 - `webfiles.ts`: the files jarvisd serves from `web/`. Add a new `web/*.js` module here.
 - `store.ts`: the SQLite store (`data/jarvis.db`). Items, approvals, requests, turns, state.
 - `brain.ts`, `brainmodel.ts`, `worksteps.ts`: the one long-lived Claude Code brain session, its model, and its turn steps.
 - `gate.ts`: the approval gate behind `bin/jarvis-act`. Every action the brain proposes, its tier, and what Approve runs.
+  `gateRoute()` has the approval buttons and the jarvis-act calls.
 - `workercontract.ts`: every rule Jarvis writes into a worker's brief, and the parsers that read the worker's asks and
   reports back. Change a label or a brief here, and `workercontract.test.ts` proves it still reads back.
 - `web/contract.js`: the gate actions and what each is (starts a worker, a button, Approve only), the live-update
   event types, and the status lists. Daemon and page both import it.
 - `native.ts`, `nativeroutes.ts`: Jarvis's workers (Claude Code sessions), their hooks and their routes.
-- `asks.ts`, `brainasks.ts`: worker asks and the brain's own asks as cards.
+- `asks.ts`, `brainasks.ts`: worker asks and the brain's own asks as cards. `askRoute()` has a tap on a card, the audit
+  log and the brain's answered mark.
 - `requests.ts`: the Requests sidebar, one row per worker Jarvis started.
+- `work.ts`, `workroutes.ts`: the work list's row shapes, and its routes (the list, hide, the transcript pane, the row
+  buttons).
 - `today.ts`, `reminders.ts`, `tasks.ts`, `check.ts`: the Today list, reminders, the scheduled tasks screen, the ten-minute check.
 - `gmail.ts`, `messages.ts`, `replies.ts`, `replyworker.ts`: email triage, the Messages popup, support replies.
 - `push.ts`, `access.ts`: web push, and who may reach the app.
 - `terminal.ts`, `termroutes.ts`, `termgate.ts`, `termrows.ts`: project terminals and the passkey gate in front of them.
 - `transcript.ts`, `resume.ts`, `steer.ts`: the conversation pane, reading a Claude session from outside, the Stop button.
-- `voice.ts`, `listen.ts`: speech to text and text to speech, hands-free listening.
+- `voice.ts`, `listen.ts`: speech to text and text to speech, hands-free listening. `voice.ts` also has the speech
+  queue (`makeSpeaker`) and the voice routes (`voiceRoute`, and `voiceFileRoute` for the audio files).
 - `reports.ts`, `artifactshots.ts`, `images.ts`, `uploads.ts`: documents, previews and pictures in the chat.
 - `namedactions.ts`, `prodmcp.ts`, `sheet-edit.ts`, `migration.ts`: actions jarvisd runs itself on Approve.
 - `config.ts`: every personal setting, read from `.env`. `log.ts`: `data/jarvisd.log`.
