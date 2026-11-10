@@ -413,6 +413,9 @@ http.createServer(async (req, res) => {
       () => brainAskRoute({ store, log, changed: askChanged }, method, url, body),
       // The Scheduled tasks screen (tasks.ts).
       () => url.startsWith('/api/tasks') ? tasksRoute(tasks, method, url, body, text => fromOwner(text)) : undefined,
+      // The chat microphone, hands-free listening and the Today microphone (voice.ts). The body is audio, read as bytes.
+      // Before the Today route: that route reads every /api/today/ body as JSON, and the Today microphone's is audio.
+      () => voiceRoute(voiceCtx, method, url, limit => readBody(req, limit), query),
       async () => url === '/api/today' || url.startsWith('/api/today/') || url.startsWith('/api/internal/today') ? todayRoute(today, method, url, await post(), owner) : undefined,
       async () => url === '/api/migration' || url.startsWith('/api/migration/') || url.startsWith('/api/internal/migration') ? migrationRoute(migration, method, url, await post()) : undefined,
       async () => url.startsWith('/api/internal/replies') ? replyRoute(store, log, method, url, await post(), owner) : undefined,
@@ -423,8 +426,6 @@ http.createServer(async (req, res) => {
       () => askRoute(askCtx, method, url, body),
       // The approval buttons and the brain's jarvis-act calls (gate.ts).
       () => gateRoute(gateCtx, method, url, body),
-      // The chat microphone, hands-free listening and the Today microphone (voice.ts). The body is audio, read as bytes.
-      () => voiceRoute(voiceCtx, method, url, limit => readBody(req, limit), query),
     ];
     for (const route of routes) { const r = await route(); if (r) return send(res, r.status, r.body); }
     if (req.method === 'GET' && STATIC[url]) {
