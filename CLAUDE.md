@@ -18,7 +18,8 @@ brain, skip this file.
 - `timers.ts`: jarvisd's own timers (native poll, task sampler, push sweep, ten-minute check, Today backstop, terminal
   poll), one start function each.
 - `brainevents.ts`: what jarvisd does with each brain event (a reply, a worker's turn, the model, the working state).
-- `webfiles.ts`: the files jarvisd serves from `web/`. Add a new `web/*.js` module here.
+- `webfiles.ts`: the files jarvisd serves from `web/`. Add a new `web/*.js` module here. It also hashes them into the
+  web version that `/api/events` and `/api/version` send, so an open page reloads itself on new code (`web/reload.js`).
 - `store.ts`: the SQLite store (`data/jarvis.db`). Items, approvals, requests, turns, state.
 - `brain.ts`, `brainmodel.ts`, `worksteps.ts`: the one long-lived Claude Code brain session, its model, and its turn steps.
 - `gate.ts`: the approval gate behind `bin/jarvis-act`. Every action the brain proposes, its tier, and what Approve runs.

@@ -60,6 +60,7 @@ import { termRoute } from '../daemon/termroutes.ts';
 import { terminalRows } from '../daemon/termrows.ts';
 import { quoteOf, quoteLine, replyIdOf, type TurnRow } from '../daemon/quote.ts';
 import { makePreviewTasks } from './preview-tasks.ts';
+import { webVersion, versionEvent, webVersionRoute } from '../daemon/webfiles.ts';
 
 const CLOSED = process.env.PREVIEW_CLOSED ? JSON.parse(readFileSync(process.env.PREVIEW_CLOSED, 'utf8')) : undefined;
 // PREVIEW_REPORT=<file.md> fills ?s=reportask: a worker ask whose REPORT line names that file, its request row with
@@ -71,6 +72,10 @@ const reportShown = (p: string) => !!REPORT_DIR && p.startsWith(REPORT_DIR + '/'
 const previewReportOf = (p: string) => REPORT_FILE ? reportSummary(p, REPORT_DIR, reportShown) : undefined;
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const PORT = Number(process.env.PREVIEW_PORT ?? 7718);
+// The web code version, as jarvisd sends it. `curl -XPOST localhost:7718/api/preview/restart` acts as a restart with
+// new web code: a new version and every stream closed, so each open page reconnects and reloads (web/reload.js).
+let webVer = webVersion(WEB);
+const allStreams = new Set<http.ServerResponse>();
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 /** A database time, `min` minutes ago. */
@@ -387,10 +392,13 @@ http.createServer(async (req, res) => {
     if (url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows) }, hidden: scene.hidden, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
-      clients.add(res);
-      req.on('close', () => clients.delete(res));
+      res.write(`data: ${JSON.stringify(versionEvent(webVer))}\n\n`);
+      clients.add(res); allStreams.add(res);
+      req.on('close', () => { clients.delete(res); allStreams.delete(res); });
       return;
     }
+    const v = webVersionRoute(webVer, 'GET', url);
+    if (v) return send(res, v.status, v.body);
     if (/^\/api\/speech\/\d+\/\d+$/.test(url)) {
       const clip = toneClip(), range = byteRange(req.headers.range, clip.length);
       if (!range || range === 'bad') { res.writeHead(200, { 'content-type': 'audio/mp4', 'accept-ranges': 'bytes', 'content-length': clip.length }); return res.end(clip); }
@@ -522,6 +530,11 @@ http.createServer(async (req, res) => {
       out({ type: 'audio', turnId, i: 0, total: clipCount(text) });
     }, 800);
     return send(res, 204);
+  }
+  if (url === '/api/preview/restart') {
+    webVer = `${webVersion(WEB)}-${Date.now()}`;
+    for (const s of allStreams) s.end();
+    return send(res, 200, { version: webVer });
   }
   // Continue on phone: the first tap meets a terminal holding the session, the "Stop it and continue" tap succeeds.
   if (url === '/api/work/phone') {

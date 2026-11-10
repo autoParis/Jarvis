@@ -7,7 +7,7 @@ import { openStore, type Item, type Approval } from './store.ts';
 import { Brain, readSavedSession, gateFailed, SESSION_KEY } from './brain.ts';
 import { brainModelRoute, readBrainModel, MODELS, EFFORTS } from './brainmodel.ts';
 import { lazyBody, type RouteResult } from './route.ts';
-import { STATIC, TYPES } from './webfiles.ts';
+import { STATIC, TYPES, webVersion, versionEvent, webVersionRoute } from './webfiles.ts';
 import { makeGate, gateRoute, PRESSED } from './gate.ts';
 import { makeVoice, makeSpeaker, voiceRoute, voiceFileRoute, detectLang, IMAGE_MARKER, spokenSentences } from './voice.ts';
 import { allowed, makeUiSessions, probePhone, phoneRefusal } from './access.ts';
@@ -57,6 +57,9 @@ const listen = listenConfig();
 const log = makeLog();
 // The commit this daemon runs. Master moving past it means a restart is pending (check.ts).
 const startCommit = await masterHead(ROOT).catch(e => { log(`check: no start commit, restart findings are off: ${e}`); return undefined; });
+// The web code this daemon serves. A page that loaded other code reloads itself when it connects (web/reload.js).
+const WEB_VERSION = webVersion(join(ROOT, 'web'));
+log(`web version ${WEB_VERSION}`);
 const vapid = loadVapid(join(ROOT, 'data', 'vapid.json'));
 // Every phone push goes through notify, which holds pushes that are not urgent during quiet hours (push.ts).
 const { notify, flush: flushHeldPushes } = makeNotifier(store, m => pushAll(store, vapid, m, log), log);
@@ -429,6 +432,8 @@ http.createServer(async (req, res) => {
       () => askRoute(askCtx, method, url, body),
       // The approval buttons and the brain's jarvis-act calls (gate.ts).
       () => gateRoute(gateCtx, method, url, body),
+      // The web code version, for a page that comes back from the background (webfiles.ts).
+      async () => webVersionRoute(WEB_VERSION, method, url),
     ];
     for (const route of routes) { const r = await route(); if (r) return send(res, r.status, r.body); }
     if (req.method === 'GET' && STATIC[url]) {
@@ -448,6 +453,7 @@ http.createServer(async (req, res) => {
           : t.reply_to ? { ...t, quote: quoteOf(store.turn(t.reply_to)) } : t);
       const secret = ui.open();
       res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(store), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
+      res.write(`data: ${JSON.stringify(versionEvent(WEB_VERSION))}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); ui.close(secret); termGate.dropPage(secret); });
