@@ -8,7 +8,7 @@ import { Brain, readSavedSession, gateFailed, SESSION_KEY } from './brain.ts';
 import { brainModelRoute, readBrainModel, MODELS, EFFORTS } from './brainmodel.ts';
 import { lazyBody, type RouteResult } from './route.ts';
 import { STATIC, TYPES } from './webfiles.ts';
-import { makeGate, PRESSED, WORKER_PERMISSION, UNDO_MS } from './gate.ts';
+import { makeGate, gateRoute, PRESSED } from './gate.ts';
 import { makeVoice, sentences, detectLang, byteRange } from './voice.ts';
 import { allowed, makeUiSessions, probePhone, phoneRefusal } from './access.ts';
 import { makeTerminals } from './terminal.ts';
@@ -473,6 +473,10 @@ const askCtx = {
   sync: () => { nativeSync().catch(() => {}); },
   emailDone: (id: string) => { messages.dropProposals(id); messagesChanged(); },
 };
+const gateCtx = {
+  gate, store, native, killed: () => existsSync(KILL_FILE), notice: gateNotice, proposed: chatLinks.proposed,
+  hold: (text: string) => brain.hold(text), wake: (text: string) => brain.send(text),
+};
 const messagesCtx = {
   messages,
   approved: (a: Approval) => { if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`); },
@@ -511,6 +515,8 @@ http.createServer(async (req, res) => {
       () => workRoute(workCtx, method, url, body, query),
       // Ask cards: a tap on an option, the audit log, an answer the brain recorded (asks.ts).
       () => askRoute(askCtx, method, url, body),
+      // The approval buttons and the brain's jarvis-act calls (gate.ts).
+      () => gateRoute(gateCtx, method, url, body),
     ];
     for (const route of routes) { const r = await route(); if (r) return send(res, r.status, r.body); }
     if (req.method === 'GET' && STATIC[url]) {
@@ -612,33 +618,6 @@ http.createServer(async (req, res) => {
       fromOwner(withPictures(r.text, pics.lines));
       return send(res, 200, { text: r.text, confidence: r.confidence, kept: true, why: v.why });
     }
-    if (req.method === 'POST' && url === '/api/approval') {
-      const { id, approve } = await json(req);
-      // A native worker's permission prompt: the tap answers the held hook, and the worker goes on or is refused.
-      if (store.approval(Number(id))?.action === WORKER_PERMISSION) {
-        const r = native.decide(Number(id), approve === true);
-        const a = store.approval(Number(id))!;
-        if (!r.ok) return send(res, 409, { error: r.error, approval: a });
-        if (!existsSync(KILL_FILE)) brain.hold(`[gate] ${OWNER} ${approve ? 'allowed' : 'denied'} permission #${a.id} with the button; the worker ${approve ? 'goes on' : 'was refused and goes on without it'}. Reply SILENT.`);
-        return send(res, 200, a);
-      }
-      let a: Approval;
-      try { a = await gate.button(Number(id), approve === true); }
-      catch (e) { return send(res, 409, { error: (e as Error).message, approval: store.approval(Number(id)) }); }
-      // The kill switch holds here too: this was the one send that woke the brain while data/KILL was on (found 2026-11-07 by a test daemon).
-      if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} ${approve ? 'approved' : 'rejected'} #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
-      return send(res, 200, a);
-    }
-    // Stop on a started notice: the owner takes back a worker Jarvis started at once, within UNDO_MS.
-    if (req.method === 'POST' && url === '/api/approval/undo') {
-      const { id } = await json(req);
-      let a: Approval;
-      try { a = await gate.undo(Number(id)); }
-      catch (e) { return send(res, 409, { error: (e as Error).message, approval: store.approval(Number(id)) }); }
-      const queued = a.id === Number(id);
-      if (!existsSync(KILL_FILE)) brain.send(`[gate] ${OWNER} pressed Stop on #${id}, the worker you started at once, within ${UNDO_MS / 1000} seconds. ${queued ? 'It stops as soon as its start ends.' : `Stop #${a.id}: ${a.status}${a.result ? `, ${a.result}` : ''}.`} He does not want it as it was. Ask him in one short sentence what to change, unless he already said.`);
-      return send(res, 200, a);
-    }
     // The microphone in the Today popup: the words become one item, and nothing goes to the chat.
     if (req.method === 'POST' && url === '/api/today/voice') {
       const audio = await readBody(req, 20e6);
@@ -647,20 +626,6 @@ http.createServer(async (req, res) => {
       if (!r.text) return send(res, 200, { words: '', today: today.list() });
       const added = today.add({ words: r.text, go: new URL(req.url ?? '/', 'http://x').searchParams.get('go') === '1' });
       return send(res, added.status, { words: r.text, ...added.body });
-    }
-    // ---- Called by bin/jarvis-act and bin/jarvis-remind on behalf of the brain ----
-    if (url.startsWith('/api/internal/gate/')) {
-      const op = url.slice('/api/internal/gate/'.length);
-      const b = req.method === 'POST' ? await json(req) : {};
-      try {
-        if (op === 'propose') { const a = await gate.propose(b.action, b.args, b.say, b.card, { ownerAsked: b.ownerAsked === true }); chatLinks.proposed(a); return send(res, 200, a); }
-        if (op === 'revise') return send(res, 200, await gate.revise(Number(b.id), b.args, b.say, b.card));
-        if (op === 'confirm') return send(res, 200, await gate.confirm(Number(b.id)));
-        if (op === 'reject') return send(res, 200, gate.reject(Number(b.id)));
-        if (op === 'list') return send(res, 200, store.pendingApprovals());
-      } catch (e) {
-        return send(res, 409, { error: (e as Error).message });
-      }
     }
     send(res, 404);
   } catch (e) {

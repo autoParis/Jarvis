@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import type { Store, Approval, Item } from './store.ts';
 import { replyRaw, replyAll, selfAddresses, OWNER_EMAILS, withRecipients, fetchSignature, stripSignoff, gws as realGws, type EmailMeta, type Gws } from './gmail.ts';
 import type { Log } from './log.ts';
+import type { RouteResult, Body } from './route.ts';
 import { SIDE_CHAT_PREFIX } from './work.ts';
 import { shownTitle } from './requests.ts';
 import { NAMED_ACTIONS, namedCardArgs, namedCommand, namedCwd, verifyNamed } from './namedactions.ts';
@@ -448,3 +449,67 @@ function summarize(out: string): string {
 }
 
 export type Gate = ReturnType<typeof makeGate>;
+
+export type GateCtx = {
+  gate: Pick<Gate, 'button' | 'undo' | 'propose' | 'revise' | 'confirm' | 'reject'>;
+  store: Pick<Store, 'approval' | 'pendingApprovals'>;
+  native: Pick<Native, 'decide'>;
+  killed: () => boolean;
+  /** Holds a line for the brain's next turn. */
+  hold: (text: string) => void;
+  /** Wakes the brain with the text. */
+  wake: (text: string) => void;
+  /** A button's outcome for the brain: a failure wakes it, anything else waits for its next turn (main.ts gateNotice). */
+  notice: (a: Approval, text: string) => void;
+  /** A new proposal, for the reply that asks for it (chatlink.ts). */
+  proposed: (a: Approval) => void;
+};
+
+/**
+ * The approval routes: the owner's Approve, Reject, Allow and Deny buttons, Stop on a started notice, and the
+ * jarvis-act calls (propose, revise, confirm, reject, list) the brain makes through bin/jarvis-act.
+ */
+export async function gateRoute(o: GateCtx, method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+  if (method === 'POST' && url === '/api/approval') {
+    const { id, approve } = await body();
+    // A native worker's permission prompt: the tap answers the held hook, and the worker goes on or is refused.
+    if (o.store.approval(Number(id))?.action === WORKER_PERMISSION) {
+      const r = o.native.decide(Number(id), approve === true);
+      const a = o.store.approval(Number(id))!;
+      if (!r.ok) return { status: 409, body: { error: r.error, approval: a } };
+      if (!o.killed()) o.hold(`[gate] ${OWNER} ${approve ? 'allowed' : 'denied'} permission #${a.id} with the button; the worker ${approve ? 'goes on' : 'was refused and goes on without it'}. Reply SILENT.`);
+      return { status: 200, body: a };
+    }
+    let a: Approval;
+    try { a = await o.gate.button(Number(id), approve === true); }
+    catch (e) { return { status: 409, body: { error: (e as Error).message, approval: o.store.approval(Number(id)) } }; }
+    // The kill switch holds here too: this was the one send that woke the brain while data/KILL was on (found 2026-11-07 by a test daemon).
+    if (!o.killed()) o.notice(a, `[gate] ${OWNER} ${approve ? 'approved' : 'rejected'} #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`);
+    return { status: 200, body: a };
+  }
+  // Stop on a started notice: the owner takes back a worker Jarvis started at once, within UNDO_MS.
+  if (method === 'POST' && url === '/api/approval/undo') {
+    const { id } = await body();
+    let a: Approval;
+    try { a = await o.gate.undo(Number(id)); }
+    catch (e) { return { status: 409, body: { error: (e as Error).message, approval: o.store.approval(Number(id)) } }; }
+    const queued = a.id === Number(id);
+    if (!o.killed()) o.wake(`[gate] ${OWNER} pressed Stop on #${id}, the worker you started at once, within ${UNDO_MS / 1000} seconds. ${queued ? 'It stops as soon as its start ends.' : `Stop #${a.id}: ${a.status}${a.result ? `, ${a.result}` : ''}.`} He does not want it as it was. Ask him in one short sentence what to change, unless he already said.`);
+    return { status: 200, body: a };
+  }
+  // ---- Called by bin/jarvis-act on behalf of the brain. An unknown op is not answered here, so it ends as a 404. ----
+  if (url.startsWith('/api/internal/gate/')) {
+    const op = url.slice('/api/internal/gate/'.length);
+    const b = method === 'POST' ? await body() : {};
+    try {
+      if (op === 'propose') { const a = await o.gate.propose(b.action, b.args, b.say, b.card, { ownerAsked: b.ownerAsked === true }); o.proposed(a); return { status: 200, body: a }; }
+      if (op === 'revise') return { status: 200, body: await o.gate.revise(Number(b.id), b.args, b.say, b.card) };
+      if (op === 'confirm') return { status: 200, body: await o.gate.confirm(Number(b.id)) };
+      if (op === 'reject') return { status: 200, body: o.gate.reject(Number(b.id)) };
+      if (op === 'list') return { status: 200, body: o.store.pendingApprovals() };
+    } catch (e) {
+      return { status: 409, body: { error: (e as Error).message } };
+    }
+  }
+  return undefined;
+}

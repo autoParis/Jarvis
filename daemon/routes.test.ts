@@ -13,6 +13,7 @@ import { brainModelRoute } from './brainmodel.ts';
 import { messagesRoute } from './messages.ts';
 import { brainAskRoute } from './brainasks.ts';
 import { askRoute, askCard } from './asks.ts';
+import { gateRoute, WORKER_PERMISSION } from './gate.ts';
 
 const body = (v: unknown) => async () => v;
 const none = () => { throw new Error('the route read a body it does not need'); };
@@ -138,4 +139,47 @@ test('asks: a tap answers a native worker once, the audit log lists it, and the 
   assert.deepEqual(seen.emails, ['gmail:1']);
   assert.deepEqual(seen.changed, ['msg_1', 'msg_1', 'nope', 'gmail:1']);
   assert.equal(await askRoute(o, 'GET', '/api/ask/answer', none), undefined);
+});
+
+test('gate: Allow on a worker permission, Approve with a notice, Stop within the undo window, and the jarvis-act calls', async () => {
+  const store = openStore(':memory:');
+  const seen: any = { held: [], woke: [], notices: [], proposed: [], decided: [] };
+  let killed = false, decideOk = true;
+  const gate = {
+    button: async (id: number, approve: boolean) => { if (id === 99) throw new Error('already decided'); return { ...store.approval(id)!, status: approve ? 'done' : 'rejected', result: 'ok' }; },
+    undo: async (id: number) => ({ ...store.approval(id)!, status: 'stopping' }),
+    propose: async (action: string, args: any, say: string) => { if (!action) throw new Error('no action'); return store.addApproval({ action, args: JSON.stringify(args), say }); },
+    revise: async (id: number) => store.approval(id)!,
+    confirm: async (id: number) => store.approval(id)!,
+    reject: (id: number) => store.approval(id)!,
+  };
+  const o = {
+    gate: gate as any, store,
+    native: { decide: (id: number, allow: boolean) => { seen.decided.push([id, allow]); return decideOk ? { ok: true } as const : { ok: false, error: 'the hook is gone' } as const; } },
+    killed: () => killed, hold: (t: string) => seen.held.push(t), wake: (t: string) => seen.woke.push(t),
+    notice: (a: any, t: string) => seen.notices.push([a.id, t]), proposed: (a: any) => seen.proposed.push(a.id),
+  };
+  const perm = store.addApproval({ action: WORKER_PERMISSION, args: '{}', say: 'Run ls?' });
+  assert.equal((await gateRoute(o, 'POST', '/api/approval', body({ id: perm.id, approve: true })))?.status, 200);
+  assert.deepEqual(seen.decided, [[perm.id, true]]);
+  assert.match(seen.held[0], /allowed permission #\d+ with the button; the worker goes on\. Reply SILENT\.$/);
+  decideOk = false;
+  assert.deepEqual((await gateRoute(o, 'POST', '/api/approval', body({ id: perm.id, approve: false })))?.body, { error: 'the hook is gone', approval: store.approval(perm.id) });
+  const plain = store.addApproval({ action: 'email-send', args: '{}', say: 'Send it?' });
+  assert.equal((await gateRoute(o, 'POST', '/api/approval', body({ id: plain.id, approve: true })))?.status, 200);
+  assert.match(seen.notices[0][1], /approved #\d+ with the button\. Result: ok Tell him/);
+  killed = true;
+  await gateRoute(o, 'POST', '/api/approval', body({ id: plain.id, approve: false }));
+  assert.equal(seen.notices.length, 1, 'the kill switch keeps the brain asleep');
+  killed = false;
+  assert.deepEqual(await gateRoute(o, 'POST', '/api/approval', body({ id: 99, approve: true })), { status: 409, body: { error: 'already decided', approval: undefined } });
+  assert.equal((await gateRoute(o, 'POST', '/api/approval/undo', body({ id: plain.id })))?.status, 200);
+  assert.match(seen.woke[0], /It stops as soon as its start ends\./);
+  const proposed = await gateRoute(o, 'POST', '/api/internal/gate/propose', body({ action: 'email-send', args: {}, say: 'Send?' }));
+  assert.equal(proposed?.status, 200);
+  assert.deepEqual(seen.proposed, [(proposed?.body as any).id]);
+  assert.deepEqual(await gateRoute(o, 'POST', '/api/internal/gate/propose', body({ say: 'x' })), { status: 409, body: { error: 'no action' } });
+  assert.equal(((await gateRoute(o, 'GET', '/api/internal/gate/list', none))?.body as any[]).length, store.pendingApprovals().length);
+  assert.equal(await gateRoute(o, 'GET', '/api/internal/gate/nothing', none), undefined, 'an unknown op ends as the 404');
+  assert.equal(await gateRoute(o, 'GET', '/api/approval', none), undefined);
 });
