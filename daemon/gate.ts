@@ -11,6 +11,7 @@ import { shownTitle } from './requests.ts';
 import { NAMED_ACTIONS, namedCardArgs, namedCommand, namedCwd, verifyNamed } from './namedactions.ts';
 import { PROD_MCP_CALL, checkProdCall, makeProdMcp, type ProdMcp } from './prodmcp.ts';
 import { ROW_PREFIX, type Native } from './native.ts';
+import { ACTIONS, actionsWith } from '../web/contract.js';
 import { ISSUE_RULE, NATIVE_ISSUE_RULE, workerBrief, questionSpec, nativeSideChatSpec, sideChatSpec } from './workercontract.ts';
 export { ASK_FOOTER, ISSUE_RULE, CARD_RULE, nativeSideChatSpec, sideChatSpec } from './workercontract.ts';
 
@@ -28,7 +29,7 @@ export function cardJson(card: unknown): string | null {
 }
 
 
-const AUTOMATIC = new Set(['question']);
+const AUTOMATIC = actionsWith('automatic');
 /**
  * Since 2026-11-08 (the owner's call) a worker-start on Jarvis's own repo starts at once when his own message in the
  * brain's current turn asked for it: the card is a notice with Stop, not Approve. Every other repo keeps the card.
@@ -41,11 +42,11 @@ export const UNDO = 'undo';
 /** Jarvis's own repo, and whether the brain's current turn answers a message of the owner (Brain.answeringOwner). */
 export type OwnRepo = { repo: string; fromOwner: () => boolean };
 /** Buttons in the work list. Pressing one is the owner's decision, so they run at once, and the brain cannot propose them. */
-export const PRESSED = new Set(['side-chat', 'side-chat-close', 'session-type', 'session-resume', 'session-phone', 'prompt-key', 'today-issue', 'today-start', 'today-draft']);
+export const PRESSED = actionsWith('pressed');
 /** Typing into another session, messaging another Run's worker, sending an email and the named actions run only on the Approve button, never on a relayed yes. */
 /** A background worker's permission prompt, as a card. Only native.ts creates one; main.ts answers it through native.decide. */
 export const WORKER_PERMISSION = 'worker-permission';
-export const BUTTON_ONLY = new Set(['terminal-send', 'worker-send', 'gmail-send', ...NAMED_ACTIONS, PROD_MCP_CALL, WORKER_PERMISSION]);
+export const BUTTON_ONLY = actionsWith('buttonOnly');
 /**
  * Since 2026-11-06 (The owner's call) a worker is a Claude background session by default: `worker-start`, `question` and
  * `side-chat` run through native.ts unless the proposal says `orca: true`. Today's starts and drafts followed on 2026-11-08
@@ -78,7 +79,7 @@ const absPath = (v: unknown, name: string): string => {
   return v as string;
 };
 // Actions that start a worker. Orca saying ok without a dispatch id is not proof that a worker exists.
-const STARTS_WORKER = new Set(['worker-start', 'question', 'side-chat', 'today-start', 'today-draft']);
+const STARTS_WORKER = actionsWith('startsWorker');
 
 
 /** Connectors few workers use, each with the deny rule that removes its tools. */
@@ -247,7 +248,7 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
     case PROD_MCP_CALL: // recorded only: execute hands the stored tool and arguments to prodmcp.ts.
       return [PROD_MCP_CALL, checkProdCall(args).tool];
     default:
-      throw new Error(`unknown action ${action}. Allowed: worker-start, question, worker-stop, worker-abandon, gh-issue-create, gh-pr-close, fbm-client-pause, prod-mcp-call, terminal-send, worker-send, gmail-send`);
+      throw new Error(`unknown action ${action}. Allowed: ${Object.keys(ACTIONS).filter(a => !PRESSED.has(a) && a !== WORKER_PERMISSION).join(', ')}`);
   }
 }
 

@@ -12,6 +12,7 @@
 //   while its request is open (working, waiting, failed), or while it has no finish time. The fold only hides; it deletes nothing.
 import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, STATE } from './requestlist.js';
 import { formatStamp } from './workfold.js';
+import { actionsWith } from './contract.js';
 
 export const GROUPS = [['story', 'Stories'], ['babysit', 'Babysitting'], ['side', 'Side chats'], ['terminal', 'Terminals'], ['other', 'Other']];
 // A project terminal's mark: a small screen with a prompt (daemon/termrows.ts).
@@ -155,7 +156,7 @@ export function approvalTag(action, args) {
 }
 
 /** These read back what they did, so their result is worth showing. Other results are ids and raw output. */
-const READS_BACK = new Set(['gh-pr-close', 'fbm-client-pause', 'prod-mcp-call', 'terminal-send']);
+const READS_BACK = actionsWith('readsBack');
 
 /** The button labels of a pending card. A worker's permission prompt is allowed or denied, not approved. */
 export function approvalButtons(action) {

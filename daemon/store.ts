@@ -1,6 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { REMINDER_STATUSES, TODAY_STATUSES, SUPPORT_REPLY_STATUSES } from '../web/contract.js';
+
+/** A status list as SQL, for a CHECK constraint: 'a', 'b'. */
+const sqlList = (list: string[]) => list.map(s => `'${s}'`).join(', ');
 
 export type Item = {
   id: number; source: string; external_id: string; kind: string; dispatch_id: string | null;
@@ -127,12 +131,12 @@ export function openStore(path: string) {
     CREATE TABLE IF NOT EXISTS reminders (
       id INTEGER PRIMARY KEY, text TEXT NOT NULL, due_at TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'fired', 'done')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlList(REMINDER_STATUSES)})),
       fired_at TEXT, told_at TEXT, done_at TEXT
     );
     CREATE TABLE IF NOT EXISTS today_items (
       id INTEGER PRIMARY KEY, words TEXT NOT NULL, title TEXT, kind TEXT CHECK (kind IN ('story', 'task', 'talk')), go INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'waiting', 'queued', 'working', 'ready', 'released', 'dropped', 'moved')),
+      status TEXT NOT NULL DEFAULT 'new' CHECK (status IN (${sqlList(TODAY_STATUSES)})),
       status_at TEXT NOT NULL DEFAULT (datetime('now')),
       reading TEXT, questions TEXT, assumptions TEXT, reason TEXT, result TEXT, not_proven TEXT, link TEXT, link_label TEXT, note TEXT,
       repo TEXT, spec TEXT, story TEXT, phase TEXT, brief TEXT, draft_report TEXT, dispatch TEXT, worktree TEXT, line TEXT,
@@ -144,7 +148,7 @@ export function openStore(path: string) {
     CREATE TABLE IF NOT EXISTS support_replies (
       id INTEGER PRIMARY KEY, reference TEXT NOT NULL, dealership TEXT NOT NULL, dealership_id TEXT NOT NULL, text TEXT NOT NULL,
       repo TEXT NOT NULL, pr INTEGER NOT NULL CHECK (pr > 0),
-      status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'held', 'sending', 'sent', 'failed', 'unknown', 'dropped')),
+      status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN (${sqlList(SUPPORT_REPLY_STATUSES)})),
       hold_kind TEXT, problem TEXT, note TEXT, outcome TEXT, tell TEXT, release_pr INTEGER, live_sha TEXT, manual_ok INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')), status_at TEXT NOT NULL DEFAULT (datetime('now')),
       attempted_at TEXT, finished_at TEXT

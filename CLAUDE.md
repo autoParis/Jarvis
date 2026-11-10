@@ -18,6 +18,8 @@ brain, skip this file.
 - `gate.ts`: the approval gate behind `bin/jarvis-act`. Every action the brain proposes, its tier, and what Approve runs.
 - `workercontract.ts`: every rule Jarvis writes into a worker's brief, and the parsers that read the worker's asks and
   reports back. Change a label or a brief here, and `workercontract.test.ts` proves it still reads back.
+- `web/contract.js`: the gate actions and what each is (starts a worker, a button, Approve only), the live-update
+  event types, and the status lists. Daemon and page both import it.
 - `native.ts`, `nativeroutes.ts`: Jarvis's workers (Claude Code sessions), their hooks and their routes.
 - `asks.ts`, `brainasks.ts`: worker asks and the brain's own asks as cards.
 - `requests.ts`: the Requests sidebar, one row per worker Jarvis started.
@@ -38,6 +40,9 @@ brain, skip this file.
 - Test: `npm test`. It runs `daemon/*.test.ts` with the `JARVIS_*` settings removed, so the tests see the defaults.
   Add a test at the interface you change. A route test calls the module's `route()` with a fake request, as
   `daemon/nativeroutes.test.ts` does.
+- A name that more than one layer uses (an action, an event type, a status, a worker label) lives in `web/contract.js`
+  or `daemon/workercontract.ts`. Do not write the bare string again. `daemon/contract.test.ts` checks the layers
+  against the catalog, and checks that every `jarvis-*` command, verb and flag in `vault/*.md` exists in `bin/`.
 - Restart jarvisd with the launchd command in `vault/projects/jarvis.md`. A restart ends the brain's session.
 - Commit on your worktree branch. Jarvis merges it into `master` itself.
 
