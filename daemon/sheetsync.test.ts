@@ -284,6 +284,29 @@ test('a lead row left outside its row group, as after a failed group step, joins
   assert.equal(t.sync('write').outcome, 'nothing');
 });
 
+test('a contact from the Leads edit mode goes into the contact cell, and a later change follows the lead', () => {
+  const t = setup();
+  const id = t.add('Bob Roy', 1, 'contacted');
+  t.sync('write');
+  assert.equal(t.state().tabs.Dealerships[3][8], 'Bob Roy (email)');
+  t.db.prepare(`UPDATE migration_people SET contact = '581-232-9500' WHERE id = ?`).run(id);
+  const r = t.sync('write');
+  assert.equal(r.outcome, 'ok', r.error);
+  assert.deepEqual(r.writes.map(w => [w.field, w.cell, w.to]), [['contact', 'Dealerships!I4', 'Bob Roy (581-232-9500)']]);
+  assert.equal(t.state().tabs.Dealerships[3][8], 'Bob Roy (581-232-9500)');
+});
+
+test('a lead moved to another dealership in the Leads list is skipped: the sync never moves a row', () => {
+  const t = setup();
+  const id = t.add('Bob Roy', 1, 'contacted');
+  t.sync('write');
+  t.db.prepare(`UPDATE migration_people SET dealer_id = 2 WHERE id = ?`).run(id);
+  const r = t.sync('write');
+  assert.equal(r.outcome, 'nothing');
+  assert.match(r.skipped.map(x => x.why).join('\n'), /moved to Bolt Nissan/);
+  assert.equal(t.state().tabs.Dealerships.length, 5);
+});
+
 test('a dry run writes nothing and saves no baseline', () => {
   const t = setup();
   t.add('Bob Roy', 1);

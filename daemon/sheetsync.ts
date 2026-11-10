@@ -14,7 +14,7 @@
 // - A new lead adds a Dealerships sub-line and an Overview child row at the end of its dealership's block, and joins the
 //   block's row group. The counts (Dealerships AD, Overview B) are formulas that count the keys, so they follow.
 // - It never deletes a row, never writes a password or token, and never writes for a dealership missing from the sheet.
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -25,6 +25,8 @@ export type Grid = Cell[][];
 export type Lead = {
   uid: string; name: string; dealership: string; dealerKey: string | null; onSheet: boolean;
   status: Status; meetingAt: string | null; note: string; source: string; removed: boolean;
+  /** A phone number or an email (the Leads edit mode). Null when nobody gave one. */
+  contact?: string | null;
 };
 type Group = { range: { sheetId: number; dimension: string; startIndex: number; endIndex: number }; depth: number; collapsed?: boolean };
 export type SheetMeta = { properties: { sheetId: number; title: string; gridProperties?: { columnCount?: number } }; rowGroups?: Group[] };
@@ -81,7 +83,7 @@ function wanted(l: Lead): Record<Field, string> {
     stage: STAGE[l.status],
     meeting: l.status === 'meeting' && l.meetingAt ? easternTime(l.meetingAt) : '',
     // Column I holds "Contact names (verify)": the person's name, then how the list reached them.
-    contact: `${l.name} (${(SOURCE_WORDS[l.source] ?? l.source).toLowerCase()})`,
+    contact: `${l.name} (${l.contact || (SOURCE_WORDS[l.source] ?? l.source).toLowerCase()})`,
     note: l.note,
   };
 }
@@ -89,9 +91,10 @@ function wanted(l: Lead): Record<Field, string> {
  * The sheet already says it: the same text, any "Migrated..." stage for Migrated, the name with other indentation, or a
  * contact cell that starts with the person's name (the sheet's people rows hold the name there, sometimes with an email).
  */
-function same(field: Field, sheet: string, want: string, name: string): boolean {
+function same(field: Field, sheet: string, want: string, name: string, synced: boolean): boolean {
   if (field === 'stage' && want === STAGE.migrated) return sheet.startsWith('Migrated');
-  if (field === 'contact' && sheet !== '') return fold(sheet).startsWith(fold(name));
+  // Before the first sync of a cell, any contact text that starts with the name agrees. After it, the cell follows the lead.
+  if (field === 'contact' && sheet !== '' && !synced) return fold(sheet).startsWith(fold(name));
   return sheet.trim() === want.trim();
 }
 
@@ -203,6 +206,8 @@ export function plan(leads: Lead[], dRows: Grid, oRows: Grid, base: Baseline, sh
     // A new row needs a key no other row has: the formulas match the two tabs by it.
     const taken = (tab: Tab) => grid(tab).some(r => text(r[keyCol(tab)]) === key);
     if ((dIdx < 0 && taken('Dealerships')) || (oIdx < 0 && taken('Overview'))) { p.skipped.push({ ...who, why: `the key ${key} belongs to another person's row` }); continue; }
+    // A lead moved to another dealership in the Leads list: its row stays under the old one, and the sync does not move rows.
+    if (!key.startsWith(`${l.dealerKey}/`)) { p.skipped.push({ ...who, why: `moved to ${l.dealership} in the Leads list, but its sheet row ${key} is under another dealership; the sync does not move rows` }); continue; }
     const rows = dealershipRows(dRows, oRows, l.dealerKey!);
     if (!rows) { p.skipped.push({ ...who, why: `no dealership row with key ${l.dealerKey} on both tabs` }); continue; }
     const want = wanted(l);
@@ -234,7 +239,7 @@ export function plan(leads: Lead[], dRows: Grid, oRows: Grid, base: Baseline, sh
       const lead = want[field].trim();
       const item = { ...who, field, cell: `${spot.tab}:${spot.col}:${idx}`, from: sheet, to: lead };
       const handEdit = !!st && sheet !== st.sheet;
-      if (same(field, sheet, lead, l.name)) { p.baseline.cells[cellId] = { lead, sheet }; continue; }
+      if (same(field, sheet, lead, l.name, !!st)) { p.baseline.cells[cellId] = { lead, sheet }; continue; }
       const doWrite = (why: string) => {
         writes.push({ tab: spot.tab, row0: idx, col: spot.col, range: '', values: [[want[field]]] });
         expected.push({ range: a1(spot.tab, spot.col, idx + 1), values: [[at(grid(spot.tab), idx, spot.col)]] });
@@ -410,12 +415,14 @@ export function groupFixEdit(uids: Set<string>, dRows: Grid, oRows: Grid, meta: 
 
 /** Every lead, removed ones too, from the migration tables. */
 export function readLeads(db: DatabaseSync): Lead[] {
-  const rows = db.prepare(`SELECT p.uid, p.name, p.status, p.meeting_at, p.note, p.source, p.removed_at, d.name AS dealership, d.sheet_key, d.on_sheet
+  // contact came with the Leads edit mode. A database jarvisd has not opened since has no such column yet.
+  const hasContact = (db.prepare('PRAGMA table_info(migration_people)').all() as { name: string }[]).some(c => c.name === 'contact');
+  const rows = db.prepare(`SELECT p.uid, p.name, p.status, p.meeting_at, p.note, p.source, p.removed_at, ${hasContact ? 'p.contact' : 'NULL AS contact'}, d.name AS dealership, d.sheet_key, d.on_sheet
     FROM migration_people p JOIN migration_dealers d ON d.id = p.dealer_id ORDER BY p.id`).all() as Record<string, string | number | null>[];
   return rows.map(r => ({
     uid: String(r.uid), name: String(r.name), dealership: String(r.dealership), dealerKey: r.sheet_key ? String(r.sheet_key) : null, onSheet: !!r.on_sheet,
     status: r.status as Status, meetingAt: r.meeting_at ? `${String(r.meeting_at).replace(' ', 'T')}Z` : null, note: String(r.note ?? ''), source: String(r.source),
-    removed: !!r.removed_at,
+    removed: !!r.removed_at, contact: r.contact ? String(r.contact) : null,
   }));
 }
 
@@ -537,4 +544,35 @@ export function syncDue(now: Date, lastDay: string | undefined): { due: boolean;
   const day = `${parts.year}-${parts.month}-${parts.day}`;
   const minutes = Number(parts.hour) * 60 + Number(parts.minute);
   return { due: minutes >= 7 * 60 + 30 && lastDay !== day, day };
+}
+
+/** What the Scheduled tasks screen records for one run: ok, warn (aborted, tries again tomorrow) or fail, with a one-line note. */
+export type SyncSummary = { outcome: 'ok' | 'warn' | 'fail'; note: string; report?: string };
+export function summaryOf(r: Pick<RunResult, 'mode' | 'outcome' | 'error' | 'dir' | 'writes' | 'added' | 'overwritten'> | undefined, mode: string): SyncSummary {
+  if (!r) return { outcome: 'fail', note: `The ${mode} run ended before it wrote its record.` };
+  const report = join(r.dir, 'report.md');
+  const did = r.mode === 'dry-run' ? 'Dry run, would write' : 'Wrote';
+  const what = `${did} ${r.writes.length} cell(s), ${r.added.length} new person row(s)${r.overwritten.length ? `, ${r.overwritten.length} hand edit(s) replaced` : ''}.`;
+  if (r.outcome === 'failed') return { outcome: 'fail', note: `${r.error ?? 'Failed.'} Report: ${report}`, report };
+  if (r.outcome === 'aborted') return { outcome: 'warn', note: `${r.error ?? 'Aborted.'} Report: ${report}`, report };
+  return { outcome: 'ok', note: r.outcome === 'nothing' ? 'Nothing to change.' : `${what} Report: ${report}`, report };
+}
+
+/**
+ * Runs bin/migration-sheet-sync as a child, so the gws calls never block jarvisd, then reads the record it left in
+ * data/migration-sheet-sync/last.json. Never throws: a run that died is a fail summary.
+ */
+export function runSyncChild(root: string, mode: 'dry-run' | 'write', env: NodeJS.ProcessEnv): Promise<SyncSummary> {
+  const started = Date.now();
+  return new Promise(resolve => {
+    execFile(join(root, 'bin', 'migration-sheet-sync'), [`--${mode}`], { cwd: root, env, maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60_000 }, err => {
+      let last: RunResult | undefined;
+      try {
+        const r = JSON.parse(readFileSync(join(root, 'data', 'migration-sheet-sync', 'last.json'), 'utf8')) as RunResult;
+        if (Date.parse(r.at) >= started - 1000) last = r; // an older record is not this run's
+      } catch { /* no record */ }
+      const s = summaryOf(last, mode);
+      resolve(err && !last ? { ...s, note: `${s.note} ${String(err.message).slice(0, 200)}` } : s);
+    });
+  });
 }

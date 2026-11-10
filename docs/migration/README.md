@@ -23,12 +23,13 @@ It is temporary: it lasts as long as the Marketplace migration (about the end of
 `bin/migration-sheet-sync` copies the list to the migration sheet (`JARVIS_MIGRATION_SHEET_ID`). It writes only through `bin/sheet-edit`, so every changed cell carries its expected value and a cell edited after the read aborts the write. Rules are in `daemon/sheetsync.ts`.
 
 - Each person is a sub-line with a readable key `<dealership key>/<folded name>` (Dealerships AB, Overview M, used by the formulas) and the lead's uid in a hidden "Lead id (Jarvis)" column (Dealerships AE, Overview O). Rows match by the uid, so a rename in the list updates the same row and keeps its key. A row without a uid matches once by its key and then gets the uid. A new person gets a Dealerships sub-line and an Overview child row at the end of the dealership's block, and joins its row group.
-- The sync owns five cells of a person: name (Dealerships B, Overview A), stage (Overview C: To contact is `Not contacted`, Contacted is `Contacted`, Meeting set is `Appointment booked`, Migrated is `Migrated`), meeting time in Eastern (Dealerships G), contact (Dealerships I: the name and the channel) and note (Dealerships V).
+- The sync owns five cells of a person: name (Dealerships B, Overview A), stage (Overview C: To contact is `Not contacted`, Contacted is `Contacted`, Meeting set is `Appointment booked`, Migrated is `Migrated`), meeting time in Eastern (Dealerships G), contact (Dealerships I: the name, then the lead's phone or email, else the channel) and note (Dealerships V).
 - The Leads list is the source of truth for people (the owner's rule of 2026-11-10). The stage always follows the list, Migrated included, and a stage changed by hand on the sheet is replaced. The other cells follow a lead change. `data/migration-sheet-sync/baseline.json` keeps the lead value and the sheet value of each owned cell, to tell a lead change from a hand edit. A hand edit that the list replaces is listed in the run's report. Without a lead change, the sheet's own text stays.
 - The X of Y counts (Dealerships AD, Overview B) are formulas that count the keys, so they follow the new rows. The report shows them before and after.
+- It never moves a row: a lead moved to another dealership in the Leads list is skipped and listed in the report.
 - It never deletes a row, never copies a note that names a password or token, and skips a dealership that is not on the sheet.
 - It writes one range per row, and each write run checks every lead row: a row outside a row group joins its dealership's group, so a group step that failed one day is done the next.
-- jarvisd runs it once a day at 7:30 AM Eastern. `JARVIS_MIGRATION_SHEET_SYNC` is `dry-run` (the default: plans and reports, writes nothing), `write` or `off`. The last run is at `GET /api/internal/migration/sheet-sync` and in the state key `migrationSheetSyncLast`. A failure or an abort wakes the brain with the report path. Each run keeps `edit.json`, `result.json` and `report.md` in `data/migration-sheet-sync/runs/<time>-<mode>/`, and the jarvisd log has one line per written cell.
+- jarvisd runs it once a day at 7:30 AM Eastern. `JARVIS_MIGRATION_SHEET_SYNC` is `dry-run` (the default: plans and reports, writes nothing), `write` or `off`. Each run is a mark on the Scheduled tasks screen (row "Migration sheet sync", id `jarvisd:sheet-sync`), with a note and the report path. An abort is a warning, a failure is failing and also wakes the brain. The state key `migrationSheetSyncDay` holds the day of the last run, so a restart never runs it twice. Each run keeps `edit.json`, `result.json` and `report.md` in `data/migration-sheet-sync/runs/<time>-<mode>/`, and the jarvisd log has one line per written cell.
 - By hand: `bin/migration-sheet-sync --dry-run [--report <file.md>]` or `--write`. From a worktree, set `JARVIS_DATA_DIR=$HOME/Repos/jarvis/data` and `JARVIS_SHEET_EDIT=$HOME/Repos/jarvis/bin/sheet-edit`.
 
 ## Re-importing the dealerships
@@ -47,9 +48,10 @@ A row matches by its key, else by its exact name. A new name is added, a changed
 |---|---|
 | `daemon/migration.ts` | Tables, rules, routes and the session brief lines |
 | `daemon/sheetsync.ts`, `daemon/sheetsync.test.ts`, `bin/migration-sheet-sync` | The daily sync to the sheet and its tests |
-| `daemon/main.ts` (sync) | The "Migration sheet sync" timer block, the `/api/internal/migration/sheet-sync` route, the three imports for it |
+| `daemon/timers.ts`, `daemon/timers.test.ts` | `startSheetSync`, `SHEET_SYNC_TICK_MS` and its test |
+| `daemon/main.ts` (sync) | `SHEET_SYNC_ON`, the `jarvisd:sheet-sync` row of the Scheduled tasks list, the "Migration sheet sync" block, the three imports for it |
 | `daemon/config.ts` | `MIGRATION_SHEET_SYNC` |
-| `data/migration-sheet-sync/` | The baseline and the run records. State keys `migrationSheetSyncDay` and `migrationSheetSyncLast` |
+| `data/migration-sheet-sync/` | The baseline and the run records. State key `migrationSheetSyncDay` |
 | `daemon/migration.test.ts` | Its tests |
 | `bin/jarvis-migration` | The brain's CLI: add, list, dealers, set-status, meeting, note, import-dealers |
 | `web/migration.js` | The button count and popup |

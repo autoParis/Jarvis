@@ -1,7 +1,7 @@
 // jarvisd's timers: each runs at its interval, runs its first pass at start where it has one, and keeps its guards.
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, NATIVE_POLL_MS, TASKS_SAMPLE_MS, PUSH_SWEEP_MS, TERM_POLL_MS } from './timers.ts';
+import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, startSheetSync, NATIVE_POLL_MS, TASKS_SAMPLE_MS, PUSH_SWEEP_MS, TERM_POLL_MS, SHEET_SYNC_TICK_MS } from './timers.ts';
 
 const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
 
@@ -85,4 +85,35 @@ test('term poll: a change publishes the work list once, and a failed list falls 
   list = ['a', 'b'];
   await poll();
   assert.equal(published, 2);
+});
+
+test('sheet sync: one run per day once due, recorded on the Scheduled tasks screen; a failure wakes the brain; off and the kill switch skip it', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const recorded: unknown[][] = [], woke: string[] = [], runs: string[] = [];
+  let day: string | undefined, due = false, killed = false, outcome: 'ok' | 'fail' = 'ok';
+  startSheetSync({
+    mode: 'dry-run', due: () => ({ due: due && day !== '2026-11-11', day: '2026-11-11' }), markDay: d => { day = d; },
+    run: async mode => { runs.push(mode); return { outcome, note: outcome === 'ok' ? 'Nothing to change.' : 'gws failed' }; },
+    killed: () => killed, record: (...a) => { recorded.push(a); }, wake: text => woke.push(text), log: () => {},
+  });
+  assert.deepEqual(runs, [], 'not due at start');
+  due = true;
+  t.mock.timers.tick(SHEET_SYNC_TICK_MS);
+  await settle();
+  assert.deepEqual(runs, ['dry-run']);
+  assert.deepEqual(recorded, [['jarvisd:sheet-sync', 'ok', 'Nothing to change.']]);
+  t.mock.timers.tick(SHEET_SYNC_TICK_MS);
+  await settle();
+  assert.equal(runs.length, 1, 'the day is claimed, so no second run');
+  day = undefined; killed = true;
+  t.mock.timers.tick(SHEET_SYNC_TICK_MS);
+  assert.equal(runs.length, 1, 'the kill switch skips it');
+  killed = false; outcome = 'fail';
+  t.mock.timers.tick(SHEET_SYNC_TICK_MS);
+  await settle();
+  assert.deepEqual(recorded[1], ['jarvisd:sheet-sync', 'fail', 'gws failed']);
+  assert.match(woke[0], /\[sheet sync\].*failed: gws failed/);
+  let offRuns = 0;
+  startSheetSync({ mode: 'off', due: () => ({ due: true, day: 'x' }), markDay: () => {}, run: async () => { offRuns++; return { outcome: 'ok', note: '' }; }, killed: () => false, record: () => {}, wake: () => {}, log: () => {} });
+  assert.equal(offRuns, 0);
 });

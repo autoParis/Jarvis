@@ -16,7 +16,7 @@ brain, skip this file.
   module exports its own `...Route()` (`route.ts` has the shared types), and main.ts tries them in turn. Still inline:
   the live-update stream (`/api/events`), `/api/send`, `/api/upload`, `/image` and the static files.
 - `timers.ts`: jarvisd's own timers (native poll, task sampler, push sweep, ten-minute check, Today backstop, terminal
-  poll), one start function each.
+  poll, migration sheet sync), one start function each.
 - `brainevents.ts`: what jarvisd does with each brain event (a reply, a worker's turn, the model, the working state).
 - `webfiles.ts`: the files jarvisd serves from `web/`. Add a new `web/*.js` module here. It also hashes them into the
   web version that `/api/events` and `/api/version` send, so an open page reloads itself on new code (`web/reload.js`).
@@ -35,6 +35,8 @@ brain, skip this file.
 - `work.ts`, `workroutes.ts`: the work list's row shapes, and its routes (the list, hide, the transcript pane, the row
   buttons).
 - `today.ts`, `reminders.ts`, `tasks.ts`, `check.ts`: the Today list, reminders, the scheduled tasks screen, the ten-minute check.
+- `migration.ts`, `sheetsync.ts`, `sheet-edit.ts`: the Leads (migration) list, its daily sync to the migration sheet, and
+  the one sanctioned writer to that sheet. Temporary: `docs/migration/README.md` lists every piece.
 - `gmail.ts`, `messages.ts`, `replies.ts`, `replyworker.ts`: email triage, the Messages popup, support replies.
 - `push.ts`, `access.ts`: web push, and who may reach the app.
 - `terminal.ts`, `termroutes.ts`, `termgate.ts`, `termrows.ts`: project terminals and the passkey gate in front of them.
