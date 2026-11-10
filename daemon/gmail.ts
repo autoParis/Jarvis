@@ -2,7 +2,7 @@ import { OWNER_CAP, OWNER } from './config.ts';
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { cleanEnv } from './orca.ts';
+import { cleanEnv } from './config.ts';
 import type { Store, Item } from './store.ts';
 import type { Log } from './log.ts';
 import { OWNER_NAME, OWNER_ROLE, TEAM, CLIENT_WORD, CLIENTS_WORD, COMPANY, COMPANY_ABOUT, OWNER_EMAILS as CONFIG_OWNER_EMAILS } from './config.ts';

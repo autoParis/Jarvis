@@ -35,25 +35,25 @@ const DAY = at('2026-11-02T15:00:00Z'); // 10 AM Eastern
 
 function setup(rows: WorkRow[] = [], start = DAY) {
   const store = openStore(':memory:');
-  let clock = start, polls = 0, error: string | undefined;
+  let clock = start, polls = 0;
   const wakes: string[] = [];
   const closing = new Set<number>();
   const git = { delivery: { master: 'a'.repeat(40), unmerged: [] } as Delivery, error: undefined as string | undefined, running: 'a'.repeat(40), busy: false, paused: false };
   const check = makeCheck({
-    store, jarvisRun: 'run_j', log: () => {}, now: () => clock, paused: () => git.paused,
-    poll: async () => { polls++; return { at: '', rows, done: [], ...(error ? { error } : {}) } as Work; },
+    store, log: () => {}, now: () => clock, paused: () => git.paused,
+    poll: async () => { polls++; return { at: '', rows } as Work; },
     requests: { synced: async () => {}, closing: id => closing.has(id) },
     delivery: async () => { if (git.error) throw new Error(git.error); return git.delivery; },
     get running() { return git.running; },
     brainBusy: () => git.busy,
     wake: t => wakes.push(t),
   });
-  return { store, check, wakes, closing, git, polls: () => polls, failOrca: (e?: string) => { error = e; }, tick: (ms: number) => { clock += ms; } };
+  return { store, check, wakes, closing, git, polls: () => polls, tick: (ms: number) => { clock += ms; } };
 }
-const worker = (id: string, extra: Partial<WorkRow> = {}): WorkRow => ({ id, kind: 'worker', dispatch: id, run: 'run_j', title: id, group: 'other', state: 'working', sideChat: false, steer: 'auto', ...extra });
+const worker = (id: string, extra: Partial<WorkRow> = {}): WorkRow => ({ id, kind: 'worker', dispatch: id, title: id, group: 'other', state: 'working', steer: 'auto', ...extra });
 /** An ask that arrived `minutes` before the test clock. */
 function ask(store: ReturnType<typeof openStore>, id: string, dispatch: string | null, minutes: number) {
-  store.insertItem({ source: 'orca', external_id: id, kind: 'question', dispatch_id: dispatch, subject: 'Which one?', status: 'spoken' });
+  store.insertItem({ source: 'native', external_id: id, kind: 'question', dispatch_id: dispatch, subject: 'Which one?', status: 'spoken' });
   store.db.prepare('UPDATE items SET created_at = ? WHERE external_id = ?').run(new Date(DAY - minutes * 60_000).toISOString().slice(0, 19).replace('T', ' '), id);
 }
 
@@ -99,38 +99,22 @@ test('an ask counts as unanswered after 15 minutes, and only while its worker is
 });
 
 test('each finding wakes the brain once, across restarts; one that clears and returns wakes it again', async () => {
-  const rows = [worker('ctx_1', { state: 'exited' })];
+  const rows: WorkRow[] = [];
   const { store, check, wakes } = setup(rows);
+  store.addRequest({ dispatch_id: 'n:1', action: 'worker-start', title: 'Orphan' });
   await check.tick();
   await check.tick();
   assert.equal(wakes.length, 1);
-  assert.match(wakes[0], /exited without reporting/);
-  const later = makeCheck({ store, jarvisRun: 'run_j', log: () => {}, now: () => DAY, paused: () => false, poll: async () => ({ at: '', rows, done: [] }), requests: { synced: async () => {}, closing: () => false }, delivery: async () => ({ master: 'a', unmerged: [] }), running: 'a', brainBusy: () => false, wake: t => wakes.push(t) });
+  assert.match(wakes[0], /Request open \(working\) with no live worker/);
+  const later = makeCheck({ store, log: () => {}, now: () => DAY, paused: () => false, poll: async () => ({ at: '', rows }), requests: { synced: async () => {}, closing: () => false }, delivery: async () => ({ master: 'a', unmerged: [] }), running: 'a', brainBusy: () => false, wake: t => wakes.push(t) });
   await later.tick();
+  assert.equal(wakes.length, 1);
+  rows.push(worker('n:1'));
+  await check.tick();
   assert.equal(wakes.length, 1);
   rows.length = 0;
   await check.tick();
-  assert.equal(wakes.length, 1);
-  rows.push(worker('ctx_1', { state: 'exited' }));
-  await check.tick();
   assert.equal(wakes.length, 2);
-});
-
-test('stuck means exited, idle or parked at a prompt, on Jarvis\'s own workers; side chats and other Runs do not count', async () => {
-  const { check, wakes } = setup([
-    worker('ctx_exit', { state: 'exited' }),
-    worker('ctx_idle', { state: 'idle', note: 'No activity for 4 h, Orca cannot see it' }),
-    worker('ctx_prompt', { state: 'waiting', note: 'Waiting at a prompt in Orca' }),
-    worker('ctx_fine'),
-    worker('ctx_side', { state: 'idle', note: 'Idle 2 h', sideChat: true }),
-    worker('ctx_other', { state: 'exited', run: 'run_other' }),
-    { id: 's:k', kind: 'session', title: 'The owner chat', group: 'other', state: 'waiting', note: 'Waiting at a prompt in Orca', sideChat: false, steer: 'none' },
-  ]);
-  await check.tick();
-  assert.match(wakes[0], /ctx_exit/);
-  assert.match(wakes[0], /ctx_idle/);
-  assert.match(wakes[0], /ctx_prompt/);
-  assert.doesNotMatch(wakes[0], /ctx_fine|ctx_side|ctx_other|The owner chat/);
 });
 
 test('closed requests never count as open; a failed one and an orphan do', async () => {
@@ -157,23 +141,12 @@ test('closed requests never count as open; a failed one and an orphan do', async
 });
 
 test('a native worker in the polled rows is live: its open request is no orphan, and it is not judged stuck', async () => {
-  // main.ts hands the check Orca's poll with the native rows added (withNative). Without them every running native worker
-  // read as "Request open (working) with no live worker" (2026-11-09: 43dfae28, f918c991, 4b393f6c).
-  const { store, check, wakes } = setup([worker('n:43dfae28', { run: undefined, state: 'idle', note: 'Idle, resumes on a message' })]);
+  // main.ts hands the check the native rows (nativeWork). Without them every running native worker read as
+  // "Request open (working) with no live worker" (2026-11-09: 43dfae28, f918c991, 4b393f6c).
+  const { store, check, wakes } = setup([worker('n:43dfae28', { state: 'idle', note: 'Idle, resumes on a message' })]);
   store.addRequest({ dispatch_id: 'n:43dfae28', action: 'worker-start', title: '#4886 Check the price' });
   await check.tick();
   assert.deepEqual(wakes, []);
-});
-
-test('when Orca does not answer the tick wakes nobody and forgets nothing', async () => {
-  const { store, check, wakes, failOrca } = setup();
-  store.addRequest({ dispatch_id: 'ctx_1', action: 'worker-start', title: 'Orphan' });
-  failOrca('Orca: no answer');
-  await check.tick();
-  assert.deepEqual(wakes, []);
-  failOrca();
-  await check.tick();
-  assert.equal(wakes.length, 1);
 });
 
 const branch = (name: string, sha: string, worktree?: string) => ({ branch: name, sha, worktree });
@@ -193,11 +166,11 @@ test('a branch not in master wakes the brain once per commit, whether or not it 
   assert.doesNotMatch(wakes[1], /finished/);
 });
 
-test('a branch still being worked on is not finished work; a session Orca shows as Done does not hold it back', async () => {
-  const session = (worktree: string, state: WorkRow['state'], note?: string): WorkRow => ({ id: `s:${worktree}`, kind: 'session', title: worktree, group: 'other', state, note, worktree, sideChat: false, steer: 'none' });
+test('a branch still being worked on is not finished work; a session listed as Done does not hold it back', async () => {
+  const session = (worktree: string, state: WorkRow['state'], note?: string): WorkRow => ({ id: `s:${worktree}`, kind: 'session', title: worktree, group: 'other', state, note, worktree, steer: 'none' });
   const { check, wakes, git } = setup([
-    worker('ctx_live', { worktree: 'live' }), worker('ctx_exit', { state: 'exited', worktree: 'exited', run: 'run_other' }),
-    session('chat', 'working'), session('prompt', 'waiting', 'Waiting at a prompt in Orca'), session('monitor', 'idle', 'Monitoring'),
+    worker('ctx_live', { worktree: 'live' }), worker('ctx_exit', { state: 'exited', worktree: 'exited' }),
+    session('chat', 'working'), session('prompt', 'waiting', 'Waiting at a prompt'), session('monitor', 'idle', 'Monitoring'),
     session('over', 'idle', 'Done 3 h ago'),
   ]);
   git.delivery.unmerged = ['live', 'exited', 'chat', 'prompt', 'monitor', 'over'].map(n => branch(`b-${n}`, 'e'.repeat(40), `/w/${n}`));

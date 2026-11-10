@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  schedSentence, everySentence, fromCron, toCron, parsePrint, marks, statusOf, lastErrorOf, orcaOutcome, rruleSentence,
+  schedSentence, everySentence, fromCron, toCron, parsePrint, marks, statusOf, lastErrorOf,
   makeTasks, execRun, humanize, frequent, tasksRoute, type Run, type Sched,
 } from './tasks.ts';
 import { fixMessage, markLabel, listHtml, countText, shownTask } from '../web/tasks.js';
@@ -79,17 +79,6 @@ test('status: Failing when the last run failed, Warning when one in the strip di
   assert.equal(e?.since, new Date(NOW + HOUR).toISOString());
 });
 
-test('Orca runs: a timed-out precheck is a failure, a completed run is fine', () => {
-  assert.deepEqual(orcaOutcome({ scheduledFor: 5, status: 'skipped_precheck', precheckResult: { error: 'Precheck timed out after 300s.', timedOut: true } }),
-    { at: 5, outcome: 'fail', note: 'Precheck timed out after 300s. The run was skipped.' });
-  assert.equal(orcaOutcome({ scheduledFor: 5, status: 'completed' })?.outcome, 'ok');
-  assert.equal(orcaOutcome({ scheduledFor: 5, status: 'skipped_precheck', precheckResult: { exitCode: 1 } })?.outcome, 'ok');
-  assert.equal(orcaOutcome({ scheduledFor: 5, status: 'running' }), null);
-  assert.equal(rruleSentence('FREQ=HOURLY;BYMINUTE=0'), 'Every hour');
-  assert.equal(rruleSentence('FREQ=DAILY;BYHOUR=9;BYMINUTE=30'), 'Every day at 9:30 AM');
-  assert.equal(rruleSentence('FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=0'), 'Every Friday at 9 AM');
-});
-
 // ---- launchd, end to end: a temp LaunchAgents folder, the real plutil, a fake launchctl ----
 const plist = (label: string, body: string) => `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -111,7 +100,6 @@ function setup(opts: { failBootstrap?: number } = {}) {
   const real = execRun();
   const run: Run = async (cmd, args) => {
     if (cmd === 'plutil') return real(cmd, args);
-    if (cmd === 'orca') return { code: 1, stdout: '', stderr: 'no orca' };
     calls.push(args.join(' '));
     const label = args[1]?.split('/').at(-1) ?? '';
     if (args[0] === 'print') {
@@ -125,7 +113,7 @@ function setup(opts: { failBootstrap?: number } = {}) {
   const state = new Map<string, string>();
   let clock = NOW;
   const tasks = makeTasks({
-    db: new DatabaseSync(':memory:'), run, uid: 501, agentsDir: dir, prefixes: ['io.test.'], locked: ['io.test.jarvis'], orca: true, now: () => clock,
+    db: new DatabaseSync(':memory:'), run, uid: 501, agentsDir: dir, prefixes: ['io.test.'], locked: ['io.test.jarvis'], now: () => clock,
     jarvisd: [{ id: 'jarvisd:check', name: 'Ten-minute check', schedule: 'Every 10 minutes, 8 AM to 4 PM', everyMs: 600_000, description: 'Wakes the brain.' }],
     getState: k => state.get(k), setState: (k, v) => { state.set(k, v); },
   });
@@ -173,7 +161,7 @@ test('sampling stores one row per new run, waits while a job runs, and takes a r
   jobs['io.test.tick'] = { runs: 2, exit: 0 }; pass(60_000); await tasks.sample(); // reloaded: 2 runs since
   tick = (await tasks.list()).find(t => t.id === 'launchd:io.test.tick')!;
   assert.equal(tick.status, 'Warning');
-  tasks.record('jarvisd:check', 'warn', 'Skipped: Orca did not answer.');
+  tasks.record('jarvisd:check', 'warn', 'Skipped.');
   assert.equal((await tasks.list()).find(t => t.id === 'jarvisd:check')!.status, 'Warning');
 });
 
@@ -218,7 +206,7 @@ test('Save refuses bad input, locked and broken jobs, and changes nothing', asyn
   assert.equal((await tasks.save('launchd:io.test.broken', '@every 1m', '')).status, 409);
   assert.equal((await tasks.save('launchd:io.test.service', '@every 1m', '')).status, 404);
   assert.equal((await tasks.save('launchd:other.vendor', '@every 1m', '')).status, 404);
-  assert.equal((await tasks.save('orca:abc', '@every 1m', '')).status, 404);
+  assert.equal((await tasks.save('other:abc', '@every 1m', '')).status, 404);
   assert.equal(readFileSync(file, 'utf8'), before);
   assert.equal(existsSync(join(dir, 'jarvis-backups')), false);
   assert.deepEqual(calls.filter(c => c.startsWith('boot')), []);
@@ -236,15 +224,15 @@ test('a bootstrap that keeps failing puts the old plist back and loads it again'
 
 test('Ask Jarvis to fix names the task, its source and its last error', () => {
   const t = {
-    id: 'orca:1', source: 'orca', sourceLabel: 'Orca automation "worktree cleanup" (1)', name: 'Worktree cleanup', schedule: 'Every hour',
+    id: 'launchd:io.test.cleanup', source: 'launchd', sourceLabel: 'launchd job io.test.cleanup', name: 'Worktree cleanup', schedule: 'Every hour',
     editable: false, description: '', status: 'Failing', strip: 'hourly', marks: [],
     lastError: { at: new Date(NOW - 30 * 60_000).toISOString(), text: 'Precheck timed out after 300s.', since: '2026-11-06T21:00:00Z' },
   };
   const m = fixMessage(t, NOW);
-  assert.match(m, /^Scheduled task "Worktree cleanup" shows Failing\. Source: Orca automation "worktree cleanup" \(1\)\./);
+  assert.match(m, /^Scheduled task "Worktree cleanup" shows Failing\. Source: launchd job io\.test\.cleanup\./);
   assert.match(m, /Last error, today at 10:00 AM: Precheck timed out after 300s\. Every run since Nov 6, 4:00 PM failed\./);
   assert.match(m, /Ask me before you change the job/);
-  const html = listHtml([t, { ...t, id: 'x', status: 'OK', lastError: undefined }], 'orca:1', NOW);
+  const html = listHtml([t, { ...t, id: 'x', status: 'OK', lastError: undefined }], 'launchd:io.test.cleanup', NOW);
   assert.equal((html.match(/class="tk-fix"/g) ?? []).length, 2); // the row and the open panel, none on the OK row
   assert.match(html, /aria-expanded="true"/);
 });

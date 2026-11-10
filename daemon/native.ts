@@ -4,14 +4,14 @@ export { NATIVE_FOOTER, REPORT_NUDGE, WAITING_LINE } from './workercontract.ts';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { cleanEnv } from './orca.ts';
+import { cleanEnv } from './config.ts';
 import { classify, type NativeState, type WorkRow } from './work.ts';
 import type { Approval, NativeWorkerRow, Store } from './store.ts';
 import type { Log } from './log.ts';
 import { lastAssistantText, lastTurnMessages } from './transcript.ts';
 import { FRESH_WRITE_MS, holdersIn, lastModel, processTable, sessionName, tailOf, type Holder } from './resume.ts';
 
-// Claude Code background sessions (`claude --bg`) as Jarvis's own workers, with no Orca in the loop (Jarvis 2.0, stage B).
+// Claude Code background sessions (`claude --bg`) as Jarvis's own workers (Jarvis 2.0, stage B).
 // jarvisd starts one, the session's hooks post back here over http (a permission prompt becomes an Approve card, each
 // turn's last message becomes the report), `claude agents` tells us whether it lives, and a reply goes in through a
 // short-lived Claude session, because SendMessage from another session is the only way into a running background one.
@@ -518,7 +518,7 @@ export function makeNative(o: {
      * so the Claude app reaches it and the work list keeps it as an `n:` row. Never `claude --bg --resume` with flags: on a
      * background session that keeps saved options, that starts a copy under a new id (approval 434, 2026-11-08, reproduced
      * on 2.1.316). A session jarvisd already runs is ended first and resumed with the flag. Any other process on the session
-     * (a terminal, the desktop app, an Orca tab, a background host) refuses it and is named, unless its pid is in `stop`:
+     * (a terminal, the desktop app, a background host) refuses it and is named, unless its pid is in `stop`:
      * then it is ended first, because two writers on one session lose a turn. No message goes in, so no turn starts.
      */
     async phone(a: { sessionId: string; cwd: string; title: string; transcript?: string; approvalId?: number; stop?: number[] }): Promise<PhoneResult> {
@@ -734,7 +734,7 @@ export function makeNative(o: {
         const r: WorkRow = {
           id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(task.title, task.spec),
           state: rowState(w, asking(w)),
-          worktree: basename(w.cwd), sideChat: false,
+          worktree: basename(w.cwd),
           // An interactive session takes a message in any state: a stopped or failed one is resumed first.
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
           native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}) },

@@ -4,7 +4,6 @@ import { openStore } from './store.ts';
 import { makeGate, OWNER_ASKED, UNDO, UNDO_MS } from './gate.ts';
 import { startedNoticeHtml, undoDeadline, UNDO_MS as WEB_UNDO_MS } from '../web/worklist.js';
 
-const id = { run: 'run_x', handle: 'term_x' };
 const JARVIS = '/repos/jarvis';
 const spec = (repo: string, title = '#1 change the card') => ({ repo, taskTitle: title, spec: 'Change the card. Run npm test.' });
 
@@ -18,7 +17,7 @@ function setup(opts: { fromOwner?: boolean; hold?: Promise<void> } = {}) {
     abandon: async () => {},
   };
   const own = { repo: JARVIS, fromOwner: () => opts.fromOwner ?? true };
-  const gate = makeGate(s, id, a => seen.push({ id: a.id, status: a.status, decided_by: a.decided_by }), () => {}, undefined, undefined, undefined, native, own);
+  const gate = makeGate(s, a => seen.push({ id: a.id, status: a.status, decided_by: a.decided_by }), () => {}, undefined, undefined, native, own);
   return { s, gate, stops, seen };
 }
 

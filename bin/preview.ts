@@ -1,5 +1,5 @@
 // Serves web/ with sample data, so the page can be looked at without a second jarvisd. daemon/main.ts starts the brain,
-// the Orca watcher, the Gmail watcher and the timers at load, so it must not run twice. This script imports only the
+// the native workers, the Gmail watcher and the timers at load, so it must not run twice. This script imports only the
 // card builder, writes nothing and never opens data/. Button presses change this process's memory and nothing else.
 //
 //   npm run preview            then open http://127.0.0.1:7718
@@ -10,16 +10,14 @@
 //   ?s=empty                   nothing needs the owner, nothing running
 //   ?s=fr                      the same as question, in French
 //   ?s=working                 the same as question, with Jarvis in the middle of a turn
-//   ?s=prompt                  a worker stopped at a credential prompt, from Orca's real notice, its log not read yet
-//   ?s=prompt-full             the same prompt with the worker's log read: the whole command and its reason
-//   ?s=escalation              a blocked worker's escalation, then one that stopped without reporting
+//   ?s=escalation              a blocked worker's escalation
 //   ?s=failed                  an escalation with the worker's own FAILED and PROPOSES fields
 //   ?s=reports                 Completed rows with Report links: a short answer, a review, a 600 line audit, and one with no report
 //   ?s=docs                    the Reports view: three documents in the menu's list, and a [report:] card in the chat
 //   ?s=today                   the Today list with a row in every status. Every other scene has an empty list, to show the button at zero
 //   ?s=migration               the Migration list with a person in every status. Every other scene has nobody on it
 //   ?s=dense                   cards as long as real ones: a fields ask with long context, an approval with its two lines, an old free-form escalation
-//   menu > Scheduled tasks     sample rows in every status; PREVIEW_TASKS=real reads the real launchd jobs and Orca, read-only
+//   menu > Scheduled tasks     sample rows in every status; PREVIEW_TASKS=real reads the real launchd jobs, read-only
 //   (every scene with requests) Jarvis's second message carries Approve and Reject for the slow-feed issue
 //   ?s=native                  a native worker just started: its "Handed to a worker" row comes from daemon/requests.ts
 //   ?s=pictures                the owner's "Anything stuck?" carries 4 attached pictures: the row of small squares
@@ -68,7 +66,11 @@ const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.c
 /** A database time, `min` minutes ago. */
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString().slice(0, 19).replace('T', ' ');
 const iso = (min: number) => `${ago(min).replace(' ', 'T')}Z`;
-const item = (id: string, min: number, f: Partial<Item>): Item => ({ id: 0, source: 'orca', external_id: id, kind: 'question', dispatch_id: null, subject: '', body: '', options: null, status: 'spoken', answer: null, created_at: ago(min), pushes: 0, pushed_at: null, meta: null, ...f });
+/** A native worker's row, as daemon/native.ts builds it. */
+const worker = (id: string, f: { title: string; group: string; state: 'waiting' | 'working' | 'idle'; label?: string; note?: string; worktree?: string }) => ({
+  id: `n:${id}`, kind: 'worker', dispatch: `n:${id}`, steer: 'auto', ...f,
+  native: { id, sessionId: `sess-${id}`, name: f.worktree ?? id, state: f.state === 'idle' ? 'done' : 'working', waitingFor: f.state === 'waiting' ? 'A question' : null, outcome: null } });
+const item = (id: string, min: number, f: Partial<Item>): Item => ({ id: 0, source: 'native', external_id: id, kind: 'question', dispatch_id: null, subject: '', body: '', options: null, status: 'spoken', answer: null, created_at: ago(min), pushes: 0, pushed_at: null, meta: null, ...f });
 const asked = (story: string, where: string, q: string, opts: [string, string][]) =>
   `STORY: ${story}\nWHERE: ${where}\nQUESTION: ${q}\nOPTIONS:\n${opts.map(([c, r]) => `- ${c} because ${r}`).join('\n')}`;
 
@@ -116,25 +118,24 @@ function build(s: string) {
   const w = WORDS[s === 'fr' ? 'fr' : 'en'];
   const empty = s === 'empty';
   const rows = empty ? [] : [
-    { id: 'ctx_4612', kind: 'worker', dispatch: 'ctx_4612', title: w.w1, group: 'story', label: '#4612', state: 'waiting', note: 'Question', worktree: 'kelpfish', sideChat: false, steer: 'auto' },
-    { id: 'ctx_4623', kind: 'worker', dispatch: 'ctx_4623', title: '#4623 Price history page', group: 'story', label: '#4623', state: 'waiting', note: 'Question', worktree: 'sable', sideChat: false, steer: 'auto' },
-    { id: 'ctx_4598', kind: 'worker', dispatch: 'ctx_4598', title: w.w4, group: 'story', label: '#4598', state: 'working', worktree: 'marlin', sideChat: false, steer: 'auto' },
-    { id: 'ctx_4602', kind: 'worker', dispatch: 'ctx_4602', title: w.w5, group: 'story', label: '#4602', state: 'working', worktree: 'plover', sideChat: false, steer: 'auto' },
-    { id: 'ctx_baby', kind: 'worker', dispatch: 'ctx_baby', title: w.b1, group: 'babysit', label: 'PR #4590', state: 'working', worktree: 'wren', sideChat: false, steer: 'auto' },
-    { id: 'ctx_side', kind: 'worker', dispatch: 'ctx_side', title: w.s1, group: 'side', state: 'idle', note: 'Idle 2 h', terminal: 'term_1', sideChat: true, steer: 'type' },
-    { id: 's:weekly', kind: 'session', title: w.o5, group: 'other', state: 'idle', note: 'Done 3 h ago', worktree: 'tern', sideChat: false, steer: 'resume' },
+    worker('4612', { title: w.w1, group: 'story', label: '#4612', state: 'waiting', note: 'Question', worktree: 'kelpfish' }),
+    worker('4623', { title: '#4623 Price history page', group: 'story', label: '#4623', state: 'waiting', note: 'Question', worktree: 'sable' }),
+    worker('4598', { title: w.w4, group: 'story', label: '#4598', state: 'working', worktree: 'marlin' }),
+    worker('4602', { title: w.w5, group: 'story', label: '#4602', state: 'working', worktree: 'plover' }),
+    worker('baby', { title: w.b1, group: 'babysit', label: 'PR #4590', state: 'working', worktree: 'wren' }),
+    worker('side', { title: w.s1, group: 'side', state: 'idle', note: 'Idle 2 h' }),
   ];
   const requests = empty ? [] : [
     ...(CLOSED ? [{ id: CLOSED.detail.id, title: CLOSED.detail.title, words: CLOSED.detail.words, status: CLOSED.detail.status, at: CLOSED.detail.at, startedAt: CLOSED.detail.startedAt }] : []),
-    { id: 1, title: w.w1, words: null, status: 'waiting', at: iso(44), startedAt: iso(70), row: 'ctx_4612' },
-    { id: 2, title: '#4623 Price history page', words: null, status: 'waiting', at: iso(32), startedAt: iso(60), row: 'ctx_4623' },
+    { id: 1, title: w.w1, words: null, status: 'waiting', at: iso(44), startedAt: iso(70), row: 'n:4612' },
+    { id: 2, title: '#4623 Price history page', words: null, status: 'waiting', at: iso(32), startedAt: iso(60), row: 'n:4623' },
     { id: 3, title: w.w3, words: null, status: 'failed', at: iso(6), startedAt: iso(55) },
-    { id: 4, title: w.w4, words: null, status: 'working', at: iso(50), startedAt: iso(50), row: 'ctx_4598' },
-    { id: 5, title: w.w5, words: null, status: 'working', at: iso(3), startedAt: iso(3), row: 'ctx_4602' },
+    { id: 4, title: w.w4, words: null, status: 'working', at: iso(50), startedAt: iso(50), row: 'n:4598' },
+    { id: 5, title: w.w5, words: null, status: 'working', at: iso(3), startedAt: iso(3), row: 'n:4602' },
     { id: 6, title: w.m1, words: null, status: 'review', at: iso(25), startedAt: iso(90), pr: 'PR #4584', url: 'https://github.com/example/repo/pull/4584' },
     { id: 7, title: w.m2, words: null, status: 'review', at: iso(60), startedAt: iso(180), pr: 'PR #4577', url: 'https://github.com/example/repo/pull/4577' },
     { id: 10, title: 'Install extension button', words: null, status: 'review', at: iso(12), startedAt: iso(90), pr: 'PR #4407', url: 'https://github.com/example/repo/pull/4407' },
-    { id: 11, title: 'Raise screen fixes', words: null, status: 'review', at: iso(40), startedAt: iso(120), pr: 'PR #4407', url: 'https://github.com/example/repo/pull/4407', row: 'ctx_4612' },
+    { id: 11, title: 'Raise screen fixes', words: null, status: 'review', at: iso(40), startedAt: iso(120), pr: 'PR #4407', url: 'https://github.com/example/repo/pull/4407', row: 'n:4612' },
     { id: 12, title: 'Test seller invite link', words: null, status: 'review', at: iso(70), startedAt: iso(150), pr: 'PR #4407', url: 'https://github.com/example/repo/pull/4407' },
     { id: 13, title: '#4380 Preview onboarding', words: null, status: 'review', at: iso(95), startedAt: iso(170), pr: 'PR #4407', url: 'https://github.com/example/repo/pull/4407' },
     { id: 8, title: w.d1, words: null, status: 'done', at: iso(30), startedAt: iso(200), pr: 'PR #4570', url: 'https://github.com/example/repo/pull/4570' },
@@ -145,22 +146,14 @@ function build(s: string) {
       { id: 23, title: 'Update the dealer sheet', words: null, status: 'done', at: iso(140), startedAt: iso(160) },
     ] : []),
   ].map(r => s === 'reports' && r.id === 3 ? { ...r, report: true } : r);
-  const q1 = item('m_4612', 44, { dispatch_id: 'ctx_4612', body: asked(w.tag, w.where, w.q, [[w.o1, w.r1], [w.o2, w.r2]]), options: JSON.stringify([w.o1, w.o2]) });
-  const q2 = item('m_4623', 32, { dispatch_id: 'ctx_4623', body: asked(w.t2, w.w2, w.q2, [[w.o3, w.r3], [w.o4, w.r4]]), options: JSON.stringify([w.o3, w.o4]) });
-  const stopBody = readFileSync(join(WEB, '..', 'daemon', 'fixtures', 'stop-credential-prompt.txt'), 'utf8');
-  const stopped = item('msg_stop_preview', 1, { kind: 'escalation', dispatch_id: 'ctx_4612', subject: 'Worker is waiting on a prompt', body: stopBody });
-  const stoppedFull = { ...stopped, meta: JSON.stringify({ promptContext: {
-    description: 'Check the canary files and record the canary PR',
-    said: 'The photo fix passed its test, so I am checking the canary setup before I run it on the real account.',
-    command: 'cd "$W/functions"; ls -la service-account.json ../.env 2>/dev/null | cut -c30-; echo 1783 > ~/.fbm/canary-pr; git rev-parse HEAD',
-  } }) };
-  const blocked = item('msg_blocked_preview', 3, { kind: 'escalation', dispatch_id: 'ctx_4612', subject: 'Blocked: permission check still denies production reads', body: "The owner approved read-only access, but Claude Code's auto-mode check still denies it because chat approval does not reach that check. The owner needs to add this one line to permissions.allow in ~/.claude/settings.json by hand: Bash(node .claude/skills/prove-it/bin/db-read.mjs:*). That rule allows this script's GET and HEAD reads on staging and production in any session; I will not edit permissions or reach production another way. Meanwhile I am opening the draft PR and working on the part that needs no production data: showing the seller the refusal reason and letting them correct the link. Tell me when the rule is added, or if I should ship without the proof." });
-  const noReport = item('msg_stop_norep', 1, { kind: 'escalation', dispatch_id: 'ctx_4623', subject: 'Worker stopped without reporting', body: readFileSync(join(WEB, '..', 'daemon', 'fixtures', 'stop-no-report.txt'), 'utf8') });
-  const failed = item('msg_failed_preview', 2, { kind: 'escalation', dispatch_id: 'ctx_4612', subject: 'Blocked: CI', body: 'FAILED: The export tests went red three times in a row on main\nPROPOSES: Pause the merge until the flaky test is fixed\nQUESTION: Hold the merge?\nOPTIONS:\n- Hold it because main is red\n- Merge anyway because the failure is unrelated' });
-  const refused = item('msg_refused_preview', 5, { kind: 'escalation', dispatch_id: 'ctx_4612', subject: 'Blocked: permission denied on client pause', body: "The permissions layer denied the command 'node functions/scripts/reusable/pause-client.js --client exampleclient --hours 48', so I wrote nothing." });
+  const q1 = item('m_4612', 44, { dispatch_id: 'n:4612', body: asked(w.tag, w.where, w.q, [[w.o1, w.r1], [w.o2, w.r2]]), options: JSON.stringify([w.o1, w.o2]) });
+  const q2 = item('m_4623', 32, { dispatch_id: 'n:4623', body: asked(w.t2, w.w2, w.q2, [[w.o3, w.r3], [w.o4, w.r4]]), options: JSON.stringify([w.o3, w.o4]) });
+  const blocked = item('msg_blocked_preview', 3, { kind: 'escalation', dispatch_id: 'n:4612', subject: 'Blocked: permission check still denies production reads', body: "The owner approved read-only access, but Claude Code's auto-mode check still denies it because chat approval does not reach that check. The owner needs to add this one line to permissions.allow in ~/.claude/settings.json by hand: Bash(node .claude/skills/prove-it/bin/db-read.mjs:*). That rule allows this script's GET and HEAD reads on staging and production in any session; I will not edit permissions or reach production another way. Meanwhile I am opening the draft PR and working on the part that needs no production data: showing the seller the refusal reason and letting them correct the link. Tell me when the rule is added, or if I should ship without the proof." });
+  const failed = item('msg_failed_preview', 2, { kind: 'escalation', dispatch_id: 'n:4612', subject: 'Blocked: CI', body: 'FAILED: The export tests went red three times in a row on main\nPROPOSES: Pause the merge until the flaky test is fixed\nQUESTION: Hold the merge?\nOPTIONS:\n- Hold it because main is red\n- Merge anyway because the failure is unrelated' });
+  const refused = item('msg_refused_preview', 5, { kind: 'escalation', dispatch_id: 'n:4612', subject: 'Blocked: permission denied on client pause', body: "The permissions layer denied the command 'node functions/scripts/reusable/pause-client.js --client exampleclient --hours 48', so I wrote nothing." });
   const named = (id: number, action: string, args: object, say: string) => ({ id, action, args: JSON.stringify(namedCardArgs(action, args)), say, status: 'pending', after_turn: 0, decided_by: null, owner_text: null, result: null, created_at: ago(4) });
   // ?s=dense: cards as long as real workers and the brain write them, to check that each reads in seconds.
-  const denseAsk = item('m_4688', 20, { dispatch_id: 'ctx_4612', body: [
+  const denseAsk = item('m_4688', 20, { dispatch_id: 'n:4612', body: [
     'STORY: 4688 Marketplace photo order',
     'WHERE: Fixing the photo order sync for paused accounts, step 2 of 4.',
     'QUESTION: When a paused account comes back, should the sync reorder the photos already on Marketplace, or only the new listings?',
@@ -173,7 +166,7 @@ function build(s: string) {
   const denseStart = { id: 30, action: 'worker-start', args: JSON.stringify({ repo: '/Users/owner/Repos/acmeapp', taskTitle: '#4701 Lead alerts queue', spec: 'Run the pick-and-ship skill on issue #4701. Move the lead alerts from the cron job to the new task queue so an alert goes out within one minute of a lead waiting an hour. Keep the old cron as a fallback for one week behind the LEAD_ALERTS_QUEUE flag. Done when the PR is ready with its evidence.' }),
     say: w.dsay, ...(w.dapproves ? { card: JSON.stringify({ approves: w.dapproves, restsOn: w.drests }) } : {}),
     status: 'pending', after_turn: 0, decided_by: null, owner_text: null, result: null, created_at: ago(15) };
-  const solo = s === 'prompt' || s === 'prompt-full' || s === 'escalation' || s === 'failed' || s === 'named';
+  const solo = s === 'escalation' || s === 'failed' || s === 'named';
   const emailsOff = empty || solo || s === 'dense' || s === 'requests' || s === 'approval';
   const email = (id: string, min: number, urgent: boolean, fromName: string, from: string, subject: string, summary: string, reply: string) =>
     item(`gmail:${id}`, min, { source: 'gmail', kind: 'email', subject, body: summary, meta: JSON.stringify({ gmailId: id, threadId: `t_${id}`, from, fromName, replyTo: from, to: ['owner@example.test'], cc: [], subject, urgent, needsReply: true, reply }) });
@@ -183,14 +176,14 @@ function build(s: string) {
     email('e3', 90, false, 'Jordan Roy', 'jordan@example.test', 'Invoice for October', 'Jordan asks whether the October invoice can be paid this week.', ''),
     item('outbox:o1', 120, { source: 'outbox', kind: 'outbox', subject: 'FBM secrets grant', meta: JSON.stringify({ to: 'Sam', channel: 'slack', text: 'Hi Sam, could you grant me the permission to add service secrets? Thanks.' }) }),
   ];
-  const asks = s === 'dense' ? [denseAsk, blocked] : s === 'messages' ? [] : s === 'prompt' ? [stopped] : s === 'prompt-full' ? [stoppedFull] : s === 'escalation' ? [blocked, noReport] : s === 'failed' ? [failed] : s === 'named' ? [refused] : s === 'approval' ? [q2] : empty ? [] : [q1, q2];
-  const mail = { id: 11, action: 'worker-send', args: JSON.stringify({ dispatch: 'ctx_4598', text: w.text }), say: w.say, status: 'pending', after_turn: 0, decided_by: null, owner_text: null, result: null, created_at: ago(18) };
+  const asks = s === 'dense' ? [denseAsk, blocked] : s === 'messages' ? [] : s === 'escalation' ? [blocked] : s === 'failed' ? [failed] : s === 'named' ? [refused] : s === 'approval' ? [q2] : empty ? [] : [q1, q2];
+  const mail = { id: 11, action: 'gmail-send', args: JSON.stringify({ to: 'sam@example.test', subject: w.sub, text: w.text }), say: w.say, status: 'pending', after_turn: 0, decided_by: null, owner_text: null, result: null, created_at: ago(18) };
   const start = { id: 12, action: 'worker-start', args: JSON.stringify({ repo: '/Users/owner/Repos/acmeapp', taskTitle: '#4640 Lead alert', spec: 'Text alert when a lead waits more than an hour.' }), say: w.say2, status: 'pending', after_turn: 0, decided_by: null, owner_text: null, result: null, created_at: ago(26) };
   const issue = { id: 13, action: 'gh-issue-create', args: JSON.stringify({ repo: 'example/repo', title: 'Feed slows down at night', body: 'The export feed takes twice as long after 10 PM.' }), say: 'Open an issue about the slow feed?', status: 'pending', after_turn: 0, chat_turn: 902, decided_by: null, owner_text: null, result: null, created_at: ago(12) };
   const approvals = s === 'dense' ? [denseStart] : s === 'named' ? [named(14, 'gh-pr-close', { repo: 'example/repo', number: 4667, comment: "Closed as superseded by #4733, the owner's decision." }, 'Close PR 4667 in example/repo?'), named(15, 'fbm-client-pause', { client: 'exampleclient', hours: 48 }, 'Pause exampleclient for 48 hours?'), { ...named(14, 'gh-pr-close', { repo: 'example/repo', number: 1, comment: 'x' }, 'Run support_ticket_reply on production?'), id: 16, action: 'prod-mcp-call', args: JSON.stringify(prodCard({ tool: 'support_ticket_reply', arguments: { reference: 'TICKET-1042', content: "Bonjour,\n\nLes photos manquantes sont revenues sur votre inventaire ce matin. Vous n'avez rien à faire de votre côté.\n\nMerci de votre patience,\nOwner", status: 'resolu' } }, 'Support ticket TICKET-1042, "Photos manquantes"')) }] : empty || solo || s === 'messages' ? [] : s === 'approval' ? [{ ...mail, created_at: ago(40) }, start] : [mail, start, issue];
   const turns = empty ? [] : [
     { id: 901, role: 'jarvis', text: w.jarvis1, created_at: ago(58) },
-    { role: 'event', text: `- [worker_done] message_id=msg_preview1 dispatch=ctx_preview1 subject=${JSON.stringify(w.d1)} body=${JSON.stringify(w.jarvis1)}\n- [escalation] message_id=msg_preview2 dispatch=ctx_preview2 subject="" body="No subject on this one."`, created_at: ago(40) },
+    { role: 'event', text: `- [worker_done] message_id=msg_preview1 dispatch=n:preview1 subject=${JSON.stringify(w.d1)} body=${JSON.stringify(w.jarvis1)}\n- [escalation] message_id=msg_preview2 dispatch=n:preview2 subject="" body="No subject on this one."`, created_at: ago(40) },
     { id: 905, role: 'owner', text: w.you1, created_at: ago(30) },
     { id: 900, role: 'jarvis-work', text: '', ms: 488_000, created_at: ago(29) },
     { id: 902, role: 'jarvis', text: w.jarvis2, created_at: ago(29) },
@@ -205,14 +198,13 @@ function build(s: string) {
     { key: 'approval:9', kind: 'approval', tag: 'Email to Jordan', at: iso(120), question: w.ae, answer: 'Approved' },
     { key: 'approval:8', kind: 'approval', tag: 'Story 4555', at: iso(150), question: 'Start a worker on story 4555?', answer: 'Approved, then failed: spawn_failed: no worktree slot', failed: true },
   ];
-  const done = empty ? [] : [{ dispatch: 'ctx_done', at: iso(30), title: 'Logs panel', subject: 'Logs panel run history shipped', pr: 'PR #4570', url: 'https://github.com/example/repo/pull/4570' }];
-  if (s === 'native') return { rows: [NATIVE_ROW, ...rows], requests: nativeRequests() as typeof requests, items: [], emails: [], approvals: [], turns, audit: [], done, hidden: [] as string[] };
-  return { rows, requests, items: asks, emails, approvals, turns, audit, done, hidden: [] as string[] };
+  if (s === 'native') return { rows: [NATIVE_ROW, ...rows], requests: nativeRequests() as typeof requests, items: [], emails: [], approvals: [], turns, audit: [], hidden: [] as string[] };
+  return { rows, requests, items: asks, emails, approvals, turns, audit, hidden: [] as string[] };
 }
 
 // ?s=native: one native worker the gate just started. The request comes from daemon/requests.ts itself, fed the result
 // gate.ts runNative stores ({"worker":"n:<id>"}), in a store in memory, so the "Handed to a worker" row is what jarvisd builds.
-const NATIVE_ROW = { id: 'n:7f3a9c21', kind: 'worker', dispatch: 'n:7f3a9c21', title: 'handed-to-a-worker-401', group: 'other', state: 'working', worktree: 'handed-to-a-worker-401', sideChat: false, steer: 'auto',
+const NATIVE_ROW = { id: 'n:7f3a9c21', kind: 'worker', dispatch: 'n:7f3a9c21', title: 'handed-to-a-worker-401', group: 'other', state: 'working', worktree: 'handed-to-a-worker-401', steer: 'auto',
   native: { id: '7f3a9c21', sessionId: 'sess-preview', name: 'handed-to-a-worker-401', state: 'working', waitingFor: null, outcome: null } };
 function nativeRequests() {
   const store = openStore(':memory:');
@@ -241,7 +233,7 @@ const sceneOf = (req: http.IncomingMessage) => {
 function sampleToday(name: string, changed: (list: () => unknown) => void) {
   const store = openStore(':memory:');
   let issue = 4890;
-  const gate = { pressed: async (action: string) => ({ id: 1, action, status: 'done', result: action === 'today-issue' ? `https://github.com/example/repo/issues/${issue++}` : JSON.stringify({ dispatchId: `ctx_preview_${issue++}` }) }) } as any;
+  const gate = { pressed: async (action: string) => ({ id: 1, action, status: 'done', result: action === 'today-issue' ? `https://github.com/example/repo/issues/${issue++}` : JSON.stringify({ worker: `n:preview${issue++}` }) }) } as any;
   const today = makeToday({ store, gate, log: () => {}, wake: () => {}, repos: () => [{ path: '/Users/owner/Repos/acmeapp_nextjs' }], paused: () => false, onChange: () => changed(today.list), skillFor: () => 'pick-and-ship-v3' });
   if (name !== 'today') return today;
   const add = (words: string, f: Parameters<typeof store.setToday>[1], go = false) => { const r = store.addToday(words, go); store.setToday(r.id, { owed: null, ...f }); };
@@ -252,8 +244,8 @@ function sampleToday(name: string, changed: (list: () => unknown) => void) {
   // Two real titles from Nov 6, the longest on the list, to show whether a title fits.
   add('clear the release 4599 manual steps', { status: 'ready', kind: 'task', title: 'Clear release 4599 manual steps so the TICKET-1040 reply can go', result: 'The steps are done.', not_proven: 'Nothing.', link: '#report/3', link_label: 'Report' });
   add('clear the release 4844 manual steps', { status: 'ready', kind: 'task', title: 'Clear release 4844 manual steps so four held support replies can go', result: 'The steps are done.', not_proven: 'Nothing.', link: '#report/3', link_label: 'Report' });
-  add('map every place we call the old status column', { status: 'working', kind: 'task', title: 'Map the old status column', line: 'Running', dispatch: 'ctx_map' }, true);
-  store.db.prepare(`INSERT INTO requests (dispatch_id, action, title, status) VALUES ('ctx_map', 'worker-start', 'Map the old status column', 'working')`).run();
+  add('map every place we call the old status column', { status: 'working', kind: 'task', title: 'Map the old status column', line: 'Running', dispatch: 'n:map' }, true);
+  store.db.prepare(`INSERT INTO requests (dispatch_id, action, title, status) VALUES ('n:map', 'worker-start', 'Map the old status column', 'working')`).run();
   add('rename the appraisal export for the new template', { status: 'queued', kind: 'task', title: 'Rename the appraisal export', repo: '/Users/owner/Repos/acmeapp_nextjs', spec: 'Rename it.' }, true);
   add('check what Sophie meant by the second account', { status: 'new', owed: 'new', told_at: '2999-01-01 00:00:00' });
   add('summarize the October dealer calls', { status: 'released', kind: 'task', title: 'Summary of the October dealer calls', result: 'The summary is in the report.', not_proven: 'Two calls had no transcript.', link: '#report/3', link_label: 'Report' });
@@ -316,7 +308,7 @@ const FOLD_STEPS = [
   { kind: 'tool', name: 'Read', input: '{"file_path":"/Users/owner/Repos/jarvis/vault/notes/export-history.md","offset":40,"limit":120}', output: '# Export history\nThe screen lists every export per dealership, newest first.' },
   { kind: 'tool', name: 'WebSearch', input: '{"query":"csv export history screen retention period dealership compliance"}', output: 'No result changes the plan.' },
   { kind: 'thought', text: 'The note matches the story, so the only open point is the three dealerships with no account. That is the question already waiting for the owner, and there is no reason to ask it a second time.' },
-  { kind: 'tool', name: 'Bash', input: 'jarvis-orca worker-read --dispatch ctx_4612 2>&1 | tail -40; gh pr view 4612 --json statusCheckRollup,reviewDecision,mergeable', output: 'Waiting on one question.\n38 of 38 checks passed.' },
+  { kind: 'tool', name: 'Bash', input: 'jarvis-native list 2>&1 | grep n:4612; gh pr view 4612 --json statusCheckRollup,reviewDecision,mergeable', output: 'Waiting on one question.\n38 of 38 checks passed.' },
   { kind: 'tool', name: 'Grep', input: '{"pattern":"exportAccount","path":"/Users/owner/Repos/acmeapp/app"}', output: 'No matches', failed: true },
   { kind: 'note', text: 'The worker is waiting on one question, and every check on its pull request passes.' },
   { kind: 'update', text: 'A background test run finished: 38 of 38 passed.' },
@@ -349,7 +341,7 @@ http.createServer(async (req, res) => {
   if (url.startsWith('/api/term/')) {
     return termRoute({ terms, gate: termGate, log: (m, f) => console.log(m, f ?? ''), uiOk: h => h['x-jarvis-session'] === 'preview', repos: () => PREVIEW_REPOS,
       phoneRefusal: async () => undefined, worktree: async repo => repo,
-      onChange: () => { terms.list().then(() => out({ type: 'work', work: { at: '', rows: withTerms(scene.rows), done: scene.done } })).catch(() => {}); } }, req, res, url);
+      onChange: () => { terms.list().then(() => out({ type: 'work', work: { at: '', rows: withTerms(scene.rows) } })).catch(() => {}); } }, req, res, url);
   }
   // The model picker: the switch takes a second here, as a resume does, and never touches a real brain.
   if (url === '/api/brain/model' && req.method === 'POST') {
@@ -367,7 +359,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET') {
     if (url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-      res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows), done: scene.done }, hidden: scene.hidden, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows) }, hidden: scene.hidden, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
       clients.add(res);
       req.on('close', () => clients.delete(res));
       return;
@@ -399,7 +391,7 @@ http.createServer(async (req, res) => {
       const r = scene.requests.find(x => x.id === Number(closed[1]));
       return r ? send(res, 200, { lines: [], detail: { ...r, worktree: 'sample', history: [{ at: r.startedAt, kind: 'approval', title: 'Worker start: done by button', text: 'Start a worker?' }, { at: r.at, kind: 'status', title: `Status: working to ${r.status}`, failed: r.status === 'failed' }], transcript: false } }) : send(res, 404, { error: 'Jarvis has no record of it.' });
     }
-    if (url === '/api/work') return send(res, 200, { at: '', rows: withTerms(scene.rows), done: scene.done, hidden: scene.hidden, repos: PREVIEW_REPOS });
+    if (url === '/api/work') return send(res, 200, { at: '', rows: withTerms(scene.rows), hidden: scene.hidden, repos: PREVIEW_REPOS });
     if (url === '/api/listen/config') return send(res, 200, { client: {}, wakeWord: false });
     if (url === '/api/push/key') return send(res, 200, { publicKey: '' });
     if (/^\/api\/work\/[^/]+\/read$/.test(url)) return send(res, 200, new URL(req.url!, 'http://x').searchParams.get('cursor') ? { lines: [], cursor: 'end' } : { lines: LINES, cursor: 'end' });
@@ -508,10 +500,5 @@ http.createServer(async (req, res) => {
     scene.approvals.push(a);
     return send(res, 200, { approval: a });
   }
-  if (url === '/api/work/close') {
-    scene.rows = scene.rows.filter(r => r.dispatch !== b.dispatch);
-    out({ type: 'work', work: { at: '', rows: scene.rows } });
-    return send(res, 200, { status: 'done' });
-  }
   send(res, 200, {}); // every other press does nothing here
-}).listen(PORT, '127.0.0.1', () => console.log(`Preview on http://127.0.0.1:${PORT} (?s=question, requests, messages, approval, empty, fr, prompt, prompt-full, escalation, failed, reports, docs, today). It writes nothing.`));
+}).listen(PORT, '127.0.0.1', () => console.log(`Preview on http://127.0.0.1:${PORT} (?s=question, requests, messages, approval, empty, fr, escalation, failed, reports, docs, today). It writes nothing.`));

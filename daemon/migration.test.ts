@@ -547,7 +547,7 @@ test('the button names the next meeting ahead within a week', () => {
 
 test('the meeting toast: its markup, its x, and the styles at 40 px on the Mac and 32 px on the phone', () => {
   const page = read('../web/index.html'), css = read('../web/app.css');
-  const toast = page.slice(page.indexOf('<div class="mtoast-row">'), page.indexOf('<div id="doneline"'));
+  const toast = page.slice(page.indexOf('<div class="mtoast-row">'), page.indexOf('<section id="pop-requests"'));
   assert.match(toast, /<div class="mtoast" id="mtoast" role="status" hidden>/);
   assert.match(toast, /<button type="button" class="mt-x" id="mtoast-x" aria-label="Close the meeting reminder"/);
   assert.equal((toast.match(/<button/g) ?? []).length, 1, 'the x is the only control');

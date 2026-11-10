@@ -146,7 +146,7 @@ export function answerFoldHtml({ tag, answer, at, by, failed }, render) {
   return `<div class="fold fold-answer${failed ? ' failed' : ''}"><button type="button" class="fold-toggle fold-head" aria-expanded="false"><span class="fold-title">${esc(title)}</span>${CHEV}<span class="ago">${esc(formatStamp(at))}</span></button><div class="fold-body" hidden><div class="msg event">${render(answer)}</div></div></div>`;
 }
 
-// ---- the worker pane: tool rows folded between messages, Orca's brief behind one line ----
+// ---- the worker pane: tool rows folded between messages ----
 
 /** "Ran 5 commands and used 2 tools", from pane lines like "Bash: npm test". */
 export function toolRunSummary(texts) {
@@ -158,22 +158,8 @@ export function toolRunHtml() {
   return `<button type="button" class="fold-toggle fold-sum" aria-expanded="false">${ICONS.wrench}<span class="t"></span>${CHEV}</button><div class="fold-calls" hidden></div>`;
 }
 
-/** "Brief: Stage 0 of the orchestration plan: make worker…", from the first line of its TASK block, or of the brief. */
-export function briefTitle(text) {
-  const task = /=== TASK ===\s*(\S[^\n]*)/.exec(text)?.[1] ?? String(text).trim().split('\n')[0];
-  return `Brief: ${fewWords(task, 10)}`;
-}
-
-/** Orca's opening message: one line, the whole text below it. */
-export function briefFoldHtml(text) {
-  return `<button type="button" class="fold-toggle fold-sum" aria-expanded="false"><span class="t fold-title">${esc(briefTitle(text))}</span>${CHEV}</button><div class="fold-calls brief-text" hidden>${esc(text)}</div>`;
-}
-
-/** The small label over a message taken out of a tool call, or over an answer. */
+/** The small label over an answer. */
 export function paneTag(l) {
-  if (l.kind === 'ask') return 'Question for you';
-  if (l.kind === 'blocked') return 'Blocked';
-  if (l.kind === 'done') return l.failed ? 'Final report, failed' : 'Final report';
   if (l.kind === 'reply') return l.by === 'jarvis' ? 'Jarvis answered' : 'You answered';
   return '';
 }

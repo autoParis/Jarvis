@@ -24,15 +24,14 @@ JARVIS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPLACE = {
     '**Source control**': (
         f"**Source control**: GitHub. The user's own repositories are {NAMES}, "
-        f"and the local clones under {HOME}/Repos "
-        f"and {HOME}/orca/workspaces. In those repositories, these are routine and approved: "
+        f"and the local clones under {HOME}/Repos. In those repositories, these are routine and approved: "
         "commenting on issues and pull requests, filing issues, editing pull request titles, bodies and labels, "
         "opening draft pull requests, and pushing non-force commits to feature branches. "
         "Merging a pull request, force-pushing, deleting a branch and changing repository settings still need the user."
     ),
     '**Trusted repo**': (
         f"**Trusted repo**: {NAMES} on GitHub, "
-        f"their clones under {HOME}/Repos and their Orca worktrees under {HOME}/orca/workspaces, "
+        f"their clones under {HOME}/Repos, "
         f"plus the local-only repository {JARVIS}."
     ),
 }

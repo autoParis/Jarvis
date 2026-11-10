@@ -1,13 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ASK_FIELDS, REPORT_LABELS, CARD_RULE, NO_OPTIONS_REFUSAL, REPORT_NUDGE, fields, readReport, workerBrief, type WorkerKind } from './workercontract.ts';
+import { ASK_FIELDS, REPORT_LABELS, CARD_RULE, NO_OPTIONS_REFUSAL, REPORT_NUDGE, fields, readReport, workerBrief } from './workercontract.ts';
 import { askCard } from './asks.ts';
 import { workerMessageKind } from './nativeroutes.ts';
 import { parseReport } from './today.ts';
 import type { Item } from './store.ts';
 
-const BRIEFS: [string, string][] = (['native', 'orca'] as WorkerKind[]).flatMap(kind =>
-  [false, true].map((issues): [string, string] => [`${kind}${issues ? ' with issues' : ''}`, workerBrief(kind, { issues })]));
+const BRIEFS: [string, string][] = [false, true].map((issues): [string, string] => [`native${issues ? ' with issues' : ''}`, workerBrief({ issues })]);
 
 /** The template lines of the ask shape a brief describes, as label and its placeholder. */
 const askTemplate = (brief: string) => [...brief.matchAll(/^([A-Z]+): (.*)$/gm)].map(m => m[1]).filter(l => (ASK_FIELDS as readonly string[]).includes(l));
@@ -45,7 +44,7 @@ test('an ask written in the shape of each brief reads back as a card with every 
 });
 
 test('every report line a brief asks for reads back with its label', () => {
-  const native = workerBrief('native');
+  const native = workerBrief();
   const asked = new Set([...`${native}\n${CARD_RULE}\n${REPORT_NUDGE}`.matchAll(/`([A-Z]+): <[^>]+>`|`([A-Z]+):`/g)].map(m => m[1] ?? m[2]));
   assert.deepEqual([...asked].sort(), [...REPORT_LABELS].sort(), 'the native brief and its nudge name each report label');
   for (const label of REPORT_LABELS) {

@@ -34,7 +34,7 @@ function setup(mails: [string, boolean?][] = [['a']]) {
   for (const [id, urgent] of mails) s.insertItem({ source: 'gmail', external_id: `gmail:${id}`, kind: 'email', subject: `Subject ${id}`, body: `Summary ${id}`, meta: JSON.stringify(mailMeta(id, urgent)), status: 'spoken' });
   let changes = 0;
   const seen: any[] = [];
-  const gate = makeGate(s, { run: 'run_x', handle: 'term_x' }, a => { seen.push(a); });
+  const gate = makeGate(s, a => { seen.push(a); });
   const m = makeMessages({ store: s, gate, log: () => {}, onChange: () => { changes++; } });
   return { s, gate, m, seen, changes: () => changes };
 }
@@ -122,7 +122,7 @@ test('empty words, an unknown id and another source are refused without sending'
   const before = sends();
   assert.equal((await m.send('gmail:a', '   ')).status, 400);
   assert.equal((await m.send('gmail:zzz', 'hi')).status, 404);
-  s.insertItem({ source: 'orca', external_id: 'm_1', kind: 'question', subject: 'q', status: 'spoken' });
+  s.insertItem({ source: 'native', external_id: 'm_1', kind: 'question', subject: 'q', status: 'spoken' });
   assert.equal((await m.send('m_1', 'hi')).status, 404);
   assert.equal(m.handled('m_1').status, 404);
   assert.equal(sends(), before);
@@ -307,11 +307,11 @@ test('a card stays until Done, and a second Done is refused', () => {
 test('a card survives a daemon restart', () => {
   const path = join(dir, 'restart.db');
   const first = openStore(path);
-  const m1 = makeMessages({ store: first, gate: makeGate(first, { run: 'r', handle: 't' }, () => {}), log: () => {}, onChange: () => {} });
+  const m1 = makeMessages({ store: first, gate: makeGate(first, () => {}), log: () => {}, onChange: () => {} });
   const { id } = m1.add(TEAMMATE).body as any;
   first.db.close();
   const again = openStore(path);
-  const m2 = makeMessages({ store: again, gate: makeGate(again, { run: 'r', handle: 't' }, () => {}), log: () => {}, onChange: () => {} });
+  const m2 = makeMessages({ store: again, gate: makeGate(again, () => {}), log: () => {}, onChange: () => {} });
   assert.deepEqual(m2.list().map(x => [x.id, x.from, x.draft]), [[id, 'Sam', TEAMMATE.text]]);
   again.db.close();
 });
@@ -357,7 +357,7 @@ test('the ten-minute check, the open asks and the Gmail brief do not see a card'
   assert.deepEqual(s.openEmails(null), []);
   const wakes: string[] = [];
   const check = makeCheck({
-    store: s, jarvisRun: 'run_j', log: () => {}, now: () => Date.parse('2026-11-03T15:00:00Z'), paused: () => false,
+    store: s, log: () => {}, now: () => Date.parse('2026-11-03T15:00:00Z'), paused: () => false,
     poll: async () => ({ at: '', rows: [], done: [] }) as any,
     requests: { synced: async () => {}, closing: () => false },
     delivery: async () => ({ master: 'a', unmerged: [] }), running: 'a', brainBusy: () => false, wake: t => wakes.push(t),

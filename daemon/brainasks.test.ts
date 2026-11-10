@@ -50,13 +50,12 @@ test('an ask without a question, with one option, or with a bad --recommended is
   assert.equal(addBrainAsk(store, { ...NEW, recommended: undefined }).status, 200, 'no --recommended means the first option');
 });
 
-const noOrca = async () => { throw new Error('a brain ask must not reach Orca'); };
 
 test('a tap on a brain ask closes the card and sends the brain the question and the chosen option', async () => {
   const store = openStore(':memory:');
   const id = addBrainAsk(store, NEW, () => T).body.id!;
   const notes: string[] = [];
-  const r = await answerAsk({ id, value: 'Loose match', run: 'run_j', handle: 'term_j', store, orca: noOrca, log: () => {}, note: n => notes.push(n) });
+  const r = await answerAsk({ id, value: 'Loose match', store, log: () => {}, note: n => notes.push(n) });
   assert.deepEqual(r, { status: 200 });
   assert.deepEqual(notes, [`[ask card answer] Which verdict rule should 4686 use? -> Loose match (message_id=${id}, tapped in the app, about "4686, verdict rule")`]);
   const c = askCard(store.item(id)!)!;
@@ -64,7 +63,7 @@ test('a tap on a brain ask closes the card and sends the brain the question and 
   assert.equal(c.answer, 'Loose match');
   assert.equal(store.openItems().length, 0);
   // A second tap is refused and tells the brain nothing.
-  const again = await answerAsk({ id, value: 'Strict match', run: 'run_j', handle: 'term_j', store, orca: noOrca, log: () => {}, note: n => notes.push(n) });
+  const again = await answerAsk({ id, value: 'Strict match', store, log: () => {}, note: n => notes.push(n) });
   assert.equal(again.status, 409);
   assert.equal(notes.length, 1);
   // The audit log lists it with the label.
@@ -77,7 +76,7 @@ test('a typed answer on a brain ask goes to the brain as typed', async () => {
   const store = openStore(':memory:');
   const id = addBrainAsk(store, { question: 'Which design for 4060?', options: ['Design A', 'Design B'] }, () => T).body.id!;
   const notes: string[] = [];
-  const r = await answerAsk({ id, value: 'B, but with the old header', run: 'run_j', handle: 'term_j', store, orca: noOrca, log: () => {}, note: n => notes.push(n) });
+  const r = await answerAsk({ id, value: 'B, but with the old header', store, log: () => {}, note: n => notes.push(n) });
   assert.equal(r.status, 200);
   assert.deepEqual(notes, [`[ask card answer] Which design for 4060? -> B, but with the old header (message_id=${id}, typed in the app)`]);
   assert.equal(askCard(store.item(id)!)!.title, 'Jarvis is asking');
@@ -94,7 +93,7 @@ test('jarvis-act ask-done closes the card with the owner\'s chat answer, once', 
   assert.equal(store.openItems().length, 0);
   assert.equal(brainAskDone(store, { id, answer: 'again' }).status, 409);
   // A worker's ask is not the brain's to close this way.
-  store.insertItem({ source: 'orca', external_id: 'msg_1', kind: 'question', dispatch_id: 'd_1', subject: 'x', status: 'spoken' });
+  store.insertItem({ source: 'native', external_id: 'msg_1', kind: 'question', dispatch_id: 'd_1', subject: 'x', status: 'spoken' });
   assert.equal(brainAskDone(store, { id: 'msg_1', answer: 'x' }).status, 404);
   assert.equal(store.item('msg_1')!.status, 'spoken');
 });
@@ -109,7 +108,7 @@ test('the brief shows an open brain ask with its id, question, options and how t
 test('the check reports a brain ask unanswered for 15 minutes, though it has no worker', () => {
   const store = openStore(':memory:');
   addBrainAsk(store, NEW, () => T);
-  const base = { requests: [], rows: [], jarvisRun: 'run_j', closing: () => false, delivery: { master: 'a', unmerged: [] }, lost: [] };
+  const base = { requests: [], rows: [], closing: () => false, delivery: { master: 'a', unmerged: [] }, lost: [] };
   const created = Date.parse(`${store.openItems()[0].created_at.replace(' ', 'T')}Z`);
   assert.deepEqual(findings({ ...base, asks: store.openItems(), now: created + ASK_WAIT_MS - 1 }), []);
   assert.deepEqual(findings({ ...base, asks: store.openItems(), now: created + ASK_WAIT_MS }), [

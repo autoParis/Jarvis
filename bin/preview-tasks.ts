@@ -1,5 +1,5 @@
 // Sample tasks for `npm run preview` (the Scheduled tasks screen), built with the same strip and status code as jarvisd.
-// PREVIEW_TASKS=real reads the real launchd jobs and Orca automations instead, read-only, with an in-memory run history.
+// PREVIEW_TASKS=real reads the real launchd jobs instead, read-only, with an in-memory run history.
 import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -18,9 +18,9 @@ const SPECS: Spec[] = [
   { id: 'jarvisd:check', name: 'Ten-minute check', cron: '', source: 'jarvisd', label: 'jarvisd timer (check)', hourly: true, every: 10, description: 'Wakes the brain on a new finding or a due reminder.' },
   { id: 'jarvisd:today', name: 'Today list backstop', cron: '', source: 'jarvisd', label: 'jarvisd timer (today)', hourly: true, every: 30, description: 'Catches Today items that an event missed.' },
   { id: 'launchd:io.autoroot.tripwire-poll', name: 'Tripwire check', cron: '@every 30m', source: 'launchd', label: 'launchd job io.autoroot.tripwire-poll', hourly: true, every: 30, description: 'Checks the FBM tripwire.', editable: true },
-  { id: 'orca:950e4670', name: 'Worktree cleanup', cron: '', source: 'orca', label: 'Orca automation "worktree cleanup" (950e4670)', hourly: true, every: 60, failAll: 'Precheck timed out after 300s. The run was skipped.', description: '' },
+  { id: 'launchd:io.autoroot.worktree-cleanup', name: 'Worktree cleanup', cron: '0 * * * *', source: 'launchd', label: 'launchd job io.autoroot.worktree-cleanup', hourly: true, every: 60, failAll: 'Precheck timed out after 300s. The run was skipped.', description: '', editable: true },
 ];
-const SCHEDULE: Record<string, string> = { 'jarvisd:gmail': 'Every 10 minutes', 'jarvisd:check': 'Every 10 minutes, 8 AM to 4 PM', 'jarvisd:today': 'Every 30 minutes', 'orca:950e4670': 'Every hour' };
+const SCHEDULE: Record<string, string> = { 'jarvisd:gmail': 'Every 10 minutes', 'jarvisd:check': 'Every 10 minutes, 8 AM to 4 PM', 'jarvisd:today': 'Every 30 minutes' };
 
 export function sampleTasks(now = Date.now()): Task[] {
   return SPECS.map(s => {
@@ -37,7 +37,7 @@ export function sampleTasks(now = Date.now()): Task[] {
     return {
       id: s.id, source: s.source, sourceLabel: s.label, name: s.name,
       schedule: SCHEDULE[s.id] ?? (sched && !('error' in sched) ? schedSentence(sched) : s.cron), ...(s.cron ? { cron: s.cron } : {}),
-      editable: !!s.editable, ...(s.editable ? {} : { editNote: s.source === 'orca' ? 'Orca keeps this schedule. Change it in Orca.' : 'This timer is part of jarvisd. Its schedule is in the code.' }),
+      editable: !!s.editable, ...(s.editable ? {} : { editNote: 'This timer is part of jarvisd. Its schedule is in the code.' }),
       description: s.description, status: statusOf(runs, shown, false), strip: s.hourly ? 'hourly' : 'runs', marks: shown,
       ...(lastError ? { lastError: s.failAll ? { ...lastError, since: new Date(now - 65 * HOUR).toISOString() } : lastError } : {}),
     } satisfies Task;
@@ -50,7 +50,7 @@ export function makePreviewTasks() {
   const state = new Map<string, string>();
   const tasks = real ? makeTasks({
     db: new DatabaseSync(':memory:'), run: execRun(), uid: process.getuid?.() ?? 501, agentsDir: join(homedir(), 'Library', 'LaunchAgents'),
-    prefixes: ['io.autoroot.', 'com.fbm.'], locked: ['io.autoroot.jarvis'], orca: true, jarvisd: [],
+    prefixes: ['io.autoroot.', 'com.fbm.'], locked: ['io.autoroot.jarvis'], jarvisd: [],
     getState: k => state.get(k), setState: (k, v) => { state.set(k, v); }, log: (m, f) => console.log(m, f ?? ''),
   }) : undefined;
   // The real mode samples launchd like jarvisd does, so its strips fill from the minute the preview starts.

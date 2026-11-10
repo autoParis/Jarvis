@@ -6,7 +6,7 @@ import { uploadDir } from './uploads.ts';
 // Images the chat may show with an `[image: /abs/path.png]` marker. Only these folders, only these types.
 // data/uploads holds the pictures the owner attaches.
 export const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
-export const imageRoots = (repo: string) => [join(repo, 'docs', 'screens'), join(homedir(), 'Desktop'), join(homedir(), 'Downloads'), join(homedir(), 'orca', 'workspaces'), uploadDir(repo)];
+export const imageRoots = (repo: string) => [join(repo, 'docs', 'screens'), join(homedir(), 'Desktop'), join(homedir(), 'Downloads'), uploadDir(repo)];
 
 // The real path of an allowed image file, or undefined. Both sides go through realpath, so `..` and symlinks
 // pointing outside a root are refused, and a root that is itself a symlink still works.

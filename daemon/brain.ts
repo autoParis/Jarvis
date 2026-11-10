@@ -310,7 +310,7 @@ export class Brain extends EventEmitter {
     if (notes.length) parts.splice(at, 0, `[held notices, no answer needed] ${notes.join(' | ')}`);
     const text = parts.join('\n\n');
     this.handed = batch.flatMap(m => m.turn ?? []);
-    // The start of each message names its kind ("[orca event]", "[The owner, in English"), and stops before the owner's words.
+    // The start of each message names its kind ("[worker event]", "[The owner, in English"), and stops before the owner's words.
     this.emit('log', 'brain handed', { turns: this.handed, messages: batch.map(m => m.text.slice(0, 18)), held: notes.length, chars: text.length });
     this.busy = true;
     this.unrequested = false;

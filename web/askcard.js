@@ -12,8 +12,8 @@
     const answered = card.status === 'answered', sending = card.status === 'sending';
     const chosen = answered ? card.options.findIndex(o => o.value === card.answer) : -1;
     const line = (label, text) => text ? `<div class="ask-line"><span>${label}</span>${esc(text)}</div>` : '';
-    // A terminal menu's order is the prompt's own, and default buttons are Jarvis's. Nobody recommended their first option.
-    const rec = i => i === 0 && !card.prompt && !card.suggested;
+    // Default buttons are Jarvis's. Nobody recommended their first option.
+    const rec = i => i === 0 && !card.suggested;
     const opts = card.options.map((o, i) => {
       const cls = ['ask-opt', rec(i) && 'rec', i === chosen && 'chosen'].filter(Boolean).join(' ');
       const tag = i === chosen ? '<span class="tag">Chosen</span>' : rec(i) ? '<span class="tag">Recommended</span>' : '';
@@ -27,7 +27,6 @@
     if (error) outcome += `<div class="ask-outcome"><span class="pill failed">not sent</span>${esc(error)}</div>`;
     const tag = `<div class="ask-tag"><div class="ask-title">${esc(card.title)}</div>${card.at ? `<span class="ago">${age(card.at)}</span>` : ''}</div>`;
     const lines = card.kind === 'escalation' ? line('Refused', card.refused) + line('Failed', card.failed) + line('Proposes', card.proposes) : '';
-    const cmd = card.command ? `<div class="ask-cmd"><span>${esc(card.commandLabel || 'Command')}</span><code>${esc(card.command)}</code></div>` : '';
     // An ask in the fields shape reads in a fixed order under short headings. The long part waits behind More.
     if (card.parts && card.question) {
       const p = card.parts, head = text => `<h3 class="card-h">${text}</h3>`;
@@ -35,7 +34,6 @@
         + (p.image ? `<div class="ask-body md">${md(p.image)}</div>` : '')
         + (p.doing ? head('What the worker is doing') + `<div class="ask-body md">${md(p.doing)}</div>` : '')
         + head('The question') + md(card.question).replace(/^<p>/, '<p class="ask-q" role="heading" aria-level="2">')
-        + cmd
         + (opts ? head('Options') + `<div class="ask-options">${opts}</div>` : '')
         + (p.more ? `<details class="card-more"><summary>More</summary><div class="ask-body md">${md(p.more)}</div></details>` : '')
         + outcome;
@@ -48,7 +46,6 @@
     }
     return tag + lines
       + (body ? `<div class="ask-body md">${body}</div>` : '')
-      + cmd
       + (opts ? `<div class="ask-options">${opts}</div>` : '')
       + outcome;
   }

@@ -162,7 +162,7 @@ function nativeEnded(w: { state: string; outcome: string | null; waiting_for: st
   return !!w.outcome || w.state === 'failed' || w.state === 'abandoned' || (w.state === 'stopped' && w.waiting_for !== IDLE_STOPPED && w.waiting_for !== DESKTOP_WAITING);
 }
 
-/** The started worker: Orca's dispatch id, or a native worker's `n:<id>` (gate.ts runNative), which its request also uses. */
+/** The started worker: a native worker's `n:<id>` (gate.ts runNative), which its request also uses. An older start named a dispatch id. */
 const dispatchIn = (a: Approval): string | undefined => {
   const r = parse<{ dispatchId?: string; worker?: string }>(a.result, {});
   return r.dispatchId ?? (typeof r.worker === 'string' && r.worker.startsWith(ROW_PREFIX) ? r.worker : undefined);
@@ -271,9 +271,8 @@ export function makeToday(o: {
   }
   const soon = (trigger: string) => { pass(trigger).catch(e => log(`today pass: ${e}`)); };
 
-  /** After each work poll: a worker that ended frees its slot, and its report goes on the row. */
-  function sync(workers: { dispatch: string; outcome?: string; path?: string }[], complete: boolean) {
-    const byDispatch = new Map(workers.map(w => [w.dispatch, w]));
+  /** After each native poll: a worker that ended frees its slot, and its report goes on the row. */
+  function sync() {
     let freed = false, touched = false;
     for (const i of store.todayItems()) {
       if (i.status !== 'working') continue;
@@ -281,19 +280,17 @@ export function makeToday(o: {
         if (!starting.has(i.id) && now() - time(i.status_at) >= STUCK_MS) { failItem(i.id, 'Jarvis restarted while starting this. A worker may be running, so check the work list before trying again.'); freed = true; }
         continue;
       }
-      const w = byDispatch.get(i.dispatch), r = store.requestOf(i.dispatch);
+      const r = store.requestOf(i.dispatch);
       // A later Not right reruns the worker in the same folder. A draft runs in the main checkout, which is not its own.
-      if (w?.path && i.phase !== 'draft' && i.worktree !== `path:${w.path}`) { store.setToday(i.id, { worktree: `path:${w.path}` }); }
       // A native worker's folder is on its own row: its worktree once Claude Code lists it, never the repo's main checkout.
       const own = i.dispatch.startsWith(ROW_PREFIX) && i.phase !== 'draft' ? store.nativeWorker(i.dispatch.slice(ROW_PREFIX.length))?.cwd : undefined;
       if (own && own.replace(/\/+$/, '') !== (i.repo ?? '').replace(/\/+$/, '') && i.worktree !== `path:${own}`) store.setToday(i.id, { worktree: `path:${own}` });
       const report = r ? requestReport(store, r.id) : undefined;
-      // A request the owner hid stops updating, so its worker is read directly. A hidden row must not hold a slot forever.
-      // An Orca worker from Orca's list (gone from a complete list is over); a native one from its own row, never from
-      // Orca's list, which does not hold native workers.
+      // A request the owner hid stops updating, so its worker is read directly from its own row. A hidden row must not
+      // hold a slot forever. A dispatch with no native worker behind it is gone.
       const nw = i.dispatch.startsWith(ROW_PREFIX) ? store.nativeWorker(i.dispatch.slice(ROW_PREFIX.length)) : undefined;
-      const settled = nw ? nativeEnded(nw) : !!w?.outcome && w.outcome !== 'in_progress';
-      const gone = i.dispatch.startsWith(ROW_PREFIX) ? !nw : complete && !w;
+      const settled = !!nw && nativeEnded(nw);
+      const gone = !nw;
       const off = !r || !!r.hidden_at || !!r.removed_at;
       const over = r && !off ? ['done', 'review', 'failed'].includes(r.status) : !!report || settled || gone;
       if (!over) {

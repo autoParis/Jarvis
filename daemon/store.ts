@@ -221,7 +221,7 @@ export function openStore(path: string) {
       return db.prepare('SELECT * FROM items WHERE external_id = ?').get(externalId) as Item | undefined;
     },
     /**
-     * Marks an open ask as being answered before the reply goes to Orca, so a retried reply is refused.
+     * Marks an open ask as being answered before the reply goes to the worker, so a retried reply is refused.
      * Returns 'claimed', 'untracked' (an ID jarvisd never stored), or the status that blocks a second reply.
      */
     claimReply(externalId: string): string {
@@ -229,12 +229,13 @@ export function openStore(path: string) {
       if (r.changes === 1) return 'claimed';
       return this.item(externalId)?.status ?? 'untracked';
     },
-    /** Orca refused the reply, so the ask is open again. */
+    /** The reply did not reach the worker, so the ask is open again. */
     releaseReply(externalId: string) {
       db.prepare(`UPDATE items SET status = 'spoken', updated_at = datetime('now') WHERE external_id = ? AND status = 'replying'`).run(externalId);
     },
+    /** Asks from native workers and the brain that wait on the owner. Asks of any other source are history: nothing answers them. */
     openItems(): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE status IN ('new', 'spoken', 'replying') AND kind IN ('question', 'escalation') ORDER BY id`).all() as Item[];
+      return db.prepare(`SELECT * FROM items WHERE source IN ('native', 'brain') AND status IN ('new', 'spoken', 'replying') AND kind IN ('question', 'escalation') ORDER BY id`).all() as Item[];
     },
     /** Closes asks a worker raised before one the owner has answered: the worker is past them. A reply going out is left to finish. Returns their ids. */
     closeEarlierAsks(): string[] {
@@ -245,19 +246,15 @@ export function openStore(path: string) {
     },
     /** Questions and escalations from the last 7 days, answered or not, for the ask cards in the chat history. */
     recentAsks(): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native', 'brain') AND kind IN ('question', 'escalation') AND created_at > datetime('now', '-7 days') ORDER BY id DESC LIMIT 100`).all() as Item[];
+      return db.prepare(`SELECT * FROM items WHERE source IN ('native', 'brain') AND kind IN ('question', 'escalation') AND created_at > datetime('now', '-7 days') ORDER BY id DESC LIMIT 100`).all() as Item[];
     },
     /** What jarvisd did to a native session (kind `event` items, such as a resume), oldest first, for its pane's gap lines. */
     eventsFor(dispatch: string): Item[] {
       return db.prepare(`SELECT * FROM items WHERE source = 'native' AND dispatch_id = ? AND kind = 'event' ORDER BY id`).all(dispatch) as Item[];
     },
-    /** The answers a worker was sent, oldest first, for its conversation pane. */
-    answersTo(dispatch: string): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native') AND dispatch_id = ? AND kind IN ('question', 'escalation') AND status = 'answered' AND answer IS NOT NULL ORDER BY COALESCE(updated_at, created_at), id`).all(dispatch) as Item[];
-    },
     /** Questions and escalations the owner answered, newest first, for the audit log. */
     answeredAsks(limit: number): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native', 'brain') AND kind IN ('question', 'escalation') AND status = 'answered' ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?`).all(limit) as Item[];
+      return db.prepare(`SELECT * FROM items WHERE source IN ('native', 'brain') AND kind IN ('question', 'escalation') AND status = 'answered' ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?`).all(limit) as Item[];
     },
     /** Approvals someone decided, newest first, for the audit log. Pending and automatic ones are left out. */
     decidedApprovals(limit: number): Approval[] {

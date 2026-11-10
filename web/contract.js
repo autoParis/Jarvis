@@ -4,7 +4,7 @@
 
 /**
  * Every action the gate knows, with what it is:
- * - startsWorker: Approve starts a worker, so a done result must name it.
+ * - startsWorker: Approve starts a native worker, and its done result names it.
  * - automatic: runs at once with no card (the brain proposes it, the owner is told).
  * - pressed: a work-list button. Pressing it is the owner's decision, so it runs at once, and the brain cannot propose it.
  * - buttonOnly: runs only on the Approve button, never on a relayed yes.
@@ -16,17 +16,13 @@ export const ACTIONS = {
   'side-chat': { startsWorker: true, pressed: true },
   'today-start': { startsWorker: true, pressed: true },
   'today-draft': { startsWorker: true, pressed: true },
-  'side-chat-close': { pressed: true },
   'session-type': { pressed: true },
-  'session-resume': { pressed: true },
   'session-phone': { pressed: true },
-  'prompt-key': { pressed: true },
   'today-issue': { pressed: true },
   'worker-stop': {},
   'worker-abandon': {},
   'gh-issue-create': {},
   'terminal-send': { buttonOnly: true, readsBack: true },
-  'worker-send': { buttonOnly: true },
   'gmail-send': { buttonOnly: true },
   'gh-pr-close': { buttonOnly: true, readsBack: true },
   'fbm-client-pause': { buttonOnly: true, readsBack: true },

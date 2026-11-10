@@ -43,12 +43,12 @@ const TALK = { kind: 'talk', title: 'A talk', reading: 'To discuss.' };
 const row = (f: Partial<TodayRow>): TodayRow => ({ id: 1, words: 'w', title: null, kind: null, go: 0, status: 'new', status_at: '2026-11-04 15:00:00', reading: null, questions: null, assumptions: null, reason: null, result: null, not_proven: null, link: null, link_label: null, note: null, repo: null, spec: null, story: null, phase: null, brief: null, draft_report: null, dispatch: null, worktree: null, line: null, issue_url: null, issue_state: null, owed: null, told_at: null, tries: 0, created_at: '2026-11-04 15:00:00', released_at: null, ...f });
 const addItem = (t: ReturnType<typeof setup>, words: string, go = false) => t.today.add({ words, go }).body.item.id as number;
 const status = (t: ReturnType<typeof setup>, id: number) => t.store.todayItem(id)!.status;
-/** A request and a worker_done, as the poller and the watcher would have left them. */
+/** A request and a stored report, as an earlier sync would have left them. */
 function finish(t: ReturnType<typeof setup>, dispatch: string, f: { status?: string; subject?: string; body?: string; outcome?: string; pr_url?: string } = {}) {
   t.store.addRequest({ dispatch_id: dispatch, action: 'worker-start', title: 'x' });
   const r = t.store.requestOf(dispatch)!;
   t.store.updateRequest(r.id, { status: f.status ?? 'done', ...(f.pr_url ? { pr: 'PR #7', pr_url: f.pr_url } : {}) });
-  if (f.body !== undefined) t.store.insertItem({ source: 'orca', external_id: `done_${dispatch}_${Math.random()}`, kind: 'worker_done', dispatch_id: dispatch, subject: f.subject ?? 'Finished', body: f.body, meta: JSON.stringify({ outcome: f.outcome ?? 'succeeded' }), status: 'done' });
+  if (f.body !== undefined) t.store.insertItem({ source: 'native', external_id: `done_${dispatch}_${Math.random()}`, kind: 'worker_done', dispatch_id: dispatch, subject: f.subject ?? 'Finished', body: f.body, meta: JSON.stringify({ outcome: f.outcome ?? 'succeeded' }), status: 'done' });
 }
 
 // ---- the store ----
@@ -160,8 +160,12 @@ test('Not right on a finished run reruns it with the note in its own folder; Not
   const id = addItem(t, 'a', true);
   t.today.workup(id, TASK);
   await settle();
-  finish(t, 'ctx_1', { body: 'All done.\n\nNot proven: the phone.' });
-  t.today.sync([{ dispatch: 'ctx_1', path: '/wt/a', outcome: 'succeeded' }], true);
+  // Its worker ran in its own worktree, which its native row records.
+  const at = new Date(T0).toISOString();
+  t.store.addNativeWorker({ id: 'w1', session_id: 's-w1', name: 'a-1', cwd: '/wt/a', approval_id: null, state: 'done', waiting_for: null, report: null, report_at: null, outcome: 'done', transcript: null, created_at: at, updated_at: at });
+  t.store.setToday(id, { dispatch: 'n:w1' });
+  finish(t, 'n:w1', { body: 'All done.\n\nNot proven: the phone.' });
+  t.today.sync();
   await settle();
   assert.equal(status(t, id), 'ready');
   assert.equal((await t.today.act({ id, action: 'not-right', note: ' ' })).status, 400);
@@ -293,7 +297,7 @@ test('four go items through the real flow: three run, the fourth queues and star
   assert.equal(t.pressed.length, 3);
   const first = t.store.todayItem(ids[0])!.dispatch!;
   finish(t, first, { body: 'Done.\n\nNot proven: nothing' });
-  t.today.sync([], true);
+  t.today.sync();
   await settle(); await settle();
   assert.equal(status(t, ids[0]), 'ready');
   assert.equal(status(t, ids[3]), 'working');
@@ -424,7 +428,7 @@ test('a refused filing stays on the row with the reason, and Accept can try agai
 
 test('when the worker does not start, the issue is kept and a second Accept never files again', async () => {
   let starts = 0;
-  const t = setup({ result: p => p.action === 'today-issue' ? { status: 'done', result: 'https://github.com/o/r/issues/5' } : ++starts === 1 ? { status: 'failed', result: 'orca down' } : { status: 'done', result: '{"dispatchId":"d"}' } });
+  const t = setup({ result: p => p.action === 'today-issue' ? { status: 'done', result: 'https://github.com/o/r/issues/5' } : ++starts === 1 ? { status: 'failed', result: 'start failed' } : { status: 'done', result: '{"dispatchId":"d"}' } });
   const id = addItem(t, 'x');
   t.today.workup(id, STORY);
   assert.equal((await t.today.act({ id, action: 'accept' })).status, 502);
@@ -474,7 +478,7 @@ test('a finished run goes to Ready with its result, what was not proven, and its
   t.today.workup(id, TASK);
   await settle();
   finish(t, 'ctx_1', { body: 'I read the logs. The job runs late.\n\nDetails here.\n\n**Not proven:** the weekend runs.', pr_url: 'https://github.com/o/r/pull/7' });
-  t.today.sync([], true);
+  t.today.sync();
   const v = t.today.list().find(i => i.id === id)!;
   assert.equal(v.status, 'ready');
   assert.equal(v.result, 'I read the logs. The job runs late.');
@@ -489,7 +493,7 @@ test('ending with no report, or failing, is Waiting on you with a reason, never 
   await settle(); await settle();
   finish(t, t.store.todayItem(a)!.dispatch!, {});
   finish(t, t.store.todayItem(b)!.dispatch!, { status: 'failed', subject: 'Tests broke', body: 'It broke.', outcome: 'failed' });
-  t.today.sync([], true);
+  t.today.sync();
   assert.equal(status(t, a), 'waiting');
   assert.match(t.store.todayItem(a)!.reason!, /without reporting/);
   assert.equal(status(t, b), 'waiting');
@@ -510,7 +514,7 @@ test('a finished draft goes back to the brain with its report and frees the draf
   assert.deepEqual([status(t, a), status(t, b)], ['working', 'queued']);
   t.wakes.length = 0;
   finish(t, t.store.todayItem(a)!.dispatch!, { subject: 'Drafted', body: 'Story: the draft' });
-  t.today.sync([], true);
+  t.today.sync();
   await settle(); await settle();
   const r = t.store.todayItem(a)!;
   assert.equal(r.status, 'new');
@@ -519,40 +523,24 @@ test('a finished draft goes back to the brain with its report and frees the draf
   assert.equal(status(t, b), 'working', 'the next draft starts when the last finishes');
 });
 
-test('a request the owner hid does not hold a slot, while a still-running worker keeps it', async () => {
+test('a hidden request on a native worker: its own row decides', async () => {
   const t = setup();
   const id = addItem(t, 'x', true);
   t.today.workup(id, TASK);
   await settle();
-  t.store.addRequest({ dispatch_id: 'ctx_1', action: 'worker-start', title: 'x' });
-  t.store.hideRequest(t.store.requestOf('ctx_1')!.id);
-  t.today.sync([{ dispatch: 'ctx_1', outcome: 'in_progress' }], true);
-  assert.equal(status(t, id), 'working');
-  t.today.sync([], false);
-  assert.equal(status(t, id), 'working', 'an incomplete poll proves nothing');
-  t.today.sync([], true);
-  assert.equal(status(t, id), 'waiting');
-});
-
-test('a hidden request on a native worker: Orca\'s complete list proves nothing, its own row decides', async () => {
-  const t = setup();
-  const id = addItem(t, 'x', true);
-  t.today.workup(id, TASK);
-  await settle();
-  // The worker is native: Orca's list never holds it.
   const at = new Date(T0).toISOString();
   t.store.addNativeWorker({ id: 'nat1', session_id: 's-nat1', name: 'x-1', cwd: '/wt/x-1', approval_id: null, state: 'working', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: at, updated_at: at });
   t.store.setToday(id, { dispatch: 'n:nat1' });
   t.store.addRequest({ dispatch_id: 'n:nat1', action: 'today-start', title: 'x' });
   t.store.hideRequest(t.store.requestOf('n:nat1')!.id);
-  t.today.sync([{ dispatch: 'ctx_other', outcome: 'in_progress' }], true);
-  assert.equal(status(t, id), 'working', 'a complete Orca list without it does not end a native worker');
+  t.today.sync();
+  assert.equal(status(t, id), 'working', 'a running native worker keeps its slot');
   // The idle reaper's stop is not an end: a message resumes it.
   t.store.updateNativeWorker('nat1', { state: 'stopped', waiting_for: 'Idle, resumes on a message' });
-  t.today.sync([], true);
+  t.today.sync();
   assert.equal(status(t, id), 'working');
   t.store.updateNativeWorker('nat1', { state: 'done', outcome: 'done', report: 'DONE: the list sorts by date.\n\nNot proven: the phone.', report_at: at });
-  t.today.sync([], false);
+  t.today.sync();
   const r = t.store.todayItem(id)!;
   assert.equal(r.status, 'ready');
   assert.equal(r.result, 'the list sorts by date.');
@@ -563,7 +551,7 @@ test('a hidden request on a native worker: Orca\'s complete list proves nothing,
   await settle();
   t2.store.addNativeWorker({ id: 'nat2', session_id: 's-nat2', name: 'y-1', cwd: '/wt/y-1', approval_id: null, state: 'stopped', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: at, updated_at: at });
   t2.store.setToday(id2, { dispatch: 'n:nat2' });
-  t2.today.sync([], false);
+  t2.today.sync();
   assert.equal(status(t2, id2), 'waiting');
   assert.match(t2.store.todayItem(id2)!.reason!, /ended without reporting/);
 });
@@ -579,11 +567,11 @@ test('a start that lost its answer, or a crash mid-start, never retries on its o
   const c = setup();
   const stuck = addItem(c, 'y');
   c.store.setToday(stuck, { status: 'working', owed: null, repo: REPO, spec: 's' });
-  c.today.sync([], true);
+  c.today.sync();
   assert.equal(status(c, stuck), 'working', 'not yet');
   c.advance(STUCK_MS + 1000);
   c.store.db.prepare('UPDATE today_items SET status_at = ? WHERE id = ?').run(sqlTime(T0), stuck);
-  c.today.sync([], true);
+  c.today.sync();
   assert.equal(status(c, stuck), 'waiting');
   assert.equal(c.pressed.length, 0);
 });
@@ -596,7 +584,7 @@ test('a working row shows its worker link and one line, including a question fro
   t.store.addRequest({ dispatch_id: 'ctx_1', action: 'worker-start', title: 'x' });
   const req = t.store.requestOf('ctx_1')!;
   t.store.updateRequest(req.id, { status: 'waiting' });
-  t.today.sync([{ dispatch: 'ctx_1' }], true);
+  t.today.sync();
   const v = t.today.list().find(i => i.id === id)!;
   assert.deepEqual(v.link, { label: 'Worker', open: req.id });
   assert.match(v.line, /see Requests/);
@@ -719,63 +707,34 @@ test('in main.ts the routes that act as the owner need an open page, and the bra
   assert.match(read('./webfiles.ts'), /'\/today\.js': 'today\.js'/);
 });
 
-test('the gate builds the three commands, with the footer on workers and no merge anywhere', () => {
-  const id = { run: 'run_x', handle: 'term_x' };
-  const issue = buildCommand('today-issue', { item: 1, repo: 'o/r', title: 'T', body: 'B' }, id);
+test('the gate files the issue with gh, and merges nothing', () => {
+  const issue = buildCommand('today-issue', { item: 1, repo: 'o/r', title: 'T', body: 'B' });
   assert.deepEqual(issue, ['gh', 'issue', 'create', '--repo', 'o/r', '--title', 'T', '--body', 'B']);
-  // Orca only when the args say so, since 2026-11-08.
-  const start = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', orca: true }, id);
-  assert.ok(start.includes('new-top-level'));
-  assert.match(start[start.indexOf('--spec') + 1], /Asking the coordinator/);
-  const again = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:/wt/a', keepOpen: true, orca: true }, id);
-  assert.deepEqual(again.slice(again.indexOf('--worktree'), again.indexOf('--worktree') + 2), ['--worktree', 'path:/wt/a']);
-  assert.ok(again.includes('--keep-open'));
-  const draft = buildCommand('today-draft', { repo: REPO, spec: 'S', taskTitle: 'Draft: T', orca: true }, id);
-  assert.ok(draft.includes(`path:${REPO}`));
-  assert.throws(() => buildCommand('today-draft', { repo: 'relative', spec: 'S', taskTitle: 'T' }, id));
+  assert.throws(() => buildCommand('today-draft', { repo: 'relative', spec: 'S', taskTitle: 'T' }));
 });
 
-test('Today starts and drafts are native workers by default, and a rerun runs in its first folder', () => {
-  const id = { run: 'run_x', handle: 'term_x' };
-  const start = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T' }, id);
+test('Today starts and drafts are native workers, and a rerun runs in its first folder', () => {
+  const start = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T' });
   assert.deepEqual(start.slice(0, 3), ['native', 'start', REPO]);
   assert.match(start[3], /## You are a Jarvis worker/);
-  assert.doesNotMatch(start[3], /orca orchestration ask/);
-  const again = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:/wt/a', keepOpen: true }, id);
+  const again = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:/wt/a', keepOpen: true });
   assert.deepEqual(again.slice(0, 3), ['native', 'start', '/wt/a']);
-  assert.throws(() => buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:relative' }, id), /absolute/);
-  const draft = buildCommand('today-draft', { repo: REPO, spec: 'S', taskTitle: 'Draft: T' }, id);
+  assert.throws(() => buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:relative' }), /absolute/);
+  const draft = buildCommand('today-draft', { repo: REPO, spec: 'S', taskTitle: 'Draft: T' });
   assert.deepEqual(draft.slice(0, 3), ['native', 'start', REPO]);
-  // A story's issue rule loses the Orca wording: a native worker has no Orca brief.
-  const story = buildCommand('today-start', { repo: REPO, spec: storyStartSpec('12', 'pick-and-ship'), taskTitle: '#12 T' }, id);
+  // A story's spec carries the issue rule.
+  const story = buildCommand('today-start', { repo: REPO, spec: storyStartSpec('12', 'pick-and-ship'), taskTitle: '#12 T' });
   assert.match(story[3], /One exception to not posting on GitHub/);
-  assert.doesNotMatch(story[3], /Orca brief above/);
 });
 
-test('with the Orca link off, an Orca start or message is refused before anything runs; native ones still build', () => {
-  const off = { run: '', handle: '' };
-  for (const [action, args] of [
-    ['today-start', { repo: REPO, spec: 'S', taskTitle: 'T', orca: true }],
-    ['today-draft', { repo: REPO, spec: 'S', taskTitle: 'T', orca: true }],
-    ['worker-start', { repo: REPO, spec: 'S', taskTitle: 'T', orca: true }],
-    ['question', { repo: REPO, question: 'Why?', orca: true }],
-    ['side-chat', { repo: REPO, text: 'hi', orca: true }],
-    ['worker-send', { dispatch: 'ctx_1', text: 'hi' }],
-  ] as const) assert.throws(() => buildCommand(action, args, off), /Orca link is off/, action);
-  assert.equal(buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T' }, off)[0], 'native');
-  // A terminal the owner opened in Orca still takes terminal-send.
-  assert.equal(buildCommand('terminal-send', { terminal: 'term_9', text: 'go' }, off)[0], 'orca');
-});
-
-test('terminal-send to a native session types through native.ts, never through Orca', async () => {
-  const id = { run: 'run_x', handle: 'term_x' };
-  assert.deepEqual(buildCommand('terminal-send', { terminal: 'n:abc', text: 'go on' }, id), ['native', 'type', 'n:abc', 'go on']);
-  assert.throws(() => buildCommand('terminal-send', { terminal: 'n:a b', text: 'x' }, id), /not a native worker row/);
+test('terminal-send to a native session types through native.ts', async () => {
+  assert.deepEqual(buildCommand('terminal-send', { terminal: 'n:abc', text: 'go on' }), ['native', 'type', 'n:abc', 'go on']);
+  assert.throws(() => buildCommand('terminal-send', { terminal: 'n:a b', text: 'x' }), /not a native worker row/);
   const store = openStore(':memory:');
   const typed: [string, string, string][] = [];
   const native = { start: async () => { throw new Error('no'); }, stop: async () => {}, abandon: async () => {},
     reply: async (w: string, text: string, by: 'owner' | 'jarvis') => { typed.push([w, text, by]); return { ok: true as const }; } };
-  const gate = makeGate(store, id, () => {}, () => {}, undefined, undefined, {}, native as any);
+  const gate = makeGate(store, () => {}, () => {}, undefined, undefined, native as any);
   const a = await gate.propose('terminal-send', { terminal: 'n:abc', text: 'go on' }, 'Tell it to go on?');
   const done = await gate.button(a.id, true);
   assert.equal(done.status, 'done');

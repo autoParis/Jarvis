@@ -63,35 +63,14 @@ If a permission prompt appears, wait; ${OWNER} answers it from his app. If the p
 
 Before each batch of tool calls, write one plain sentence saying what you are about to do.`;
 
-/** Appended to every worker spec Jarvis dispatches, so asks arrive short enough to speak. */
-export const ASK_FOOTER = `
-
-## Asking the coordinator
-Your coordinator is Jarvis, who reads your questions aloud to ${OWNER}. Ask only what needs a human decision. Phrase every \`orca orchestration ask\` exactly as:
-STORY: <number and topic, at most 8 words>
-WHERE: <what you are doing, one or two short sentences>
-QUESTION: <one sentence>
-CONTEXT: <optional, at most 3 sentences>
-IMAGE: <optional, one absolute path to a .png .jpg .jpeg .webp or .gif>
-OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
-Pass the short choices in one --options flag, separated by commas: --options "Merged,Not yet". Do not repeat the flag, because Orca keeps only the last one. Orca splits on every comma, so write each choice without one. For anything visual, put a screenshot path in IMAGE (under the repo's docs/screens or data/uploads, ~/Desktop, ~/Downloads or ~/orca/workspaces) or a link in CONTEXT. ${OWNER_CAP} sees the picture on the ask card in the app.
-
-If Claude Code's permission layer refuses a command, do not retry it or route around it: a retry hits the same refusal. Escalate, say the permission layer refused it, and quote the whole command. Jarvis itself can run two on ${OWNER}'s Approve tap, and his card offers them when your words give every value: \`gh pr close <number> --repo <owner/name> --comment "<why>"\` and, from the FBM repo, \`node functions/scripts/reusable/pause-client.js --client <id> --hours <hours>\`. It can also run one production ${PRODUCT_LABEL} MCP call on his tap: quote the exact tool name and the whole arguments JSON.
-
-Before each batch of tool calls, write one plain sentence saying what you are about to do. ${OWNER_CAP} reads your conversation as a chat.`;
-
 /**
- * Orca's own brief tells every worker "Don't post to Slack, GitHub, or other channels during the run", and Orca is not
- * modified. That line kept the story 3202 worker from filing the three bugs it proved, though pick-and-ship-v3 tells it to.
- * Story workers get this exception in their task; read-only workers, side chats and Today tasks do not.
+ * Story workers may file issues for real findings outside their task, through the repo's create-issue skill only. That
+ * kept the story 3202 worker from dropping the three bugs it proved. Read-only workers, side chats and Today tasks do not get it.
  */
 export const ISSUE_RULE = `
 
 ## Filing issues
-The Orca brief above says not to post to GitHub. One exception: if this repo has a \`create-issue\` skill (\`.claude/skills/create-issue\`), you may file a GitHub issue for a real finding outside your task's scope, but only by invoking that skill and following it: its duplicate and already-shipped search, the tier, the P and type labels, the template sections and the \`**Tier:**\` line. Never a hand-rolled \`gh issue create\`. Skip its confirmation step, with these limits. Priority P2 or P3 only, never P0 or P1; say in the body why it might deserve more. When the search finds a live issue, comment on it instead of filing. List every issue you filed or commented on, by number, in your worker_done body. Without that skill, file nothing and put the findings in your report.`;
-
-/** The issue rule for a worker that got no Orca brief. */
-export const NATIVE_ISSUE_RULE = ISSUE_RULE.replace('The Orca brief above says not to post to GitHub. One exception: if', 'One exception to not posting on GitHub: if');
+One exception to not posting on GitHub: if this repo has a \`create-issue\` skill (\`.claude/skills/create-issue\`), you may file a GitHub issue for a real finding outside your task's scope, but only by invoking that skill and following it: its duplicate and already-shipped search, the tier, the P and type labels, the template sections and the \`**Tier:**\` line. Never a hand-rolled \`gh issue create\`. Skip its confirmation step, with these limits. Priority P2 or P3 only, never P0 or P1; say in the body why it might deserve more. When the search finds a live issue, comment on it instead of filing. List every issue you filed or commented on, by number, in your worker_done body. Without that skill, file nothing and put the findings in your report.`;
 
 /**
  * Appended to every worker spec, after the footer. The owner reads asks, escalations and reports on his phone, and a card
@@ -117,21 +96,12 @@ Your final report has this shape:
 Use active voice and simple tenses. Write one idea per sentence. Do not use semicolons.`;
 
 // Task texts for the workers Jarvis starts on its own.
-/** A read-only question worker's task. `done` is how it reports: Orca's worker_done, or the native DONE line. */
+/** A read-only question worker's task. `done` is how it reports. */
 export const questionSpec = (question: string, done: string) => `Read-only research for ${OWNER}. Do not edit, create or delete files, do not commit, do not open or change PRs or issues, do not run anything that changes state.\n\nQuestion: ${question}\n\nUse the repo's own CLAUDE.md and skills. Then ${done} with a summary of at most 4 short sentences that can be read aloud, and put any detail (file paths, links) after a blank line in the same summary.`;
-/** A native side chat: the same session as the Orca one, but it ends with a DONE line instead of worker_done, and asks nothing. */
+/** A side chat: a normal working session the owner talks to in the app. It ends with a DONE line, and asks nothing. */
 export const nativeSideChatSpec = (text: string) => `Side chat with ${OWNER}. He started it from the Jarvis app to talk with you directly, apart from his main Jarvis conversation. This is a normal working session: read, edit, run and commit what he asks for.
 
 He reads and answers you in this conversation from the Jarvis app, so talk to him here, in plain replies; every message of his arrives as a message from another session. Do not ask jarvis-brain anything. When ${OWNER} says he is done, end with a line starting DONE: and a one-sentence summary; until then, never write DONE or FAILED.
-
-${text.trim() ? `His first message:
-
-${text}` : 'He has not written yet. Reply with one short line saying you are ready and where you are working (the folder, and the branch if it is a worktree), then wait for his first message.'}`;
-
-/** A side chat is a normal working session that the owner talks to in the app or in Orca, outside the Jarvis conversation. */
-export const sideChatSpec = (text: string) => `Side chat with ${OWNER}. He started it from the Jarvis app to talk with you directly, apart from his main Jarvis conversation. This is a normal working session: read, edit, run and commit what he asks for.
-
-He reads and answers you in this conversation, from the Jarvis app or from Orca, so talk to him here. Do not use \`orca orchestration ask\`, and do not send worker_done on your own. When ${OWNER} says he is done, send worker_done with a one-sentence summary.
 
 ${text.trim() ? `His first message:
 
@@ -178,14 +148,7 @@ export function readReport(text: string): { label: ReportLabel | null; line: str
   return { label: m ? m[1].toUpperCase() as ReportLabel : null, line: m ? m[2].trim() : '', outcome: outcomeOf(text) };
 }
 
-/** Which worker gets the brief: a native Claude Code session, or an Orca worker. */
-export type WorkerKind = 'native' | 'orca';
-
-/**
- * The rules appended to a worker's task. `issues` adds the create-issue exception, for story workers only. The native
- * brief names jarvis-brain and SendMessage. The Orca brief names `orca orchestration ask` and worker_done.
- */
-export function workerBrief(kind: WorkerKind, o: { issues?: boolean } = {}): string {
-  return kind === 'native' ? (o.issues ? NATIVE_ISSUE_RULE : '') + NATIVE_FOOTER + CARD_RULE
-    : (o.issues ? ISSUE_RULE : '') + ASK_FOOTER + CARD_RULE;
+/** The rules appended to a worker's task. `issues` adds the create-issue exception, for story workers only. */
+export function workerBrief(o: { issues?: boolean } = {}): string {
+  return (o.issues ? ISSUE_RULE : '') + NATIVE_FOOTER + CARD_RULE;
 }

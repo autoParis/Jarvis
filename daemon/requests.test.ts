@@ -26,8 +26,8 @@ function setup() {
     store.finishApproval(a.id, 'done', JSON.stringify({ dispatchId: dispatch, taskId: 't', state: 'ready' }));
     reqs.started(store.approval(a.id)!);
   };
-  const row = (id: string, extra: Partial<WorkRow> = {}): WorkRow => ({ id, kind: 'worker', dispatch: id, title: id, group: 'other', state: 'working', sideChat: false, steer: 'auto', ...extra });
-  const work = (rows: WorkRow[], error?: string): Work => ({ at: '', rows, done: [], ...(error ? { error } : {}) });
+  const row = (id: string, extra: Partial<WorkRow> = {}): WorkRow => ({ id, kind: 'worker', dispatch: id, title: id, group: 'other', state: 'working', steer: 'auto', ...extra });
+  const work = (rows: WorkRow[]): Work => ({ at: '', rows });
   return { store, reqs, start, row, work, views, prState, tick: (ms: number) => { clock += ms; } };
 }
 
@@ -69,32 +69,32 @@ test('a question worker is a request, titled by its taskTitle or else by what Ja
 test('a question moves from working to done on worker_done, then leaves after 24 hours', async () => {
   const { store, reqs, row, work, tick } = setup();
   reqs.started(askQuestion(store, 'ctx_q'));
-  await reqs.sync(work([row('ctx_q', { worktree: 'jarvis' })]), [{ dispatch: 'ctx_q', outcome: 'in_progress', path: '/repos/jarvis' }]);
+  await reqs.sync(work([row('ctx_q', { worktree: 'jarvis' })]));
   assert.equal(reqs.list()[0].status, 'working');
   assert.equal(reqs.list()[0].row, 'ctx_q');
 
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_q', subject: 'Answered', body: 'Because.', meta: '{"outcome":"succeeded"}' });
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_q', subject: 'Answered', body: 'Because.', meta: '{"outcome":"succeeded"}' });
   const finished = [{ dispatch: 'ctx_q', outcome: 'succeeded', path: '/repos/jarvis' }];
-  await reqs.sync(work([]), finished);
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'done');
   assert.deepEqual(order(requestListHtml(reqs.list(), { done: true }, AT)), ['done', 'Asking a worker why it does that.']);
 
   store.db.prepare("UPDATE requests SET status_at = '2026-10-30 12:00:00'").run();
   tick(DONE_KEEP_MS);
-  await reqs.sync(work([]), finished);
+  await reqs.sync(work([]));
   assert.equal(reqs.list().length, 0);
 });
 
 test('a finished question ignores other sessions in the main checkout it ran in', async () => {
   const { store, reqs, row, work } = setup();
   reqs.started(askQuestion(store, 'ctx_q'));
-  await reqs.sync(work([row('ctx_q', { worktree: 'jarvis' })]), [{ dispatch: 'ctx_q', outcome: 'in_progress', path: '/repos/jarvis' }]);
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_q', subject: 'Answered', meta: '{"outcome":"succeeded"}' });
+  await reqs.sync(work([row('ctx_q', { worktree: 'jarvis' })]));
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_q', subject: 'Answered', meta: '{"outcome":"succeeded"}' });
   // the owner's own chat in that checkout sits at a prompt, on a branch with a PR. Neither belongs to the question.
   const other = row('s:owner', { kind: 'session', worktree: 'jarvis', state: 'waiting', pr: 'PR #9' });
   const finished = [{ dispatch: 'ctx_q', outcome: 'succeeded', path: '/repos/jarvis' }];
-  await reqs.sync(work([other]), finished);
-  await reqs.sync(work([other]), finished);
+  await reqs.sync(work([other]));
+  await reqs.sync(work([other]));
   const r = reqs.list()[0];
   assert.equal(r.status, 'done');
   assert.equal(r.row, undefined);
@@ -104,17 +104,17 @@ test('a finished question ignores other sessions in the main checkout it ran in'
 test('a question stays done when its answer mentions a PR, and a real failure or wait still shows', async () => {
   const { store, reqs, row, work } = setup();
   reqs.started(askQuestion(store, 'ctx_q'));
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_q', subject: 'Answered', body: 'PR #12 changed it: https://github.com/o/jarvis/pull/12', meta: '{"outcome":"succeeded"}' });
-  await reqs.sync(work([]), [{ dispatch: 'ctx_q', outcome: 'succeeded', path: '/repos/jarvis' }]);
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_q', subject: 'Answered', body: 'PR #12 changed it: https://github.com/o/jarvis/pull/12', meta: '{"outcome":"succeeded"}' });
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'done');
   assert.equal(reqs.list()[0].pr, undefined);
 
   reqs.started(askQuestion(store, 'ctx_w'));
-  await reqs.sync(work([row('ctx_w', { state: 'waiting', note: 'Which repo?' })]), [{ dispatch: 'ctx_w', outcome: 'in_progress', path: '/repos/jarvis' }]);
+  await reqs.sync(work([row('ctx_w', { state: 'waiting', note: 'Which repo?' })]));
   assert.equal(reqs.list().find(r => r.status === 'waiting')?.row, 'ctx_w');
 
   reqs.started(askQuestion(store, 'ctx_x'));
-  await reqs.sync(work([row('ctx_x', { state: 'exited' })]), [{ dispatch: 'ctx_x', outcome: 'in_progress', path: '/repos/jarvis' }]);
+  await reqs.sync(work([row('ctx_x', { state: 'exited' })]));
   assert.equal(reqs.list().find(r => r.row === 'ctx_x')?.status, 'failed');
 });
 
@@ -129,46 +129,43 @@ test('questions from the last days are backfilled too', () => {
 test('status follows the work list: waiting, working, in review with the PR link, then done once merged', async () => {
   const { store, reqs, start, row, work, prState } = setup();
   start('ctx_1', 'Do the thing');
-  await reqs.sync(work([row('ctx_1', { state: 'waiting', note: 'Which colour?' })]), [{ dispatch: 'ctx_1', outcome: 'in_progress', path: '/w/cod' }]);
+  await reqs.sync(work([row('ctx_1', { state: 'waiting', note: 'Which colour?' })]));
   assert.equal(reqs.list()[0].status, 'waiting');
   assert.equal(reqs.list()[0].row, 'ctx_1');
-  await reqs.sync(work([row('ctx_1')]), [{ dispatch: 'ctx_1', outcome: 'in_progress', path: '/w/cod' }]);
+  await reqs.sync(work([row('ctx_1')]));
   assert.equal(reqs.list()[0].status, 'working');
 
   // It finishes: worker_done names a PR number, and its chat stays as a session row in the same worktree.
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done, PR #12', body: 'all good' });
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done, PR #12', body: 'all good' });
   prState.set('https://github.com/o/jarvis/pull/12', true);
   const session = row('s:abc', { kind: 'session', worktree: 'cod', state: 'idle' });
-  await reqs.sync(work([session]), [{ dispatch: 'ctx_1', outcome: 'succeeded', path: '/w/cod' }]);
+  await reqs.sync(work([session]));
   let r = reqs.list()[0];
   assert.equal(r.status, 'review');
   assert.equal(r.url, 'https://github.com/o/jarvis/pull/12');
-  assert.equal(r.row, 's:abc'); // tapping it opens the finished worker's chat
 
   prState.set('https://github.com/o/jarvis/pull/12', false);
-  await reqs.sync(work([session]), [{ dispatch: 'ctx_1', outcome: 'succeeded', path: '/w/cod' }]);
+  await reqs.sync(work([session]));
   assert.equal(reqs.list()[0].status, 'review'); // PR state is checked at most every 5 minutes
 });
 
 test('a merged PR is done, and a done request leaves 24 hours after it became done', async () => {
   const { store, reqs, start, row, work, prState, tick } = setup();
   start('ctx_1', 'Ship it');
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'See https://github.com/o/jarvis/pull/7', body: '' });
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'See https://github.com/o/jarvis/pull/7', body: '' });
   prState.set('https://github.com/o/jarvis/pull/7', false);
   const done = [{ dispatch: 'ctx_1', outcome: 'succeeded', path: '/w/cod' }];
-  await reqs.sync(work([row('s:k', { kind: 'session', worktree: 'cod', state: 'idle' })]), done);
+  await reqs.sync(work([row('s:k', { kind: 'session', worktree: 'cod', state: 'idle' })]));
   assert.equal(reqs.list()[0].status, 'done');
   store.db.prepare("UPDATE requests SET status_at = '2026-10-30 12:00:00'").run(); // done at the test clock's start
 
-  await reqs.sync(work([]), done); // the hourly cleanup removed the worktree soon after the merge
+  await reqs.sync(work([])); // the hourly cleanup removed the worktree soon after the merge
   tick(DONE_KEEP_MS - 60_000);
-  await reqs.sync(work([]), done);
+  await reqs.sync(work([]));
   assert.equal(reqs.list().length, 1); // still shown a few hours later, conversation gone or not
 
   tick(60_000);
-  await reqs.sync(work([], 'Orca: no answer'), done); // Orca not answering never removes anything
-  assert.equal(reqs.list().length, 1);
-  await reqs.sync(work([row('s:k', { kind: 'session', worktree: 'cod', state: 'idle' })]), done);
+  await reqs.sync(work([row('s:k', { kind: 'session', worktree: 'cod', state: 'idle' })]));
   assert.equal(reqs.list().length, 0); // a day after done it leaves, even with its conversation still listed
   assert.ok(store.db.prepare('SELECT removed_at FROM requests').get()); // marked, never deleted
 });
@@ -177,7 +174,7 @@ test('a live worker matches its request by dispatch id, whatever its title, befo
   const { reqs, start, row, work } = setup();
   start('ctx_1', 'Do it', { repo: '/r', taskTitle: '#4140 and #3165 Paused-account drive realignment', spec: 's' });
   // The same workspace's chat is listed too, under another title. The worker's own row wins.
-  await reqs.sync(work([row('s:k', { kind: 'session', title: 'Pick ship issues 4140', worktree: 'kelpfish' }), row('ctx_1', { title: 'Task title in Orca' })]), [{ dispatch: 'ctx_1', outcome: 'in_progress', path: '/w/kelpfish' }]);
+  await reqs.sync(work([row('s:k', { kind: 'session', title: 'Pick ship issues 4140', worktree: 'kelpfish' }), row('ctx_1', { title: 'Task title' })]));
   const r = reqs.list()[0];
   assert.equal(r.row, 'ctx_1');
   assert.equal(r.status, 'working');
@@ -186,24 +183,24 @@ test('a live worker matches its request by dispatch id, whatever its title, befo
 test('a request closes itself once its worker is missing from two polls in a row, and goes to done', async () => {
   const { reqs, start, row, work } = setup();
   start('ctx_1', 'Do it');
-  await reqs.sync(work([row('ctx_1')]), [{ dispatch: 'ctx_1', outcome: 'in_progress' }]);
-  await reqs.sync(work([]), []);
+  await reqs.sync(work([row('ctx_1')]));
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'working'); // one poll proves nothing
   assert.equal(reqs.closing(reqs.list()[0].id), true);
-  await reqs.sync(work([row('ctx_1')]), [{ dispatch: 'ctx_1', outcome: 'in_progress' }]);
+  await reqs.sync(work([row('ctx_1')]));
   assert.equal(reqs.closing(reqs.list()[0].id), false); // it came back, so the count starts over
-  await reqs.sync(work([]), []);
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'working');
-  await reqs.sync(work([]), []);
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'done');
 });
 
-test('a row dropped from the list while Orca still says in progress counts as missing', async () => {
+test('a row dropped from the list counts as missing', async () => {
   const { reqs, start, work } = setup();
   start('ctx_1', 'Do it');
   const stuck = [{ dispatch: 'ctx_1', outcome: 'in_progress' }];
-  await reqs.sync(work([]), stuck);
-  await reqs.sync(work([]), stuck);
+  await reqs.sync(work([]));
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'done');
 });
 
@@ -212,39 +209,19 @@ test('a missing worker with a PR on its workspace closes to in review, not done'
   start('ctx_1', 'Ship');
   store.db.prepare(`UPDATE requests SET pr = 'PR #3', pr_url = 'https://github.com/o/jarvis/pull/3'`).run();
   prState.set('https://github.com/o/jarvis/pull/3', true);
-  await reqs.sync(work([]), []);
-  await reqs.sync(work([]), []);
+  await reqs.sync(work([]));
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'review');
-});
-
-test('a poll where a Run did not answer does not count a worker as missing', async () => {
-  const { reqs, start, work } = setup();
-  start('ctx_1', 'Do it');
-  for (let i = 0; i < 5; i++) await reqs.sync(work([]), [], false);
-  assert.equal(reqs.list()[0].status, 'working');
-  assert.equal(reqs.closing(reqs.list()[0].id), false);
 });
 
 test('worker_done closes the request at once, by the outcome it reported, with the worker no longer listed', async () => {
   const { store, reqs, start, work } = setup();
   start('ctx_1', 'One');
   start('ctx_2', 'Two');
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done', meta: '{"outcome":"succeeded"}' });
-  store.insertItem({ source: 'orca', external_id: 'm2', kind: 'worker_done', dispatch_id: 'ctx_2', subject: 'Could not', meta: '{"outcome":"failed"}' });
-  await reqs.sync(work([]), []);
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done', meta: '{"outcome":"succeeded"}' });
+  store.insertItem({ source: 'native', external_id: 'm2', kind: 'worker_done', dispatch_id: 'ctx_2', subject: 'Could not', meta: '{"outcome":"failed"}' });
+  await reqs.sync(work([]));
   assert.deepEqual(reqs.list().map(r => r.status), ['done', 'failed']);
-});
-
-test('a finished request does not reopen, and a worker Orca reports finished wins over its worker_done', async () => {
-  const { store, reqs, start, work } = setup();
-  start('ctx_1', 'One');
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done', meta: '{"outcome":"succeeded"}' });
-  await reqs.sync(work([]), [{ dispatch: 'ctx_1', outcome: 'failed' }]);
-  assert.equal(reqs.list()[0].status, 'failed');
-  store.updateRequest(reqs.list()[0].id, { status: 'done' });
-  await reqs.sync(work([]), []);
-  await reqs.sync(work([]), []);
-  assert.equal(reqs.list()[0].status, 'done');
 });
 
 test('a shown title drops a leading Request: or Requests:', async () => {
@@ -259,35 +236,37 @@ test('a shown title drops a leading Request: or Requests:', async () => {
 });
 
 test('a failed request stays until the owner hides it', async () => {
-  const { reqs, start, work, tick } = setup();
+  const { store, reqs, start, work, tick } = setup();
   start('ctx_1', 'Try it');
-  await reqs.sync(work([]), [{ dispatch: 'ctx_1', outcome: 'failed' }]);
+  store.insertItem({ source: 'native', external_id: 'f1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Could not', meta: '{"outcome":"failed"}' });
+  await reqs.sync(work([]));
   tick(DONE_KEEP_MS * 3);
-  await reqs.sync(work([]), [{ dispatch: 'ctx_1', outcome: 'failed' }]);
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'failed');
   assert.equal(reqs.hide(reqs.list()[0].id), true);
   assert.equal(reqs.list().length, 0);
   assert.equal(reqs.hide(1), false);
 });
 
-/** the owner approves a stop on the card and Orca stops the worker. */
+/** the owner approves a stop on the card and the worker stops. */
 function stop(store: ReturnType<typeof setup>['store'], dispatch: string, result: 'done' | 'failed' = 'done') {
   const a = store.addApproval({ action: 'worker-stop', args: JSON.stringify({ dispatch }), say: 'Stop it?' });
   store.decide(a.id, 'approved', 'button');
   store.finishApproval(a.id, result, JSON.stringify({ dispatchId: dispatch, state: 'stopped' }));
   return a.id;
 }
-const stoppedWorker = (dispatch: string) => [{ dispatch, outcome: 'failed', path: '/w/cod' }];
+/** Two syncs with the worker gone from the list: it is over. */
+const gone = async (reqs: ReturnType<typeof setup>['reqs'], work: ReturnType<typeof setup>['work']) => { await reqs.sync(work([])); await reqs.sync(work([])); };
 
-test('a worker the owner stopped lands in Completed, though Orca settles it as failed', async () => {
+test('a worker the owner stopped lands in Completed, not Failed', async () => {
   const { store, reqs, start, row, work } = setup();
   start('ctx_1', 'Try it');
-  await reqs.sync(work([row('ctx_1')]), [{ dispatch: 'ctx_1', outcome: 'in_progress', path: '/w/cod' }]);
+  await reqs.sync(work([row('ctx_1')]));
   stop(store, 'ctx_1');
-  await reqs.sync(work([]), stoppedWorker('ctx_1'));
+  await gone(reqs, work);
   assert.equal(reqs.list()[0].status, 'done');
   assert.deepEqual(requestGroups(reqs.list()).done.map((r: RequestView) => r.title), ['Task ctx_1']);
-  await reqs.sync(work([]), stoppedWorker('ctx_1'));
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'done');
 });
 
@@ -295,7 +274,7 @@ test('a stopped worker still listed as exited is done', async () => {
   const { store, reqs, start, row, work } = setup();
   start('ctx_1', 'Try it');
   stop(store, 'ctx_1');
-  await reqs.sync(work([row('ctx_1', { state: 'exited' })]), [{ dispatch: 'ctx_1', outcome: 'in_progress', path: '/w/cod' }]);
+  await reqs.sync(work([row('ctx_1', { state: 'exited' })]));
   assert.equal(reqs.list()[0].status, 'done');
 });
 
@@ -305,29 +284,32 @@ test('a stopped worker with an open PR waits for merge', async () => {
   store.db.prepare(`UPDATE requests SET pr = 'PR #3', pr_url = 'https://github.com/o/jarvis/pull/3'`).run();
   prState.set('https://github.com/o/jarvis/pull/3', true);
   stop(store, 'ctx_1');
-  await reqs.sync(work([]), stoppedWorker('ctx_1'));
+  await gone(reqs, work);
   assert.equal(reqs.list()[0].status, 'review');
 });
 
-test('a request a stop already left as failed moves to done, with its worker gone from Orca too', async () => {
+test('a request a stop already left as failed moves to done, with its worker gone too', async () => {
   const { store, reqs, start, work } = setup();
   start('ctx_1', 'Try it');
   const a = stop(store, 'ctx_1');
   store.db.prepare(`UPDATE approvals SET decided_at = '2026-11-03 13:15:07' WHERE id = ?`).run(a);
   store.db.prepare(`UPDATE requests SET status = 'failed', status_at = '2026-11-03 13:15:16'`).run();
-  await reqs.sync(work([]), []);
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'done');
 });
 
 test('a real failure stays failed: no stop, a stop that did not go through, or a failure before the stop', async () => {
   const { store, reqs, start, work } = setup();
+  const failed = (dispatch: string) => store.insertItem({ source: 'native', external_id: `f_${dispatch}`, kind: 'worker_done', dispatch_id: dispatch, subject: 'Could not', meta: '{"outcome":"failed"}' });
   start('ctx_none', 'No stop');
-  await reqs.sync(work([]), stoppedWorker('ctx_none'));
+  failed('ctx_none');
+  await gone(reqs, work);
   assert.equal(reqs.list()[0].status, 'failed');
 
   start('ctx_refused', 'Stop refused');
   stop(store, 'ctx_refused', 'failed');
-  await reqs.sync(work([]), stoppedWorker('ctx_refused'));
+  failed('ctx_refused');
+  await gone(reqs, work);
   assert.equal(reqs.list()[1].status, 'failed');
 
   // It failed, and the owner stopped what was left of it afterwards.
@@ -335,41 +317,39 @@ test('a real failure stays failed: no stop, a stop that did not go through, or a
   const a = stop(store, 'ctx_before');
   store.db.prepare(`UPDATE approvals SET decided_at = '2026-11-03 13:15:07' WHERE id = ?`).run(a);
   store.db.prepare(`UPDATE requests SET status = 'failed', status_at = '2026-11-03 13:00:00' WHERE dispatch_id = 'ctx_before'`).run();
-  await reqs.sync(work([]), stoppedWorker('ctx_before'));
+  await gone(reqs, work);
   assert.equal(reqs.list()[2].status, 'failed');
 
   // It reported failure itself before the stop.
   start('ctx_report', 'Reported first');
-  store.insertItem({ source: 'orca', external_id: 'r1', kind: 'worker_done', dispatch_id: 'ctx_report', subject: 'Could not', meta: '{"outcome":"failed"}' });
+  store.insertItem({ source: 'native', external_id: 'r1', kind: 'worker_done', dispatch_id: 'ctx_report', subject: 'Could not', meta: '{"outcome":"failed"}' });
   store.db.prepare(`UPDATE items SET created_at = '2026-11-03 13:00:00' WHERE external_id = 'r1'`).run();
   const b = stop(store, 'ctx_report');
   store.db.prepare(`UPDATE approvals SET decided_at = '2026-11-03 13:15:07' WHERE id = ?`).run(b);
-  await reqs.sync(work([]), stoppedWorker('ctx_report'));
+  await gone(reqs, work);
   assert.equal(reqs.list()[3].status, 'failed');
 });
 
 test('the ask card Stop: the worker keeps its status until it ends, then it is done even if it reports failed', async () => {
   const { store, reqs, start, row, work } = setup();
   start('ctx_1', 'Try it');
-  store.insertItem({ source: 'orca', external_id: 'e1', kind: 'escalation', dispatch_id: 'ctx_1', subject: 'Blocked', body: 'Stuck' });
+  store.insertItem({ source: 'native', external_id: 'e1', kind: 'escalation', dispatch_id: 'ctx_1', subject: 'Blocked', body: 'Stuck' });
   store.markItem('e1', 'answered', STOP_ANSWER);
-  const running = [{ dispatch: 'ctx_1', outcome: 'in_progress', path: '/w/cod' }];
-  await reqs.sync(work([row('ctx_1')]), running);
-  assert.equal(reqs.list()[0].status, 'working');
-  await reqs.sync(work([]), [], false); // a poll where Orca did not answer proves nothing
+  await reqs.sync(work([row('ctx_1')]));
   assert.equal(reqs.list()[0].status, 'working');
 
-  store.insertItem({ source: 'orca', external_id: 'd1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Stopped as asked', meta: '{"outcome":"failed"}' });
-  await reqs.sync(work([]), stoppedWorker('ctx_1'));
+  store.insertItem({ source: 'native', external_id: 'd1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Stopped as asked', meta: '{"outcome":"failed"}' });
+  await reqs.sync(work([]));
   assert.equal(reqs.list()[0].status, 'done');
 });
 
 test('another ask card answer is not a stop', async () => {
   const { store, reqs, start, work } = setup();
   start('ctx_1', 'Try it');
-  store.insertItem({ source: 'orca', external_id: 'e1', kind: 'escalation', dispatch_id: 'ctx_1', subject: 'Blocked', body: 'Stuck' });
+  store.insertItem({ source: 'native', external_id: 'e1', kind: 'escalation', dispatch_id: 'ctx_1', subject: 'Blocked', body: 'Stuck' });
   store.markItem('e1', 'answered', 'Retry the step that stopped you, then carry on.');
-  await reqs.sync(work([]), stoppedWorker('ctx_1'));
+  store.insertItem({ source: 'native', external_id: 'd1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Could not', meta: '{"outcome":"failed"}' });
+  await gone(reqs, work);
   assert.equal(reqs.list()[0].status, 'failed');
 });
 
@@ -407,7 +387,7 @@ test('a side chat never becomes a request, and side chat rows already stored are
 });
 
 test('statusOf: a waiting session wins, an exited worker is failed, an unknown worker changes nothing', () => {
-  const w = { id: 's:x', kind: 'session', title: '', group: 'other', state: 'waiting', sideChat: false, steer: 'none' } as WorkRow;
+  const w = { id: 's:x', kind: 'session', title: '', group: 'other', state: 'waiting', steer: 'none' } as WorkRow;
   assert.equal(statusOf(w, 'succeeded', false, null, undefined, true), 'waiting');
   assert.equal(statusOf({ ...w, state: 'exited' }, 'in_progress', true, null, undefined, false), 'failed');
   assert.equal(statusOf(undefined, 'succeeded', false, null, undefined, true), 'done');
@@ -525,15 +505,15 @@ test('when the PR merges, the row moves from Waiting for merge to Completed', as
   const { store, reqs, start, row, work, prState, tick } = setup();
   const finished = [{ dispatch: 'ctx_1', outcome: 'succeeded', path: '/w/cod' }];
   start('ctx_1', 'Do the thing');
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done, PR #12', body: 'all good' });
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done, PR #12', body: 'all good' });
   prState.set('https://github.com/o/jarvis/pull/12', true);
   const session = row('s:abc', { kind: 'session', worktree: 'cod', state: 'idle' });
-  await reqs.sync(work([session]), finished);
+  await reqs.sync(work([session]));
   assert.deepEqual(order(requestListHtml(reqs.list(), { review: true }, AT)), ['review', 'Task ctx_1']);
 
   prState.set('https://github.com/o/jarvis/pull/12', false);
   tick(6 * 60_000);
-  await reqs.sync(work([session]), finished);
+  await reqs.sync(work([session]));
   assert.deepEqual(order(requestListHtml(reqs.list(), { done: true }, AT)), ['done', 'Task ctx_1']);
 });
 
@@ -547,12 +527,11 @@ function startNative(store: ReturnType<typeof setup>['store'], reqs: ReturnType<
   store.finishApproval(a.id, 'done', JSON.stringify({ worker: `n:${id}`, sessionId: `sess-${id}`, name: `${id}-name`, state: 'working' }));
   return reqs.started(store.approval(a.id)!);
 }
-const nativeRow = (id: string, state: WorkRow['state'] = 'working'): WorkRow => ({ id: `n:${id}`, kind: 'worker', dispatch: `n:${id}`, title: id, group: 'other', state, sideChat: false, steer: 'auto' });
+const nativeRow = (id: string, state: WorkRow['state'] = 'working'): WorkRow => ({ id: `n:${id}`, kind: 'worker', dispatch: `n:${id}`, title: id, group: 'other', state, steer: 'auto' });
 
-test('a native worker start becomes a request whose row opens the worker, with no Orca call', async () => {
+test('a native worker start becomes a request whose row opens the worker', async () => {
   const store = openStore(':memory:');
-  const orcaCalls: string[][] = [];
-  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => undefined, orca: async args => { orcaCalls.push(args); return { ok: false } as any; } });
+  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => undefined });
   await startNative(store, reqs, 'abc123', 'Native task');
   const [r] = reqs.list();
   assert.equal(r.title, 'Native task');
@@ -560,13 +539,12 @@ test('a native worker start becomes a request whose row opens the worker, with n
   assert.equal(r.status, 'working');
   // Before the next poll the row is already the worker's own, so the tap opens its chat.
   assert.equal(r.row, 'n:abc123');
-  await reqs.sync({ at: '', rows: [nativeRow('abc123')], done: [] }, []);
+  await reqs.sync({ at: '', rows: [nativeRow('abc123')] });
   assert.equal(reqs.list()[0].row, 'n:abc123');
   assert.equal(reqs.list()[0].status, 'working');
   await reqs.read(r.id, undefined, new Map());
   assert.equal(store.request(r.id)!.session, 'sess-abc123');
   assert.equal(store.request(r.id)!.worktree, 'wt-abc123');
-  assert.deepEqual(orcaCalls, []);
 });
 
 test('a native DONE report marks the request done, and a FAILED one failed, while the row is still listed', async () => {
@@ -578,7 +556,7 @@ test('a native DONE report marks the request done, and a FAILED one failed, whil
   store.updateNativeWorker('ok1', { state: 'done', outcome: 'done', report: 'DONE: fixed it.', report_at: at });
   store.updateNativeWorker('bad1', { state: 'failed', outcome: 'failed', report: 'FAILED: tests broke.', report_at: at });
   // native.rows() keeps finished workers listed for a day: done is idle, failed is exited.
-  await reqs.sync({ at: '', rows: [nativeRow('ok1', 'idle'), nativeRow('bad1', 'exited')], done: [] }, []);
+  await reqs.sync({ at: '', rows: [nativeRow('ok1', 'idle'), nativeRow('bad1', 'exited')] });
   const by = new Map(reqs.list().map(r => [r.title, r]));
   assert.equal(by.get('Works')!.status, 'done');
   assert.equal(by.get('Breaks')!.status, 'failed');
@@ -596,7 +574,7 @@ test('the report page shows a native worker\'s report from its own row', async (
   assert.equal(rep.body, 'DONE: fixed it.\nBranch x, commit y.');
   assert.equal(rep.failed, false);
   assert.equal(rep.at, '2026-10-30T12:30:00Z');
-  await reqs.sync({ at: '', rows: [nativeRow('rep1', 'idle')], done: [] }, []);
+  await reqs.sync({ at: '', rows: [nativeRow('rep1', 'idle')] });
   assert.equal(reqs.list()[0].report, true, 'the row gets its Report link');
   store.updateNativeWorker('rep1', { state: 'failed', outcome: 'failed', report: 'FAILED: tests broke.' });
   assert.equal(requestReport(store, r!.id)!.failed, true);
@@ -612,7 +590,7 @@ test('more work after DONE puts a native request back to Working until its next 
     store.insertItem({ source: 'native', external_id: `reply:again1:${at}`, kind: 'reply', dispatch_id: 'n:again1', body: 'one more thing', status: 'done' });
     store.db.prepare('UPDATE items SET created_at = ? WHERE external_id = ?').run(at, `reply:again1:${at}`);
   };
-  const status = async (state: WorkRow['state'] = 'idle') => { await reqs.sync({ at: '', rows: [nativeRow('again1', state)], done: [] }, []); return store.request(r!.id)!.status; };
+  const status = async (state: WorkRow['state'] = 'idle') => { await reqs.sync({ at: '', rows: [nativeRow('again1', state)] }); return store.request(r!.id)!.status; };
   report('DONE: first pass.', '2026-10-30T12:30:00.000Z');
   assert.equal(await status(), 'done');
   reply('2026-10-30 12:31:00'); // the owner's steer box, or jarvis-native reply
@@ -629,16 +607,15 @@ test('more work after DONE puts a native request back to Working until its next 
   assert.equal(await status('exited'), 'failed');
 });
 
-test('a native request takes its session and worktree from its own row at the sync, with no Orca call', async () => {
+test('a native request takes its session and worktree from its own row at the sync', async () => {
   const store = openStore(':memory:');
-  const orcaCalls: string[][] = [];
-  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => undefined, orca: async args => { orcaCalls.push(args); return { ok: false } as any; } });
+  const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => undefined });
   await startNative(store, reqs, 'wt1', 'In a worktree');
   // A worker started in the main checkout, as `worktree: main`: its folder is the repo itself, so it is not its worktree.
   await startNative(store, reqs, 'main1', 'In the main checkout');
   store.updateNativeWorker('main1', { cwd: '/repos/jarvis' });
   store.db.prepare("UPDATE native_workers SET repo = '/repos/jarvis' WHERE id = 'main1'").run();
-  await reqs.sync({ at: '', rows: [nativeRow('wt1'), nativeRow('main1')], done: [] }, [], false);
+  await reqs.sync({ at: '', rows: [nativeRow('wt1'), nativeRow('main1')] });
   const by = new Map(store.requests().map(r => [r.title, r]));
   assert.equal(by.get('In a worktree')!.session, 'sess-wt1');
   assert.equal(by.get('In a worktree')!.worktree, 'wt-wt1');
@@ -646,9 +623,8 @@ test('a native request takes its session and worktree from its own row at the sy
   assert.equal(by.get('In the main checkout')!.worktree, null);
   // The listing later names the worker's real worktree: the request follows it.
   store.updateNativeWorker('main1', { cwd: '/repos/jarvis/.claude/worktrees/later-1' });
-  await reqs.sync({ at: '', rows: [nativeRow('wt1'), nativeRow('main1')], done: [] }, [], false);
+  await reqs.sync({ at: '', rows: [nativeRow('wt1'), nativeRow('main1')] });
   assert.equal(store.requests().find(r => r.title === 'In the main checkout')!.worktree, 'later-1');
-  assert.deepEqual(orcaCalls, []);
 });
 
 test('a native DONE that names "PR #12" links to that PR from the worker\'s own folder', async () => {
@@ -657,7 +633,7 @@ test('a native DONE that names "PR #12" links to that PR from the worker\'s own 
   const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async dir => { asked.push(dir); return 'https://github.com/o/jarvis'; }, prOpen: async () => true });
   await startNative(store, reqs, 'pr1', 'With a PR');
   store.updateNativeWorker('pr1', { state: 'done', outcome: 'done', report: 'DONE: opened PR #12.', report_at: '2026-10-30T12:30:00.000Z' });
-  await reqs.sync({ at: '', rows: [nativeRow('pr1', 'idle')], done: [] }, [], false);
+  await reqs.sync({ at: '', rows: [nativeRow('pr1', 'idle')] });
   const r = store.requests()[0];
   assert.equal(r.pr, 'PR #12');
   assert.equal(r.pr_url, 'https://github.com/o/jarvis/pull/12');
@@ -665,19 +641,16 @@ test('a native DONE that names "PR #12" links to that PR from the worker\'s own 
   assert.equal(r.status, 'review');
 });
 
-test('a done native request leaves a day after done while Orca is not answering; an Orca one waits for Orca', async () => {
-  const { store, reqs, start, work, tick } = setup();
+test('a done native request leaves a day after done', async () => {
+  const { store, reqs, work, tick } = setup();
   await startNative(store, reqs, 'day1', 'Native done');
-  start('ctx_o', 'Orca task');
   store.updateNativeWorker('day1', { state: 'done', outcome: 'done', report: 'DONE: fixed.', report_at: '2026-10-30T12:30:00.000Z' });
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_o', subject: 'Done', body: 'Fixed.', meta: '{"outcome":"succeeded"}' });
-  await reqs.sync(work([nativeRow('day1', 'idle')]), [{ dispatch: 'ctx_o', outcome: 'succeeded' }]);
-  assert.deepEqual(store.requests().map(r => r.status), ['done', 'done']);
+  await reqs.sync(work([nativeRow('day1', 'idle')]));
+  assert.deepEqual(store.requests().map(r => r.status), ['done']);
   store.db.prepare("UPDATE requests SET status_at = '2026-10-30 12:00:00'").run();
   tick(DONE_KEEP_MS);
-  // Orca closed: the poll errors, and only the native request may leave.
-  await reqs.sync(work([], 'orca did not answer'), [], false);
-  assert.deepEqual(reqs.list().map(r => r.title), ['Task ctx_o']);
+  await reqs.sync(work([]));
+  assert.deepEqual(reqs.list(), []);
 });
 
 // 2026-11-09: three rows sat in Waiting for merge after their work had shipped (requests 194, 212 and 332).
@@ -686,11 +659,11 @@ test('a PR number with no link gets its link from the request\'s repo, and a mer
   const asked: string[] = [];
   const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async dir => { asked.push(dir); return 'https://github.com/o/app'; }, prOpen: async url => prState.get(url) });
   start('ctx_1', 'Fix onboarding', { repo: '/repos/app', taskTitle: '#4828 Marketplace onboarding fixes', spec: 's' });
-  // Found while Orca no longer listed the worker, so no folder gave a link.
+  // Found while the worker was no longer listed, so no folder gave a link.
   store.db.prepare(`UPDATE requests SET pr = 'PR #4846', pr_url = NULL, status = 'review'`).run();
-  store.insertItem({ source: 'orca', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done, PR #4846', body: 'ok', meta: '{"outcome":"succeeded"}' });
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'ctx_1', subject: 'Done, PR #4846', body: 'ok', meta: '{"outcome":"succeeded"}' });
   prState.set('https://github.com/o/app/pull/4846', false);
-  await reqs.sync(work([]), []);
+  await reqs.sync(work([]));
   const r = store.requests()[0];
   assert.equal(r.pr_url, 'https://github.com/o/app/pull/4846');
   assert.equal(r.status, 'done');
@@ -702,7 +675,7 @@ test('a PR number its repo does not have is never kept, and one stored earlier i
   const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => 'https://github.com/o/jarvis', prOpen: async () => 'missing' });
   await startNative(store, reqs, 'np1', 'Jarvis 2.0 leftovers');
   store.updateNativeWorker('np1', { state: 'done', outcome: 'done', report: 'DONE: fixed.\n- There is no PR. A "PR #12" in a DONE report got no link.', report_at: '2026-10-30T12:30:00.000Z' });
-  await reqs.sync({ at: '', rows: [nativeRow('np1', 'idle')], done: [] }, [], false);
+  await reqs.sync({ at: '', rows: [nativeRow('np1', 'idle')] });
   let r = store.requests()[0];
   assert.equal(r.pr, null);
   assert.equal(r.status, 'done');
@@ -710,7 +683,7 @@ test('a PR number its repo does not have is never kept, and one stored earlier i
   // The same request as the daemon left it before this fix: the wrong number stored, no link, in review.
   store.db.prepare(`UPDATE requests SET pr = 'PR #12', pr_url = NULL, status = 'review'`).run();
   const again = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => 'https://github.com/o/jarvis', prOpen: async () => 'missing' });
-  await again.sync({ at: '', rows: [nativeRow('np1', 'idle')], done: [] }, [], false);
+  await again.sync({ at: '', rows: [nativeRow('np1', 'idle')] }, [], false);
   r = store.requests()[0];
   assert.equal(r.pr, null);
   assert.equal(r.pr_url, null);
@@ -726,7 +699,7 @@ test('a Jarvis request with no PR waits for merge until master holds its branch,
     mergeRepo: '/r/', branchMerged: async dir => { asked.push(dir); return merged; } });
   await startNative(store, reqs, 'jb1', 'Jarvis change');
   store.updateNativeWorker('jb1', { state: 'done', outcome: 'done', report: 'DONE: three commits on the branch. There is no PR.', report_at: '2026-10-30T12:30:00.000Z' });
-  const poll = () => reqs.sync({ at: '', rows: [nativeRow('jb1', 'idle')], done: [] }, [], false);
+  const poll = () => reqs.sync({ at: '', rows: [nativeRow('jb1', 'idle')] });
   await poll();
   assert.equal(store.requests()[0].status, 'review');
   assert.deepEqual(asked, ['/repos/wt-jb1']);
@@ -745,7 +718,7 @@ test('another repo\'s request with no PR is Completed at once, and git is not as
   const reqs = makeRequests({ store, log: () => {}, onChange: () => {}, repoOf: async () => undefined, mergeRepo: '/repos/jarvis', branchMerged: async dir => { asked.push(dir); return false; } });
   await startNative(store, reqs, 'ob1', 'App research');
   store.updateNativeWorker('ob1', { state: 'done', outcome: 'done', report: 'DONE: answered.', report_at: '2026-10-30T12:30:00.000Z' });
-  await reqs.sync({ at: '', rows: [nativeRow('ob1', 'idle')], done: [] }, [], false);
+  await reqs.sync({ at: '', rows: [nativeRow('ob1', 'idle')] });
   assert.equal(store.requests()[0].status, 'done');
   assert.deepEqual(asked, []);
 });

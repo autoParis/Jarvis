@@ -16,10 +16,10 @@ const files = (dir: string, ext: string) => readdirSync(join(ROOT, dir)).filter(
 test('the gate knows every action of the catalog, and refuses a name outside it', () => {
   for (const action of Object.keys(ACTIONS)) {
     let error = '';
-    try { buildCommand(action, {}, { run: 'r', handle: 'h' }); } catch (e) { error = String(e); }
+    try { buildCommand(action, {}); } catch (e) { error = String(e); }
     assert.doesNotMatch(error, /unknown action/, `${action} has a case in buildCommand`);
   }
-  assert.throws(() => buildCommand('worker-delete', {}, { run: 'r', handle: 'h' }), /unknown action worker-delete/);
+  assert.throws(() => buildCommand('worker-delete', {}), /unknown action worker-delete/);
   for (const a of [...NAMED_ACTIONS, PROD_MCP_CALL, WORKER_PERMISSION]) assert.ok(BUTTON_ONLY.has(a), `${a} runs only on Approve`);
   for (const a of Object.keys(ACTIONS)) assert.ok(!(actionsWith('pressed').has(a) && actionsWith('buttonOnly').has(a)), `${a} is a button or needs Approve, not both`);
 });

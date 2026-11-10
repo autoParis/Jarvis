@@ -22,7 +22,7 @@ const REVIEW = `Reviewed the payments branch: two problems should block the merg
 
 The receipt, as sent on staging.
 
-[image: /Users/owner/orca/workspaces/jarvis/sample/receipt.png]
+[image: /tmp/sample/receipt.png]
 
 Also compared with /Users/owner/Desktop/old-receipt.png.
 

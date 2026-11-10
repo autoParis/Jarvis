@@ -95,8 +95,8 @@ test('a subscription the push service says is gone is deleted; other failures ke
 
 test('an unanswered ask is pushed after the delay, reminded once after 10 minutes, then left alone', async () => {
   const s = openStore(':memory:');
-  s.insertItem({ source: 'orca', external_id: 'msg_1', kind: 'question', body: 'STORY: 4412\nQUESTION: Skip the step?\nOPTIONS: ...' });
-  s.insertItem({ source: 'orca', external_id: 'msg_2', kind: 'worker_done', body: 'done' });
+  s.insertItem({ source: 'native', external_id: 'msg_1', kind: 'question', body: 'STORY: 4412\nQUESTION: Skip the step?\nOPTIONS: ...' });
+  s.insertItem({ source: 'native', external_id: 'msg_2', kind: 'worker_done', body: 'done' });
   const sent: PushMessage[] = [];
   const send = async (m: PushMessage) => { sent.push(m); return 1; };
   const created = Date.parse(s.openItems()[0].created_at.replace(' ', 'T') + 'Z');
@@ -117,9 +117,9 @@ test('an unanswered ask is pushed after the delay, reminded once after 10 minute
 
 test('no push once the owner answered, spoke after the ask, or when no phone was reached', async () => {
   const s = openStore(':memory:');
-  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('orca', 'a', 'question', 'q', datetime('now', '-1 hour'))`).run();
-  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('orca', 'b', 'escalation', 'e', datetime('now', '-1 hour'))`).run();
-  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('orca', 'c', 'question', 'q', datetime('now', '-1 second'))`).run();
+  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('native', 'a', 'question', 'q', datetime('now', '-1 hour'))`).run();
+  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('native', 'b', 'escalation', 'e', datetime('now', '-1 hour'))`).run();
+  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('native', 'c', 'question', 'q', datetime('now', '-1 second'))`).run();
   s.markItem('a', 'answered', 'yes');
   s.db.prepare(`INSERT INTO turns (role, text, created_at) VALUES ('owner', 'two', datetime('now', '-30 minutes'))`).run();
   const sent: PushMessage[] = [];
@@ -127,7 +127,7 @@ test('no push once the owner answered, spoke after the ask, or when no phone was
   assert.deepEqual(sent, []); // a answered, b followed by the owner talking, c too recent
 
   const s2 = openStore(':memory:');
-  s2.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('orca', 'd', 'escalation', 'Tests fail', datetime('now', '-1 hour'))`).run();
+  s2.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('native', 'd', 'escalation', 'Tests fail', datetime('now', '-1 hour'))`).run();
   await pushOpenAsks(s2, async () => 0);
   assert.equal(s2.openItems()[0].pushes, 0); // nobody reached: retried on the next sweep
   assert.equal(askMessage(s2.openItems()[0]).title, 'Jarvis: a worker is stuck');
@@ -140,7 +140,7 @@ test('[urgent] marks a reply for a push and is stripped from what is shown and s
 
 test('an ask Jarvis is already replying to is not pushed', async () => {
   const s = openStore(':memory:');
-  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('orca', 'r', 'question', 'q', datetime('now', '-1 hour'))`).run();
+  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('native', 'r', 'question', 'q', datetime('now', '-1 hour'))`).run();
   s.claimReply('r');
   const sent: PushMessage[] = [];
   await pushOpenAsks(s, async m => { sent.push(m); return 1; });
@@ -244,8 +244,8 @@ test('a held push that reached no device waits for the next sweep', async () => 
 
 test('an ask held overnight goes out once at 7 AM and counts as its first push', async () => {
   const s = openStore(':memory:');
-  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('orca', 'q1', 'question', 'QUESTION: Ship it?', datetime('now', '-1 hour'))`).run();
-  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('orca', 'q2', 'question', 'QUESTION: Rename?', datetime('now', '-1 hour'))`).run();
+  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('native', 'q1', 'question', 'QUESTION: Ship it?', datetime('now', '-1 hour'))`).run();
+  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('native', 'q2', 'question', 'QUESTION: Rename?', datetime('now', '-1 hour'))`).run();
   const n = notifierAt(s, '2026-10-16T02:00:00Z'); // 10 PM
   await pushOpenAsks(s, n.notify);
   await pushOpenAsks(s, n.notify);
@@ -262,7 +262,7 @@ test('an ask held overnight goes out once at 7 AM and counts as its first push',
 
 test('a held ask is dropped when the owner spoke after it was held', async () => {
   const s = openStore(':memory:');
-  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('orca', 'q', 'question', 'q', datetime('now', '-1 hour'))`).run();
+  s.db.prepare(`INSERT INTO items (source, external_id, kind, body, created_at) VALUES ('native', 'q', 'question', 'q', datetime('now', '-1 hour'))`).run();
   const n = notifierAt(s, '2026-10-16T02:00:00Z');
   await n.notify(askMessage(s.item('q')!), { item: 'q' });
   s.db.prepare(`INSERT INTO turns (role, text, created_at) VALUES ('owner', 'here', datetime('now', '+1 second'))`).run();
