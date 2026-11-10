@@ -517,14 +517,15 @@ body.pane-open #chat { display: none; }
 .jarvis { font-size: 17px; line-height: 26px; }
 .event { font-size: 13px; color: var(--muted); }
 .event.focus { color: var(--ink); border-left: 2px solid var(--need); padding-left: 10px; }
-.hand { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-s); transition: background-color 180ms cubic-bezier(.22, 1, .36, 1), border-color 180ms cubic-bezier(.22, 1, .36, 1), transform 180ms cubic-bezier(.22, 1, .36, 1); }
-/* Resting, the row sits flat on the page. Pointed at or reached by keyboard, it reads as a small card: a lighter border, a
-   lighter fill and a 1px lift. Mouse only for the lift and fill, because a phone keeps :hover on a tapped row. */
+.hand { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; width: 100%; padding: 8px 12px; background: var(--raised); border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent); border-radius: var(--r-s); transition: background-color 180ms cubic-bezier(.22, 1, .36, 1), border-color 180ms cubic-bezier(.22, 1, .36, 1), transform 180ms cubic-bezier(.22, 1, .36, 1); }
+/* Resting, the row is already a small card: the raised fill and a visible border. Pointed at or reached by keyboard, it
+   steps up once more: a lighter fill, a lighter border and a 1px lift. Mouse only for hover, because a phone keeps
+   :hover on a tapped row. */
 @media (hover: hover) {
-  button.hand:not(:disabled):hover { background: var(--raised); border-color: color-mix(in srgb, var(--muted) 45%, transparent); transform: translateY(-1px); }
+  button.hand:not(:disabled):hover { background: var(--glass-strong); border-color: color-mix(in srgb, var(--muted) 65%, transparent); transform: translateY(-1px); }
 }
-button.hand:not(:disabled):focus-visible { background: var(--raised); border-color: color-mix(in srgb, var(--muted) 45%, transparent); transform: translateY(-1px); }
-button.hand:not(:disabled):active { background: var(--hover); transform: none; transition-duration: 100ms; }
+button.hand:not(:disabled):focus-visible { background: var(--glass-strong); border-color: color-mix(in srgb, var(--muted) 65%, transparent); transform: translateY(-1px); }
+button.hand:not(:disabled):active { background: var(--raised); transform: none; transition-duration: 100ms; }
 @media (prefers-reduced-motion: reduce) {
   .hand { transition-property: background-color, border-color; }
   button.hand:not(:disabled):hover, button.hand:not(:disabled):focus-visible { transform: none; }
