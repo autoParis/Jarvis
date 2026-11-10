@@ -7,7 +7,7 @@
 // - Every status change is kept with its time (migration_status_log), so a later sheet sync never has to guess.
 // - Meeting set carries the meeting time (meeting_at, UTC). The owner's page cannot set Meeting set without one; the brain may,
 //   and the row then shows "Pick a time". Leaving Meeting set clears it from the row; the log keeps it.
-// - Nothing is written to the sheet. The sheet stays the record.
+// - Nothing here writes to the sheet. The sheet stays the record. Only the daily sync (sheetsync.ts) writes to it, through bin/sheet-edit.
 import { OWNER } from './config.ts';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
