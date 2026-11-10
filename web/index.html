@@ -175,6 +175,8 @@
     <button type="button" class="ink-done">Done</button>
   </div>
 </div>
+<!-- jarvisd serves new web code, but the owner is busy: the page reloads once he is idle, or now on a tap (web/reload.js). -->
+<button type="button" id="reload-btn" class="reload-btn" title="Jarvis has new code. Reload to use it." hidden>Reload</button>
 <script src="/markdown.js"></script>
 <script src="/askcard.js"></script>
 <script src="/paste.js"></script>
@@ -198,6 +200,7 @@ import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
 import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml, chatDecisionHtml, startedNoticeHtml, undoDeadline } from '/worklist.js';
 import { makeBackNav, makeDrafts } from '/backnav.js';
+import { makeReloader, makeTyped, busyReason } from '/reload.js';
 // The mouse's back button and the browser's Back leave a worker's pane, a terminal or a report, as the pane's Back does.
 const backNav = makeBackNav({
   win: window,
@@ -980,6 +983,7 @@ function connect() {
     else if (e.type === 'today') today.show(e.today);
     else if (e.type === 'migration') migration.show(e.migration);
     else if (e.type === 'brain') modelPicker.show(e.brain);
+    else if (e.type === 'version') reloader.seen(e.version);
     else if (e.type === 'audio') {
       lastAudioTurn = e.turnId; lastAudioTotal = e.total; lastAudioAt = Date.now();
       if (soundOn) speech.live(e.turnId, e.total, e.i);
@@ -2082,6 +2086,30 @@ document.addEventListener('visibilitychange', async () => {
 });
 showHands();
 if (handsWanted) handsOn();
+
+// ---- new web code: reload when the owner is idle (web/reload.js) ----
+const typed = makeTyped();
+let lastInput = 0;
+document.addEventListener('input', e => { if (e.isTrusted && e.target.matches?.('input, textarea, [contenteditable]')) typed.input(e.target); }, true);
+for (const ev of ['keydown', 'pointerdown']) document.addEventListener(ev, () => { lastInput = Date.now(); }, true);
+const reloader = makeReloader({
+  // reload() keeps the address, so the open report (the hash) comes back.
+  reload: () => location.reload(),
+  busy: () => busyReason({
+    active: document.activeElement, typed,
+    recording: rec?.state === 'recording' || holding || latched || !!hands?.utt || mic.classList.contains('busy'),
+    overlay: !!popOpen || overlayOpen(),
+    quietFor: Date.now() - lastInput,
+  }),
+  button: show => { $('reload-btn').hidden = !show; },
+});
+$('reload-btn').onclick = () => location.reload();
+// The phone app can sleep in the background with its stream dead. On resume it asks for the version itself.
+async function checkVersion() {
+  try { const r = await fetch('/api/version'); if (r.ok) reloader.seen((await r.json()).version); } catch { /* offline: the stream's reconnect sends it */ }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkVersion(); });
+addEventListener('pageshow', e => { if (e.persisted) checkVersion(); });
 
 renderRequests();
 renderMessages();

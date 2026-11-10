@@ -102,6 +102,9 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .mtoast-row { position: relative; z-index: 20; height: 0; flex: none; }
 .mtoast { position: absolute; top: 8px; right: 16px; max-width: calc(100% - 32px); height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 14px; background: var(--pop); border: 1px solid var(--pop-line); border-radius: 10px; box-shadow: 0 8px 24px rgb(0 0 0 / .12), 0 1px 3px rgb(0 0 0 / .1); font-size: 14px; animation: rise .16s ease; }
 .mtoast[hidden] { display: none; }
+/* New web code while the owner is busy (web/reload.js): a small pill at the bottom center, above the composer and popups */
+.reload-btn { position: fixed; z-index: 60; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%); height: 32px; padding: 0 14px; border: 0; border-radius: 16px; background: var(--ink); color: var(--on-ink); font: inherit; font-size: 13px; font-weight: 600; box-shadow: 0 4px 14px rgb(0 0 0 / .18); cursor: pointer; }
+.reload-btn[hidden] { display: none; }
 .mtoast > svg { width: 16px; height: 16px; color: var(--warn); }
 .mt-who { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt-at { color: var(--warn); font-weight: 600; white-space: nowrap; }
