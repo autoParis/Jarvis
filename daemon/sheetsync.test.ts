@@ -192,7 +192,7 @@ test('a changed lead updates only its own stage cell', () => {
   assert.deepEqual(r.writes.map(w => w.cell), ['Overview!C5']);
   assert.equal(r.added.length, 0);
   const last = t.valueWrites().slice(before);
-  assert.deepEqual(last.flatMap(c => c.body.data.map((d: { range: string }) => d.range)), ['Overview!C5']);
+  assert.deepEqual(last.flatMap(c => c.body.data.map((d: { range: string }) => d.range)), ['Overview!C5:C5']);
   assert.equal(t.state().tabs.Overview[4][2], 'Migrated');
 });
 
@@ -266,6 +266,22 @@ test('an existing row with no lead id gets one, and a sheet with no spare column
   const p = plan([], s.tabs.Dealerships, s.tabs.Overview, { keys: {}, cells: {} }, { Dealerships: 30, Overview: 31 }, 'x', { Dealerships: 30, Overview: 14 });
   const kinds = (p.edit?.requests ?? []).map(q => Object.keys(q)[0]);
   assert.deepEqual(kinds, ['appendDimension', 'updateDimensionProperties', 'appendDimension', 'updateDimensionProperties']);
+});
+
+test('a lead row left outside its row group, as after a failed group step, joins the group on the next run', () => {
+  const t = setup();
+  t.add('Zoé Côté', 2);
+  t.sync('write');
+  const s = t.state();
+  for (const sh of s.sheets) sh.rowGroups = sh.rowGroups.filter((g: { range: { startIndex: number } }) => g.range.startIndex !== 4 && g.range.startIndex !== 6);
+  writeFileSync(join(t.dataDir, '..', 'state.json'), JSON.stringify(s));
+  const r = t.sync('write');
+  assert.equal(r.outcome, 'ok', r.error);
+  assert.equal(r.writes.length, 0);
+  assert.deepEqual(r.grouped?.sort(), ['Dealerships!AB5', 'Overview!M7']);
+  const groups = t.state().sheets.flatMap((x: { rowGroups: { range: { startIndex: number; endIndex: number } }[] }) => x.rowGroups.map(g => [g.range.startIndex, g.range.endIndex]));
+  assert.deepEqual(groups, [[2, 4], [6, 7], [2, 3], [4, 5]]);
+  assert.equal(t.sync('write').outcome, 'nothing');
 });
 
 test('a dry run writes nothing and saves no baseline', () => {

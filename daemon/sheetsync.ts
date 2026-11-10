@@ -118,6 +118,26 @@ function dealershipRows(dRows: Grid, oRows: Grid, key: string) {
 }
 
 /**
+ * One write per row and input mode instead of one per cell: sheet-edit reads back each write, and Google allows 60 reads a
+ * minute. A cell between two written cells is null, which sheet-edit leaves alone and does not read back.
+ */
+function byRow(cells: Write[]): Write[] {
+  const rows = new Map<string, { tab: string; row: string; mode: Write['inputOption']; cols: Map<number, Cell | null> }>();
+  for (const w of cells) {
+    const m = /^(\w+)!([A-Z]+)(\d+)$/.exec(w.range)!;
+    const k = `${m[1]}!${m[3]}!${w.inputOption ?? 'RAW'}`;
+    if (!rows.has(k)) rows.set(k, { tab: m[1], row: m[3], mode: w.inputOption, cols: new Map() });
+    rows.get(k)!.cols.set(colNumber(m[2]), w.values[0][0]);
+  }
+  return [...rows.values()].map(r => {
+    const cols = [...r.cols.keys()], lo = Math.min(...cols), hi = Math.max(...cols);
+    const values = Array.from({ length: hi - lo + 1 }, (_, i) => r.cols.has(lo + i) ? r.cols.get(lo + i)! : null);
+    return { range: `${r.tab}!${colName(lo)}${r.row}:${colName(hi)}${r.row}`, values: [values], ...(r.mode ? { inputOption: r.mode } : {}) };
+  });
+}
+const colNumber = (c: string) => [...c].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+
+/**
  * The edit for one run, computed from the leads, both tabs read with the FORMULA render option, and the last baseline.
  * Pure: it reads and writes nothing. `sheetIds` are the tab ids the requests name, `columns` each tab's column count.
  */
@@ -322,13 +342,20 @@ export function plan(leads: Lead[], dRows: Grid, oRows: Grid, base: Baseline, sh
     requests.push({ insertDimension: { range: { sheetId: sheetIds[ins.tab], dimension: 'ROWS', startIndex: ins.at, endIndex: ins.at + ins.rows.length }, inheritFromBefore: true } });
   }
 
-  const allWrites: Write[] = [...writes.map(({ range, values }) => ({ range, values })), ...newWrites];
+  const allWrites = byRow([...writes.map(({ range, values }) => ({ range, values })), ...newWrites]);
   if (!allWrites.length) return p;
   // A lead id written on an existing row fills an empty cell: state it, in the coordinates of the read, when the column exists.
   for (const w of writes) if (w.col === uidCol(w.tab) && columns[w.tab] > w.col) expected.push({ range: a1(w.tab, w.col, w.row0 + 1), values: [[at(grid(w.tab), w.row0, w.col)]] });
+  // With no insert, the rows have not moved, so each merged write states every current cell of its own range. sheet-edit
+  // then checks the whole segment, and every write sits inside an expected range as it requires.
+  const segment = (range: string): Grid => {
+    const m = /^(\w+)!([A-Z]+)(\d+):([A-Z]+)\d+$/.exec(range)!;
+    const g = grid(m[1] as Tab), r0 = Number(m[3]) - 1;
+    return [Array.from({ length: colNumber(m[4]) - colNumber(m[2]) + 1 }, (_, i) => at(g, r0, colNumber(m[2]) + i))];
+  };
   p.edit = {
     description: `Migration list sync: ${p.added.length} new person row(s), ${p.writes.length} cell(s)`,
-    expected,
+    expected: requests.length ? expected : allWrites.map(w => ({ range: w.range, values: segment(w.range) })),
     writes: allWrites,
     ...(requests.length ? { requests, verify } : {}),
   };
@@ -364,6 +391,23 @@ export function groupEdit(inserted: Plan['inserted'], meta: SheetMeta[], keysAt:
   return { description: 'Migration list sync: new rows join their dealership group', expected, writes: [], requests, verify: expected };
 }
 
+/** The group edit for every lead row (found by its lead id) that sits in no row group, as runs of adjacent rows. */
+export function groupFixEdit(uids: Set<string>, dRows: Grid, oRows: Grid, meta: SheetMeta[]): EditFile | undefined {
+  const runs: Plan['inserted'] = [];
+  for (const tab of ['Dealerships', 'Overview'] as Tab[]) {
+    const g = tab === 'Dealerships' ? dRows : oRows, uc = tab === 'Dealerships' ? D.UID : O.UID;
+    const groups = (meta.find(s => s.properties.title === tab)?.rowGroups ?? []).filter(x => x.depth >= 1);
+    const loose = g.map((r, i) => i).filter(i => uids.has(text(g[i][uc])) && !groups.some(x => x.range.startIndex <= i && i < x.range.endIndex));
+    for (const i of loose) {
+      const last = runs[runs.length - 1];
+      if (last && last.tab === tab && last.at + last.n === i) last.n++;
+      else runs.push({ tab, dealerKey: '', at: i, n: 1, keys: [] });
+    }
+  }
+  if (!runs.length) return undefined;
+  return groupEdit(runs, meta, (tab, row1) => text((tab === 'Dealerships' ? dRows : oRows)[row1 - 1]?.[tab === 'Dealerships' ? D.AB : O.M]));
+}
+
 /** Every lead, removed ones too, from the migration tables. */
 export function readLeads(db: DatabaseSync): Lead[] {
   const rows = db.prepare(`SELECT p.uid, p.name, p.status, p.meeting_at, p.note, p.source, p.removed_at, d.name AS dealership, d.sheet_key, d.on_sheet
@@ -382,6 +426,8 @@ export type RunResult = {
   error?: string; dir: string;
   writes: Item[]; added: Item[]; overwritten: Item[]; kept: Item[]; skipped: Item[];
   counts: Plan['counts'];
+  /** The key cells of the lead rows the row-group step grouped. */
+  grouped?: string[];
   sheetEdit: string[];
 };
 export type SyncDeps = {
@@ -429,36 +475,38 @@ export function runSync(mode: 'dry-run' | 'write', deps: SyncDeps): RunResult {
     const ids = { Dealerships: id('Dealerships'), Overview: id('Overview') };
     const cols = (t: string) => meta.find(m => m.properties.title === t)?.properties.gridProperties?.columnCount ?? Infinity;
     const base = readBaseline(deps.dataDir);
-    const p = plan(readLeads(deps.db), gws.tab('Dealerships'), gws.tab('Overview'), base, ids, `https://docs.google.com/spreadsheets/d/${deps.sheetId}/edit`, { Dealerships: cols('Dealerships'), Overview: cols('Overview') });
+    const dRows = gws.tab('Dealerships'), oRows = gws.tab('Overview');
+    const p = plan(readLeads(deps.db), dRows, oRows, base, ids, `https://docs.google.com/spreadsheets/d/${deps.sheetId}/edit`, { Dealerships: cols('Dealerships'), Overview: cols('Overview') });
     Object.assign(res, { writes: p.writes, added: p.added, overwritten: p.overwritten, kept: p.kept, skipped: p.skipped, counts: p.counts });
     for (const c of p.overwritten) log('migration sheet sync replaces a hand edit', { ...c, mode });
-    if (!p.edit) {
-      // Nothing to write. The baseline still learns the cells that agree, so a later hand edit is told apart.
-      if (mode === 'write') writeFileSync(join(deps.dataDir, BASELINE), JSON.stringify(p.baseline, null, 2));
-      return finish(res);
+    let wrote = false;
+    if (p.edit) {
+      const file = join(dir, 'edit.json');
+      writeFileSync(file, JSON.stringify(p.edit, null, 2));
+      const first = deps.sheetEdit(file, mode === 'dry-run');
+      res.sheetEdit.push(...first.output.split('\n').filter(Boolean));
+      if (first.code === 3) return finish({ ...res, outcome: 'aborted', error: 'a target cell changed after the read; nothing written, the next run tries again' });
+      if (first.code !== 0) return finish({ ...res, outcome: 'failed', error: `sheet-edit exited ${first.code}` });
+      for (const w of p.writes) log(mode === 'write' ? 'migration sheet sync wrote' : 'migration sheet sync would write', { cell: w.cell, person: w.person, field: w.field, from: w.from, to: w.to });
+      wrote = true;
     }
-    const file = join(dir, 'edit.json');
-    writeFileSync(file, JSON.stringify(p.edit, null, 2));
-    const first = deps.sheetEdit(file, mode === 'dry-run');
-    res.sheetEdit.push(...first.output.split('\n').filter(Boolean));
-    if (first.code === 3) return finish({ ...res, outcome: 'aborted', error: 'a target cell changed after the read; nothing written, the next run tries again' });
-    if (first.code !== 0) return finish({ ...res, outcome: 'failed', error: `sheet-edit exited ${first.code}` });
-    for (const w of p.writes) log(mode === 'write' ? 'migration sheet sync wrote' : 'migration sheet sync would write', { cell: w.cell, person: w.person, field: w.field, from: w.from, to: w.to });
-    if (mode === 'write') {
-      // Saved before the group step: the cells are verified, and a failed group step must not make them look like hand edits.
-      writeFileSync(join(deps.dataDir, BASELINE), JSON.stringify(p.baseline, null, 2));
-      if (p.inserted.length) {
-        const after = new Map(['Dealerships', 'Overview'].map(t => [t, gws.tab(t)]));
-        const g = groupEdit(p.inserted, gws.meta(), (tab, row1) => text(after.get(tab)?.[row1 - 1]?.[tab === 'Dealerships' ? D.AB : O.M]));
-        if (g) {
-          const gf = join(dir, 'groups.json');
-          writeFileSync(gf, JSON.stringify(g, null, 2));
-          const second = deps.sheetEdit(gf, false);
-          res.sheetEdit.push(...second.output.split('\n').filter(Boolean));
-          if (second.code !== 0) return finish({ ...res, outcome: 'failed', error: `the cells are written and verified, but the row-group step exited ${second.code}` });
-        }
-      }
+    // Saved before the group step: the cells are verified, and a failed group step must not make them look like hand edits.
+    // With nothing to write, the baseline still learns the cells that agree, so a later hand edit is told apart.
+    if (mode === 'write') writeFileSync(join(deps.dataDir, BASELINE), JSON.stringify(p.baseline, null, 2));
+    // Every lead row outside a row group joins its dealership's group: the rows this run added, and any a failed run left.
+    // A dry run checks the sheet as it is now, so rows it would add are not in it yet.
+    const uids = new Set(Object.keys(p.baseline.keys));
+    const g = groupFixEdit(uids, mode === 'write' && wrote ? gws.tab('Dealerships') : dRows, mode === 'write' && wrote ? gws.tab('Overview') : oRows, mode === 'write' && wrote ? gws.meta() : meta);
+    if (g) {
+      const gf = join(dir, 'groups.json');
+      writeFileSync(gf, JSON.stringify(g, null, 2));
+      const second = deps.sheetEdit(gf, mode === 'dry-run');
+      res.sheetEdit.push(...second.output.split('\n').filter(Boolean));
+      res.grouped = g.expected.map(c => c.range);
+      if (second.code !== 0) return finish({ ...res, outcome: 'failed', error: `${wrote ? 'the cells are written and verified, but ' : ''}the row-group step exited ${second.code}` });
+      wrote = true;
     }
+    if (!wrote) return finish(res);
     return finish({ ...res, outcome: 'ok' });
   } catch (e) {
     return finish({ ...res, outcome: 'failed', error: (e as Error).message });
@@ -478,6 +526,7 @@ export function reportOf(r: RunResult): string {
     ...section('Hand edits on the sheet that the Leads list replaces', r.overwritten),
     ...section('Kept as the sheet has it', r.kept),
     ...section('Skipped', r.skipped),
+    ...(r.grouped?.length ? [`## Rows ${r.mode === 'dry-run' ? 'it would put' : 'put'} into their dealership's row group`, '', ...r.grouped.map(c => `- ${c}`), ''] : []),
     ...(r.sheetEdit.length ? ['## sheet-edit output', '', '```', ...r.sheetEdit, '```', ''] : []),
   ].join('\n');
 }
