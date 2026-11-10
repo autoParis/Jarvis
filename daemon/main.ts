@@ -28,6 +28,7 @@ import { makeResumer, type ResumeStart } from './resume.ts';
 import { steer, stop } from './steer.ts';
 import { listenConfig, judge } from './listen.ts';
 import { askCard, answerAsk, auditEntries, closeSteeredAsks, type AskCard } from './asks.ts';
+import { addBrainAsk, brainAskDone, briefLine as brainAskLine, isBrainAsk } from './brainasks.ts';
 import { gonePromptNotices, fillPromptContexts } from './prompt.ts';
 import { makeCheck, readDelivery, masterHead, CHECK_MS } from './check.ts';
 import { reminderRoute } from './reminders.ts';
@@ -308,6 +309,7 @@ function nativeLines(ws: NativeWorker[]): string {
   return `Native workers (Claude Code sessions jarvisd runs; only these names may message you, answer with jarvis-native reply --worker <name>):\n${live.map(w => `- [native] name=${w.name} worker=${ROW_PREFIX}${w.id} state=${w.state}${w.waiting_for ? ` waiting_for=${JSON.stringify(w.waiting_for)}` : ''}${w.outcome ? ` outcome=${w.outcome}` : ''}${w.report ? ` last_report=${JSON.stringify(w.report.slice(0, 200))}` : ''}`).join('\n')}`;
 }
 function fmtItem(i: Item): string {
+  if (isBrainAsk(i)) return brainAskLine(i);
   const opts = i.options ? ` options=${i.options}` : '';
   return `- [${i.kind}]${i.status === 'replying' ? ' status=replying (a reply may already have gone out; check request-show)' : ''} message_id=${i.external_id} dispatch=${i.dispatch_id ?? '?'} subject=${JSON.stringify(i.subject)} body=${JSON.stringify(i.body)}${opts}`;
 }
@@ -886,6 +888,18 @@ http.createServer(async (req, res) => {
       if (store.item(id)?.source === 'gmail') { messages.dropProposals(id); messagesChanged(); } // jarvis-act email-done
       work.poll().catch(() => {}); // the answered ask leaves "waiting" (and the Requests badge) now, not in up to 30 s
       return send(res, 204);
+    }
+    // jarvis-act ask: Jarvis's own question to the owner as an ask card, the same as a worker's (brainasks.ts).
+    if (req.method === 'POST' && url === '/api/internal/ask') {
+      const r = addBrainAsk(store, await json(req));
+      if (r.item) { log('brain ask added', { item: r.item.external_id }); askChanged(r.item.external_id); }
+      return send(res, r.status, r.body);
+    }
+    // jarvis-act ask-done: the owner answered a brain ask in the chat, so its card closes.
+    if (req.method === 'POST' && url === '/api/internal/ask-done') {
+      const r = brainAskDone(store, await json(req));
+      if (r.item) { log('brain ask answered in the chat', { item: r.item.external_id }); askChanged(r.item.external_id); }
+      return send(res, r.status, r.body);
     }
     // jarvis-orca steer went out: it closes that worker's open escalations, in the owner's name or Jarvis's own.
     if (req.method === 'POST' && url === '/api/internal/steered') {

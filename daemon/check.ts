@@ -8,6 +8,7 @@ import { AT_PROMPT, type Work, type WorkRow } from './work.ts';
 import { isQuietHours, QUIET_HOURS, sqlTime } from './push.ts';
 import { eastern } from './reminders.ts';
 import type { Log } from './log.ts';
+import { isBrainAsk, checkLine } from './brainasks.ts';
 
 // The ten-minute check: during the day jarvisd reads open asks, workers, requests and reminders in code, and wakes the
 // brain only when a new finding or a due reminder needs it. Otherwise there is no model call and nothing said. Gmail has its own watcher.
@@ -61,7 +62,7 @@ export function findings(s: { asks: Item[]; requests: Request[]; rows: WorkRow[]
   for (const a of s.asks) {
     if (a.dispatch_id && !live.has(a.dispatch_id)) continue;
     const waited = s.now - Date.parse(`${a.created_at.replace(' ', 'T')}Z`);
-    if (waited >= ASK_WAIT_MS) out.push({ key: `ask:${a.external_id}`, line: `${a.kind} unanswered for ${Math.floor(waited / 60_000)} min: message_id=${a.external_id} dispatch=${a.dispatch_id ?? '?'} subject=${JSON.stringify(a.subject)}` });
+    if (waited >= ASK_WAIT_MS) out.push({ key: `ask:${a.external_id}`, line: isBrainAsk(a) ? checkLine(a, Math.floor(waited / 60_000)) : `${a.kind} unanswered for ${Math.floor(waited / 60_000)} min: message_id=${a.external_id} dispatch=${a.dispatch_id ?? '?'} subject=${JSON.stringify(a.subject)}` });
   }
   for (const r of s.rows) {
     if (r.kind !== 'worker' || r.sideChat || r.run !== s.jarvisRun) continue;
