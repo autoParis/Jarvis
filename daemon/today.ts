@@ -8,7 +8,8 @@ import { cpus, loadavg } from 'node:os';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Store, TodayRow, Approval } from './store.ts';
-import { ISSUE_RULE, type Gate } from './gate.ts';
+import type { Gate } from './gate.ts';
+import { ISSUE_RULE, readReport } from './workercontract.ts';
 import { requestReport } from './requests.ts';
 import { ROW_PREFIX, IDLE_STOPPED, DESKTOP_WAITING } from './native.ts';
 import { QUIET_HOURS, sqlTime } from './push.ts';
@@ -104,8 +105,8 @@ export function parseReport(subject: string, body: string): { result: string; no
   const rest = m ? body.replace(m[0], '') : body;
   const para = rest.split(/\n\s*\n/).map(p => p.trim()).find(Boolean) ?? '';
   // A native worker's report opens with its `DONE: <one sentence>` line, and that sentence is the result.
-  const done = /^(?:DONE|FAILED):\s*(.+)/.exec(para);
-  const first = done ? done[1].trim() : para;
+  const r = readReport(para);
+  const first = (r.label === 'DONE' || r.label === 'FAILED') && r.line ? r.line : para;
   return { result: (first || subject || 'The worker reported no result.').slice(0, 600), notProven: m?.[1].trim() || 'The worker did not say what it left unproven.' };
 }
 

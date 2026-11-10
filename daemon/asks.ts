@@ -9,6 +9,8 @@ import { namedActionIn, namedLabel, namedQuestion, refusedByPermissionLayer, typ
 import { readStopNotice, readScreen, stillAt, storedContext, type StopNotice, type PromptOption, type PromptContext } from './prompt.ts';
 import { explainCredentialCommand } from './promptexplain.ts';
 import { brainCard, answerBrainAsk, isBrainAsk } from './brainasks.ts';
+import { fields } from './workercontract.ts';
+export { fields } from './workercontract.ts';
 
 // A worker's question or escalation as a card in the chat: title, markdown body, and the options as buttons.
 // The card is built in code from the stored item. The brain still speaks the ask; nothing here is spoken.
@@ -59,12 +61,8 @@ export type AskCard = {
   parts?: { doing?: string; more?: string; image?: string };
 };
 
-const LABELS = ['STORY', 'WHERE', 'QUESTION', 'CONTEXT', 'IMAGE', 'OPTIONS', 'FAILED', 'PROPOSES', 'PROPOSAL', 'PROPOSE'] as const;
-const LABEL_LINE = new RegExp(`^\\s*(${LABELS.join('|')})\\s*:\\s*(.*)$`, 'i');
 // "Options: (a) one; (b) two" or "Options: 1) one 2) two" at the end of a free-form ask.
 const INLINE_OPTIONS = /(?:^|\n|\s)options?\s*:\s*([\s\S]*)$/i;
-// The OPTIONS label in capitals inside a QUESTION line. Lower-case "options:" in prose stays question text.
-const INLINE_OPTIONS_LABEL = /\s+OPTIONS\s*:\s*/;
 const MARKER = /(?:^|\s)\(?([a-z]|\d{1,2})[).]\s+/gi;
 const IMAGE_MARKER = /\[image:\s*([^\]\n]+?)\s*\]/g;
 // A screenshot path written as plain text, e.g. "CONTEXT: mock at /Users/owner/Desktop/a.png".
@@ -76,27 +74,6 @@ const PART_MAX = 220;
 const SENTENCE_END = /(?<=[.!?])(?<!\b(?:e\.g|i\.e|etc|vs)\.)\s+(?=[\p{Lu}"'`(\[])/u;
 const NOT_PROSE = /^\s*(?:[-*+>#|]|\d+[.)]\s|\[image:)/m;
 
-/**
- * The labeled fields of an ask written in the jarvis-ask shape (spec 6.6). A line without a label continues the field
- * above, blank lines included, so markdown paragraphs, lists and headings in a field survive. Text before the first
- * label is kept under PREAMBLE.
- */
-export function fields(body: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  let key = 'PREAMBLE';
-  for (const line of body.replace(/\r\n?/g, '\n').split('\n')) {
-    const m = LABEL_LINE.exec(line);
-    if (m) {
-      key = m[1].toUpperCase(); if (key === 'PROPOSAL' || key === 'PROPOSE') key = 'PROPOSES'; out[key] = m[2];
-      // A one-line ask: "QUESTION: Did it work? OPTIONS: yes because ...; no because ...". The options start a field of their own.
-      const inline = key === 'QUESTION' ? INLINE_OPTIONS_LABEL.exec(m[2]) : null;
-      if (inline) { out.QUESTION = m[2].slice(0, inline.index); key = 'OPTIONS'; out.OPTIONS = m[2].slice(inline.index + inline[0].length); }
-    }
-    else out[key] = key in out ? out[key] + '\n' + line : line;
-  }
-  for (const k of Object.keys(out)) { out[k] = out[k].trim(); if (!out[k]) delete out[k]; }
-  return out;
-}
 
 /** The OPTIONS field ends at its first blank line; anything after it is ask text, not more options. */
 function splitOptions(text: string): { options: string; after: string } {

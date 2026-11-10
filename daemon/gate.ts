@@ -10,35 +10,11 @@ import { SIDE_CHAT_PREFIX } from './work.ts';
 import { shownTitle } from './requests.ts';
 import { NAMED_ACTIONS, namedCardArgs, namedCommand, namedCwd, verifyNamed } from './namedactions.ts';
 import { PROD_MCP_CALL, checkProdCall, makeProdMcp, type ProdMcp } from './prodmcp.ts';
-import { PRODUCT_LABEL } from './config.ts';
-import { NATIVE_FOOTER, ROW_PREFIX, type Native } from './native.ts';
+import { ROW_PREFIX, type Native } from './native.ts';
+import { ISSUE_RULE, NATIVE_ISSUE_RULE, workerBrief, questionSpec, nativeSideChatSpec, sideChatSpec } from './workercontract.ts';
+export { ASK_FOOTER, ISSUE_RULE, CARD_RULE, nativeSideChatSpec, sideChatSpec } from './workercontract.ts';
 
-/** Appended to every worker spec Jarvis dispatches, so asks arrive short enough to speak. */
-export const ASK_FOOTER = `
 
-## Asking the coordinator
-Your coordinator is Jarvis, who reads your questions aloud to ${OWNER}. Ask only what needs a human decision. Phrase every \`orca orchestration ask\` exactly as:
-STORY: <number and topic, at most 8 words>
-WHERE: <what you are doing, one or two short sentences>
-QUESTION: <one sentence>
-CONTEXT: <optional, at most 3 sentences>
-IMAGE: <optional, one absolute path to a .png .jpg .jpeg .webp or .gif>
-OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
-Pass the short choices in one --options flag, separated by commas: --options "Merged,Not yet". Do not repeat the flag, because Orca keeps only the last one. Orca splits on every comma, so write each choice without one. For anything visual, put a screenshot path in IMAGE (under the repo's docs/screens or data/uploads, ~/Desktop, ~/Downloads or ~/orca/workspaces) or a link in CONTEXT. ${OWNER_CAP} sees the picture on the ask card in the app.
-
-If Claude Code's permission layer refuses a command, do not retry it or route around it: a retry hits the same refusal. Escalate, say the permission layer refused it, and quote the whole command. Jarvis itself can run two on ${OWNER}'s Approve tap, and his card offers them when your words give every value: \`gh pr close <number> --repo <owner/name> --comment "<why>"\` and, from the FBM repo, \`node functions/scripts/reusable/pause-client.js --client <id> --hours <hours>\`. It can also run one production ${PRODUCT_LABEL} MCP call on his tap: quote the exact tool name and the whole arguments JSON.
-
-Before each batch of tool calls, write one plain sentence saying what you are about to do. ${OWNER_CAP} reads your conversation as a chat.`;
-
-/**
- * Orca's own brief tells every worker "Don't post to Slack, GitHub, or other channels during the run", and Orca is not
- * modified. That line kept the story 3202 worker from filing the three bugs it proved, though pick-and-ship-v3 tells it to.
- * Story workers get this exception in their task; read-only workers, side chats and Today tasks do not.
- */
-export const ISSUE_RULE = `
-
-## Filing issues
-The Orca brief above says not to post to GitHub. One exception: if this repo has a \`create-issue\` skill (\`.claude/skills/create-issue\`), you may file a GitHub issue for a real finding outside your task's scope, but only by invoking that skill and following it: its duplicate and already-shipped search, the tier, the P and type labels, the template sections and the \`**Tier:**\` line. Never a hand-rolled \`gh issue create\`. Skip its confirmation step, with these limits. Priority P2 or P3 only, never P0 or P1; say in the body why it might deserve more. When the search finds a live issue, comment on it instead of filing. List every issue you filed or commented on, by number, in your worker_done body. Without that skill, file nothing and put the findings in your report.`;
 
 /** The two lines an approval card shows under its one-line question. Plain text, one or two short sentences each. */
 export type ApprovalCard = { approves?: string; restsOn?: string };
@@ -51,28 +27,6 @@ export function cardJson(card: unknown): string | null {
   return out.approves || out.restsOn ? JSON.stringify(out) : null;
 }
 
-/**
- * Appended to every worker spec, after the footer. The owner reads asks, escalations and reports on his phone, and a card
- * with one dense paragraph does not get read (his call, 2026-11-06). The app draws these fields under fixed headings.
- */
-export const CARD_RULE = `
-
-## How ${OWNER} reads your text
-${OWNER_CAP} reads your asks, escalations and final report as cards on his phone. Each card must read in seconds. Follow the asd-ste100 skill (\`~/.claude/skills/asd-ste100/SKILL.md\`): STE-flavored mode for sentences, Strict mode for option choices.
-
-An ask or an escalation uses the fields above. The card shows them under headings, in this order:
-1. STORY is the title line: the story number and the topic.
-2. WHERE is "What the worker is doing": one or two short sentences.
-3. QUESTION is "The question": one sentence, at most 25 words.
-4. OPTIONS: recommended first. Each choice is at most 5 words. Its reason says what that choice changes, in under 10 words.
-5. CONTEXT goes behind a More toggle. Put long detail, numbers, paths and links there, not in QUESTION or WHERE.
-
-Your final report has this shape:
-- The first line: \`DONE: <the result in one sentence>\` or \`FAILED: <one sentence>\`. If your task gives an exact first line, use that line.
-- Then at most 6 short bullets: what changed, the branch and commit, the PR link, what is not proven.
-- Then long detail, if any, under \`## Details\` or other \`##\` headings. The app folds each heading.
-
-Use active voice and simple tenses. Write one idea per sentence. Do not use semicolons.`;
 
 const AUTOMATIC = new Set(['question']);
 /**
@@ -103,18 +57,6 @@ export const isNativeArgs = (action: string, args: any) =>
   !!args && typeof args === 'object' && (NATIVE_BY_DEFAULT.has(action) ? args.orca !== true && args.native !== false
     : action === 'terminal-send' ? typeof args.terminal === 'string' && args.terminal.startsWith(ROW_PREFIX)
     : typeof args.dispatch === 'string' && args.dispatch.startsWith(ROW_PREFIX));
-/** The issue rule for a worker that got no Orca brief. */
-const NATIVE_ISSUE_RULE = ISSUE_RULE.replace('The Orca brief above says not to post to GitHub. One exception: if', 'One exception to not posting on GitHub: if');
-/** A read-only question worker's task. `done` is how it reports: Orca's worker_done, or the native DONE line. */
-const questionSpec = (question: string, done: string) => `Read-only research for ${OWNER}. Do not edit, create or delete files, do not commit, do not open or change PRs or issues, do not run anything that changes state.\n\nQuestion: ${question}\n\nUse the repo's own CLAUDE.md and skills. Then ${done} with a summary of at most 4 short sentences that can be read aloud, and put any detail (file paths, links) after a blank line in the same summary.`;
-/** A native side chat: the same session as the Orca one, but it ends with a DONE line instead of worker_done, and asks nothing. */
-export const nativeSideChatSpec = (text: string) => `Side chat with ${OWNER}. He started it from the Jarvis app to talk with you directly, apart from his main Jarvis conversation. This is a normal working session: read, edit, run and commit what he asks for.
-
-He reads and answers you in this conversation from the Jarvis app, so talk to him here, in plain replies; every message of his arrives as a message from another session. Do not ask jarvis-brain anything. When ${OWNER} says he is done, end with a line starting DONE: and a one-sentence summary; until then, never write DONE or FAILED.
-
-${text.trim() ? `His first message:
-
-${text}` : 'He has not written yet. Reply with one short line saying you are ready and where you are working (the folder, and the branch if it is a worktree), then wait for his first message.'}`;
 /**
  * The Orca Run and identity terminal, which an Orca command needs. With the Orca link off (JARVIS_ORCA, config.ts) jarvisd
  * makes neither, so an Orca start or message is refused before anything runs, with the reason.
@@ -138,14 +80,6 @@ const absPath = (v: unknown, name: string): string => {
 // Actions that start a worker. Orca saying ok without a dispatch id is not proof that a worker exists.
 const STARTS_WORKER = new Set(['worker-start', 'question', 'side-chat', 'today-start', 'today-draft']);
 
-/** A side chat is a normal working session that the owner talks to in the app or in Orca, outside the Jarvis conversation. */
-export const sideChatSpec = (text: string) => `Side chat with ${OWNER}. He started it from the Jarvis app to talk with you directly, apart from his main Jarvis conversation. This is a normal working session: read, edit, run and commit what he asks for.
-
-He reads and answers you in this conversation, from the Jarvis app or from Orca, so talk to him here. Do not use \`orca orchestration ask\`, and do not send worker_done on your own. When ${OWNER} says he is done, send worker_done with a one-sentence summary.
-
-${text.trim() ? `His first message:
-
-${text}` : 'He has not written yet. Reply with one short line saying you are ready and where you are working (the folder, and the branch if it is a worktree), then wait for his first message.'}`;
 
 /** Connectors few workers use, each with the deny rule that removes its tools. */
 const OPTIONAL_CONNECTORS = [
@@ -202,11 +136,11 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('args must be a JSON object');
   switch (action) {
     case 'today-draft': // a read-only worker in the repo's main checkout, started by today.ts. Its spec says read-only.
-      if (isNativeArgs(action, args)) return ['native', 'start', absPath(args.repo, 'repo (absolute path)'), str(args.spec, 'spec') + NATIVE_FOOTER + CARD_RULE];
+      if (isNativeArgs(action, args)) return ['native', 'start', absPath(args.repo, 'repo (absolute path)'), str(args.spec, 'spec') + workerBrief('native')];
       orcaIds(id);
       return ['orca', 'orchestration', 'worker-start', '--run', id.run, '--from', id.handle,
         '--worktree', `path:${absPath(args.repo, 'repo (absolute path)')}`, '--agent', 'claude', '--model', 'claude-opus-5-5',
-        '--task-title', str(args.taskTitle, 'taskTitle'), '--spec', str(args.spec, 'spec') + ASK_FOOTER + CARD_RULE, '--json'];
+        '--task-title', str(args.taskTitle, 'taskTitle'), '--spec', str(args.spec, 'spec') + workerBrief('orca'), '--json'];
     case 'today-start': // the owner's tap, or his Go on the item. today.ts writes the spec: a task's never covers an outward action, and a story's carries ISSUE_RULE.
     case 'worker-start': {
       const repo = absPath(args.repo, 'repo (absolute path)');
@@ -219,14 +153,14 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
         if (!rerun && !['new-top-level', 'new-child', 'main'].includes(wt)) throw new Error('a native worker takes worktree main, new-top-level or new-child');
         // A story's spec from today.ts carries the Orca wording of the issue rule; a native worker has no Orca brief.
         const spec = str(args.spec, 'spec').replace(ISSUE_RULE, NATIVE_ISSUE_RULE);
-        return ['native', 'start', rerun ?? repo, spec + (action === 'worker-start' ? NATIVE_ISSUE_RULE : '') + NATIVE_FOOTER + CARD_RULE];
+        return ['native', 'start', rerun ?? repo, spec + workerBrief('native', { issues: action === 'worker-start' })];
       }
       orcaIds(id);
       const fresh = wt === 'new-top-level' || wt === 'new-child';
       // Orca takes --repo, --base-branch and --name only when it creates the worktree.
       const place = fresh ? ['--worktree', wt, '--repo', `path:${repo}`] : ['--worktree', wt === 'main' ? `path:${repo}` : wt];
       const cmd = ['orca', 'orchestration', 'worker-start', '--run', id.run, '--from', id.handle,
-        '--spec', str(args.spec, 'spec') + (action === 'worker-start' ? ISSUE_RULE : '') + ASK_FOOTER + CARD_RULE, ...place, '--agent', args.agent ?? 'claude',
+        '--spec', str(args.spec, 'spec') + workerBrief('orca', { issues: action === 'worker-start' }), ...place, '--agent', args.agent ?? 'claude',
         '--model', args.model ?? 'claude-opus-5-5'];
       if (args.keepOpen) cmd.push('--keep-open');
       if (args.taskTitle) cmd.push('--task-title', String(args.taskTitle));
@@ -237,17 +171,17 @@ export function buildCommand(action: string, args: any, id: Identity, item: (ext
     case 'question': { // automatic tier: read-only Opus worker in the repo's main checkout
       const repo = absPath(args.repo, 'repo (absolute path)');
       const question = str(args.question, 'question');
-      if (isNativeArgs(action, args)) return ['native', 'start', repo, questionSpec(question, 'answer in one final message whose first line is exactly `DONE: answered` and whose next lines are the answer, starting') + NATIVE_FOOTER + CARD_RULE];
+      if (isNativeArgs(action, args)) return ['native', 'start', repo, questionSpec(question, 'answer in one final message whose first line is exactly `DONE: answered` and whose next lines are the answer, starting') + workerBrief('native')];
       orcaIds(id);
       return ['orca', 'orchestration', 'worker-start', '--run', id.run, '--from', id.handle,
         '--worktree', `path:${repo}`, '--agent', 'claude', '--model', 'claude-opus-5-5',
         '--task-title', `Question: ${question.slice(0, 60)}`,
-        '--spec', questionSpec(question, 'report worker_done') + ASK_FOOTER + CARD_RULE,
+        '--spec', questionSpec(question, 'report worker_done') + workerBrief('orca'),
         '--json'];
     }
     case 'side-chat': {
       // A native side chat may start with no first message (the new-session picker); Orca's still needs one.
-      if (isNativeArgs(action, args)) return ['native', 'start', absPath(args.repo, 'repo (absolute path)'), nativeSideChatSpec(typeof args.text === 'string' ? args.text : '') + NATIVE_FOOTER + CARD_RULE];
+      if (isNativeArgs(action, args)) return ['native', 'start', absPath(args.repo, 'repo (absolute path)'), nativeSideChatSpec(typeof args.text === 'string' ? args.text : '') + workerBrief('native')];
       const text = str(args.text, 'text');
       orcaIds(id);
       return ['orca', 'orchestration', 'worker-start', '--run', id.run, '--from', id.handle,

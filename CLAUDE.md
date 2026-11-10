@@ -16,6 +16,8 @@ brain, skip this file.
 - `store.ts`: the SQLite store (`data/jarvis.db`). Items, approvals, requests, turns, state.
 - `brain.ts`, `brainmodel.ts`, `worksteps.ts`: the one long-lived Claude Code brain session, its model, and its turn steps.
 - `gate.ts`: the approval gate behind `bin/jarvis-act`. Every action the brain proposes, its tier, and what Approve runs.
+- `workercontract.ts`: every rule Jarvis writes into a worker's brief, and the parsers that read the worker's asks and
+  reports back. Change a label or a brief here, and `workercontract.test.ts` proves it still reads back.
 - `native.ts`, `nativeroutes.ts`: Jarvis's workers (Claude Code sessions), their hooks and their routes.
 - `asks.ts`, `brainasks.ts`: worker asks and the brain's own asks as cards.
 - `requests.ts`: the Requests sidebar, one row per worker Jarvis started.

@@ -9,6 +9,7 @@ import { fields, STOP_ANSWER } from './asks.ts';
 import { readStopNotice } from './prompt.ts';
 import { findWorkerSession, readChatFile, type Read } from './transcript.ts';
 import { ROW_PREFIX } from './native.ts';
+import { readReport } from './workercontract.ts';
 
 // The Requests sidebar: one row per thing the owner asked Jarvis for, from the worker start to its PR. A request is
 // recorded when the gate starts a worker for him, and its status follows the work poller. Nothing here touches
@@ -334,7 +335,7 @@ export function makeRequests(opts: {
       // A native worker sent more work after its DONE or FAILED is working again until its next report: that report
       // no longer settles the request. Its PR link still counts.
       // native.ts keeps one report column: a later turn that only asks something replaces the text but not the outcome.
-      const final = !r.dispatch_id.startsWith(ROW_PREFIX) || /^\s*(DONE|FAILED)\b/i.test(doneMsg?.body ?? '');
+      const final = !r.dispatch_id.startsWith(ROW_PREFIX) || readReport(doneMsg?.body ?? '').outcome !== null;
       const settled = doneMsg && final && !repliedAfter(store, r.dispatch_id, doneMsg.created_at) ? doneMsg : undefined;
       // A native worker's row stays listed for a day after its DONE or FAILED line, so once it has reported it is not live.
       const isLive = rows.some(x => x.id === r.dispatch_id) && !(r.dispatch_id.startsWith(ROW_PREFIX) && settled);
