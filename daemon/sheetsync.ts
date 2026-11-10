@@ -2,11 +2,15 @@
 // Part of the temporary migration pieces listed in docs/migration/README.md. Rules:
 // - It writes only through bin/sheet-edit, with an `expected` value for every cell it changes, so a cell edited
 //   after the read aborts the write (sheet-edit exit 3) and nothing is written.
-// - Each lead is a person sub-line keyed `<dealership key>/<folded name>`: Dealerships column AB, Overview column M.
+// - Each lead is a person sub-line with a readable key `<dealership key>/<folded name>` (Dealerships AB, Overview M, which
+//   the formulas use) and the lead's stable uid in a hidden "Lead id" column (Dealerships AE, Overview O). The sync matches a
+//   row by the uid, so a rename in the Leads list updates the same row. A row without a uid matches once by its key.
 //   The sync owns five cells of that person: the name (Dealerships B, Overview A), the stage (Overview C, the dropdown
-//   Dealerships C reads), the meeting time in Eastern (Dealerships G), the contact channel (Dealerships I) and the note (Dealerships V).
-// - A baseline file keeps, for each owned cell, the lead value and the sheet value of the last sync. A cell whose sheet
-//   value moved since then is the owner's edit: it is kept, and reported as a conflict when the lead changed too.
+//   Dealerships C reads), the meeting time in Eastern (Dealerships G), the contact (Dealerships I) and the note (Dealerships V).
+// - The Leads list is the owner's source of truth for people (his rule, 2026-11-10). The stage always follows it, Migrated
+//   included. Another cell follows a lead change. A hand edit the sync replaces is listed in the run log as overwritten.
+// - A baseline file keeps, for each owned cell, the lead value and the sheet value of the last sync, to tell a lead change
+//   from a hand edit. Without a lead change, the sheet's own text in the other cells stays.
 // - A new lead adds a Dealerships sub-line and an Overview child row at the end of its dealership's block, and joins the
 //   block's row group. The counts (Dealerships AD, Overview B) are formulas that count the keys, so they follow.
 // - It never deletes a row, never writes a password or token, and never writes for a dealership missing from the sheet.
@@ -23,27 +27,30 @@ export type Lead = {
   status: Status; meetingAt: string | null; note: string; source: string; removed: boolean;
 };
 type Group = { range: { sheetId: number; dimension: string; startIndex: number; endIndex: number }; depth: number; collapsed?: boolean };
-export type SheetMeta = { properties: { sheetId: number; title: string }; rowGroups?: Group[] };
+export type SheetMeta = { properties: { sheetId: number; title: string; gridProperties?: { columnCount?: number } }; rowGroups?: Group[] };
+type Tab = 'Dealerships' | 'Overview';
 export type Field = 'name' | 'stage' | 'meeting' | 'contact' | 'note';
 export type Baseline = { keys: Record<string, string>; cells: Record<string, { lead: string; sheet: string }> };
 type Write = { range: string; values: (Cell | null)[][]; inputOption?: 'RAW' | 'USER_ENTERED' };
 type Check = { range: string; values: Grid };
 export type EditFile = { description: string; expected: Check[]; writes: Write[]; requests?: object[]; verify?: Check[] };
 /** One line of the report. `cell` is the A1 cell after the rows are inserted, the one sheet-edit writes. */
-export type Item = { person: string; dealership: string; field?: Field | 'row'; cell?: string; from?: string; to?: string; why: string };
+export type Item = { person: string; dealership: string; field?: Field | 'row' | 'uid'; cell?: string; from?: string; to?: string; why: string };
 export type Plan = {
   edit?: EditFile;
   /** The rows each new person gets, after the inserts, for the row-group step. */
   inserted: { tab: 'Dealerships' | 'Overview'; dealerKey: string; at: number; n: number; keys: string[] }[];
-  writes: Item[]; added: Item[]; conflicts: Item[]; kept: Item[]; skipped: Item[];
+  /** overwritten: hand edits on the sheet that the Leads list replaced. Each one is also in `writes`. */
+  writes: Item[]; added: Item[]; overwritten: Item[]; kept: Item[]; skipped: Item[];
   /** "X of Y migrated" before and after, for each dealership the edit touches. The sheet's formulas compute the real ones. */
   counts: { dealership: string; before: string; after: string }[];
   /** The baseline to save once the edit is verified. */
   baseline: Baseline;
 };
 
-const D = { tab: 'Dealerships', A: 0, B: 1, C: 2, D: 3, G: 6, I: 8, V: 21, AB: 27, AC: 28 } as const;
-const O = { tab: 'Overview', A: 0, B: 1, C: 2, M: 12 } as const;
+const D = { tab: 'Dealerships', A: 0, B: 1, C: 2, D: 3, G: 6, I: 8, V: 21, AB: 27, AC: 28, UID: 30 } as const;
+const O = { tab: 'Overview', A: 0, B: 1, C: 2, M: 12, UID: 14 } as const;
+const UID_HEADER = 'Lead id (Jarvis)';
 /** The lead status as a name of the Overview stage dropdown (strict list of 13). */
 export const STAGE: Record<Status, string> = { todo: 'Not contacted', contacted: 'Contacted', meeting: 'Appointment booked', migrated: 'Migrated' };
 const INDENT = '    ';
@@ -88,13 +95,11 @@ function same(field: Field, sheet: string, want: string, name: string): boolean 
   return sheet.trim() === want.trim();
 }
 
-type Spot = { tab: 'Dealerships' | 'Overview'; col: number };
-const SPOT: Record<Field, Spot> = {
+// The Overview name (column A) is a second copy of the name. It follows the Dealerships name and is not compared on its own.
+const SPOT: Record<Field, { tab: Tab; col: number }> = {
   name: { tab: 'Dealerships', col: D.B }, stage: { tab: 'Overview', col: O.C }, meeting: { tab: 'Dealerships', col: D.G },
   contact: { tab: 'Dealerships', col: D.I }, note: { tab: 'Dealerships', col: D.V },
 };
-// The Overview name is a second copy of the name. It follows the Dealerships name and is not compared on its own.
-const OVERVIEW_NAME: Spot = { tab: 'Overview', col: O.A };
 
 /** The rows of one dealership: its own row, and the row index where a new person goes (0-based, the end of its block). */
 function dealershipRows(dRows: Grid, oRows: Grid, key: string) {
@@ -114,21 +119,37 @@ function dealershipRows(dRows: Grid, oRows: Grid, key: string) {
 
 /**
  * The edit for one run, computed from the leads, both tabs read with the FORMULA render option, and the last baseline.
- * Pure: it reads and writes nothing. `sheetIds` are the tab ids the insert requests name.
+ * Pure: it reads and writes nothing. `sheetIds` are the tab ids the requests name, `columns` each tab's column count.
  */
-export function plan(leads: Lead[], dRows: Grid, oRows: Grid, base: Baseline, sheetIds: { Dealerships: number; Overview: number }, sheetUrl: string): Plan {
-  const p: Plan = { inserted: [], writes: [], added: [], conflicts: [], kept: [], skipped: [], counts: [], baseline: { keys: { ...base.keys }, cells: { ...base.cells } } };
+export function plan(leads: Lead[], dRows: Grid, oRows: Grid, base: Baseline, sheetIds: { Dealerships: number; Overview: number }, sheetUrl: string,
+  columns: { Dealerships: number; Overview: number } = { Dealerships: Infinity, Overview: Infinity }): Plan {
+  const p: Plan = { inserted: [], writes: [], added: [], overwritten: [], kept: [], skipped: [], counts: [], baseline: { keys: { ...base.keys }, cells: { ...base.cells } } };
   // The stage each touched person has after the edit, by person key, and the dealership name of each touched dealership key.
   const stageAfter = new Map<string, string>(), touched = new Map<string, string>();
-  const expected: Check[] = [], writes: (Write & { tab: 'Dealerships' | 'Overview'; row0: number; col: number })[] = [];
-  const verify: Check[] = [];
+  const expected: Check[] = [], writes: (Write & { tab: Tab; row0: number; col: number })[] = [];
+  const verify: Check[] = [], requests: object[] = [], newWrites: Write[] = [];
   // New rows per dealership block and tab, in original coordinates: at = the 0-based index the rows go in at.
-  const inserts: { tab: 'Dealerships' | 'Overview'; at: number; dealerKey: string; rows: { lead: Lead; key: string }[] }[] = [];
-  const insertAt = (tab: 'Dealerships' | 'Overview', idx: number, dealerKey: string, lead: Lead, key: string) => {
+  const inserts: { tab: Tab; at: number; dealerKey: string; rows: { lead: Lead; key: string }[] }[] = [];
+  const insertAt = (tab: Tab, idx: number, dealerKey: string, lead: Lead, key: string) => {
     let ins = inserts.find(i => i.tab === tab && i.at === idx);
     if (!ins) inserts.push(ins = { tab, at: idx, dealerKey, rows: [] });
     ins.rows.push({ lead, key });
   };
+  const grid = (tab: Tab) => tab === 'Dealerships' ? dRows : oRows;
+  const keyCol = (tab: Tab) => tab === 'Dealerships' ? D.AB : O.M;
+  const uidCol = (tab: Tab) => tab === 'Dealerships' ? D.UID : O.UID;
+
+  // The hidden "Lead id" column, once: Dealerships AE and Overview O, with a header. The tabs end at AD and N, so the first
+  // run appends the column. A cell outside the grid cannot be read, so these writes carry no expected value.
+  const headerRow0 = { Dealerships: 0, Overview: oRows.findIndex(r => text(r[O.M]) === 'Record key') };
+  for (const tab of ['Dealerships', 'Overview'] as Tab[]) {
+    const h = headerRow0[tab];
+    if (h < 0 || at(grid(tab), h, uidCol(tab)) !== '') continue;
+    if (columns[tab] <= uidCol(tab)) requests.push({ appendDimension: { sheetId: sheetIds[tab], dimension: 'COLUMNS', length: uidCol(tab) + 1 - columns[tab] } });
+    requests.push({ updateDimensionProperties: { range: { sheetId: sheetIds[tab], dimension: 'COLUMNS', startIndex: uidCol(tab), endIndex: uidCol(tab) + 1 }, properties: { hiddenByUser: true }, fields: 'hiddenByUser' } });
+    newWrites.push({ range: a1(tab, uidCol(tab), h + 1), values: [[UID_HEADER]] });
+    verify.push({ range: a1(tab, uidCol(tab), h + 1), values: [[UID_HEADER]] });
+  }
 
   const live = leads.filter(l => !l.removed);
   for (const l of leads.filter(l => l.removed)) {
@@ -136,68 +157,91 @@ export function plan(leads: Lead[], dRows: Grid, oRows: Grid, base: Baseline, sh
       p.skipped.push({ person: l.name, dealership: l.dealership, why: 'removed from the list; the sheet row, if any, stays' });
     }
   }
-  const keyOf = (l: Lead) => base.keys[l.uid] ?? (l.dealerKey ? personKey(l.dealerKey, l.name) : '');
-  const byKey = new Map<string, Lead[]>();
-  for (const l of live) byKey.set(keyOf(l), [...(byKey.get(keyOf(l)) ?? []), l]);
+
+  // Each lead's rows. The lead id column decides; a row without an id matches once by its readable key, and then gets the id.
+  // A rename keeps the row and its readable key, so the formulas that link the two tabs by key keep working.
+  const found = new Map<string, { dIdx: number; oIdx: number; key: string }>();
+  for (const l of live) {
+    if (!l.dealerKey || !l.onSheet) continue;
+    const guess = base.keys[l.uid] ?? personKey(l.dealerKey, l.name);
+    const find = (tab: Tab) => {
+      const g = grid(tab), byUid = g.findIndex(r => text(r[uidCol(tab)]) === l.uid);
+      return byUid >= 0 ? byUid : g.findIndex(r => text(r[keyCol(tab)]) === guess && text(r[uidCol(tab)]) === '');
+    };
+    const dIdx = find('Dealerships'), oIdx = find('Overview');
+    found.set(l.uid, { dIdx, oIdx, key: dIdx >= 0 ? at(dRows, dIdx, D.AB) : oIdx >= 0 ? at(oRows, oIdx, O.M) : guess });
+  }
+  const keyCount = new Map<string, number>();
+  for (const f of found.values()) keyCount.set(f.key, (keyCount.get(f.key) ?? 0) + 1);
 
   for (const l of live) {
     const who = { person: l.name, dealership: l.dealership };
-    if (!l.dealerKey || !l.onSheet) { p.skipped.push({ ...who, why: 'the dealership is not on the sheet' }); continue; }
-    const key = keyOf(l);
-    if ((byKey.get(key) ?? []).length > 1) { p.skipped.push({ ...who, why: `two leads share the key ${key}` }); continue; }
-    const rows = dealershipRows(dRows, oRows, l.dealerKey);
+    const f = found.get(l.uid);
+    if (!f) { p.skipped.push({ ...who, why: 'the dealership is not on the sheet' }); continue; }
+    const { dIdx, oIdx, key } = f;
+    if ((keyCount.get(key) ?? 0) > 1) { p.skipped.push({ ...who, why: `two leads share the key ${key}` }); continue; }
+    // A new row needs a key no other row has: the formulas match the two tabs by it.
+    const taken = (tab: Tab) => grid(tab).some(r => text(r[keyCol(tab)]) === key);
+    if ((dIdx < 0 && taken('Dealerships')) || (oIdx < 0 && taken('Overview'))) { p.skipped.push({ ...who, why: `the key ${key} belongs to another person's row` }); continue; }
+    const rows = dealershipRows(dRows, oRows, l.dealerKey!);
     if (!rows) { p.skipped.push({ ...who, why: `no dealership row with key ${l.dealerKey} on both tabs` }); continue; }
     const want = wanted(l);
     const secret = SECRET.test(l.note);
     if (secret) p.skipped.push({ ...who, field: 'note', why: 'the note looks like it names a password or token, so it is not copied' });
     p.baseline.keys[l.uid] = key;
 
-    const dIdx = dRows.findIndex(r => text(r[D.AB]) === key);
-    const oIdx = oRows.findIndex(r => text(r[O.M]) === key);
-    const rowOf = (tab: 'Dealerships' | 'Overview') => tab === 'Dealerships' ? dIdx : oIdx;
-    if (dIdx < 0) insertAt('Dealerships', rows.dEnd, l.dealerKey, l, key);
-    if (oIdx < 0) { insertAt('Overview', rows.oEnd, l.dealerKey, l, key); stageAfter.set(key, want.stage); touched.set(l.dealerKey, l.dealership); }
+    const rowOf = (tab: Tab) => tab === 'Dealerships' ? dIdx : oIdx;
+    if (dIdx < 0) insertAt('Dealerships', rows.dEnd, l.dealerKey!, l, key);
+    if (oIdx < 0) { insertAt('Overview', rows.oEnd, l.dealerKey!, l, key); stageAfter.set(key, want.stage); touched.set(l.dealerKey!, l.dealership); }
     if (dIdx < 0 || oIdx < 0) p.added.push({ ...who, field: 'row', why: `new sub-line ${key} on ${[dIdx < 0 && 'Dealerships', oIdx < 0 && 'Overview'].filter(Boolean).join(' and ')}` });
+
+    // An existing row without the lead id gets it, so the next run finds the row even after a rename.
+    for (const tab of ['Dealerships', 'Overview'] as Tab[]) {
+      const idx = rowOf(tab);
+      if (idx < 0 || at(grid(tab), idx, uidCol(tab)) === l.uid) continue;
+      writes.push({ tab, row0: idx, col: uidCol(tab), range: '', values: [[l.uid]] });
+      p.writes.push({ ...who, field: 'uid', cell: `${tab}:${uidCol(tab)}:${idx}`, from: '', to: l.uid, why: 'the row gets its lead id' });
+    }
 
     for (const field of Object.keys(want) as Field[]) {
       const spot = SPOT[field];
       const idx = rowOf(spot.tab);
       if (idx < 0) continue; // a new row gets every cell below, with the insert
+      if (field === 'note' && secret) continue;
       const cellId = `${l.uid}:${field}`;
       const st = base.cells[cellId];
-      const sheet = at(spot.tab === 'Dealerships' ? dRows : oRows, idx, spot.col).trim();
+      const sheet = at(grid(spot.tab), idx, spot.col).trim();
       const lead = want[field].trim();
-      const item = { ...who, field, cell: '', from: sheet, to: lead };
-      if (field === 'note' && secret) continue;
+      const item = { ...who, field, cell: `${spot.tab}:${spot.col}:${idx}`, from: sheet, to: lead };
+      const handEdit = !!st && sheet !== st.sheet;
       if (same(field, sheet, lead, l.name)) { p.baseline.cells[cellId] = { lead, sheet }; continue; }
-      const doWrite = () => {
+      const doWrite = (why: string) => {
         writes.push({ tab: spot.tab, row0: idx, col: spot.col, range: '', values: [[want[field]]] });
-        expected.push({ range: a1(spot.tab, spot.col, idx + 1), values: [[at(spot.tab === 'Dealerships' ? dRows : oRows, idx, spot.col)]] });
-        p.writes.push({ ...item, cell: `${spot.tab}:${spot.col}:${idx}`, why: st ? 'the lead changed' : 'the cell was empty' });
+        expected.push({ range: a1(spot.tab, spot.col, idx + 1), values: [[at(grid(spot.tab), idx, spot.col)]] });
+        p.writes.push({ ...item, why });
+        // A hand edit the Leads list replaces is written down in the run log, never kept silently.
+        if (handEdit) p.overwritten.push({ ...item, why: 'changed on the sheet by hand since the last sync; the Leads list wins' });
         p.baseline.cells[cellId] = { lead, sheet: lead };
         if (field === 'stage') { stageAfter.set(key, lead); touched.set(l.dealerKey!, l.dealership); }
         if (field === 'name' && oIdx >= 0) {
-          writes.push({ tab: 'Overview', row0: oIdx, col: OVERVIEW_NAME.col, range: '', values: [[want.name]] });
+          writes.push({ tab: 'Overview', row0: oIdx, col: O.A, range: '', values: [[want.name]] });
           expected.push({ range: a1('Overview', O.A, oIdx + 1), values: [[at(oRows, oIdx, O.A)]] });
         }
       };
+      // The stage always follows the Leads list, the owner's source of truth for people (rule of 2026-11-10).
+      if (field === 'stage') { doWrite(st ? (handEdit ? 'the sheet stage was changed by hand; the Leads list wins' : 'the lead changed') : 'first sync: the Leads list wins'); continue; }
+      // The other cells: a lead change is written over the sheet. Without one, the sheet's own text stays.
       if (!st) {
-        if (sheet === '') doWrite();
+        if (sheet === '') doWrite('the cell was empty');
         else if (lead === '') p.baseline.cells[cellId] = { lead, sheet };
-        else {
-          // First sync with two different values: the sheet wins. A stage is worth the owner's look, the rest is his own text.
-          (field === 'stage' ? p.conflicts : p.kept).push({ ...item, why: field === 'stage' ? 'first sync: the sheet and the list differ, the sheet is kept' : 'first sync: the sheet has its own text, kept' });
-          p.baseline.cells[cellId] = { lead, sheet };
-        }
+        else { p.kept.push({ ...item, why: 'first sync: the sheet has its own text, kept' }); p.baseline.cells[cellId] = { lead, sheet }; }
         continue;
       }
-      const leadChanged = lead !== st.lead, sheetChanged = sheet !== st.sheet;
-      if (!leadChanged) {
-        if (sheetChanged) p.kept.push({ ...item, why: 'changed on the sheet by hand since the last sync, kept' });
+      if (lead !== st.lead) doWrite('the lead changed');
+      else {
+        if (handEdit) p.kept.push({ ...item, why: 'changed on the sheet by hand, and the lead did not change, kept' });
         p.baseline.cells[cellId] = { lead, sheet };
-      } else if (!sheetChanged) doWrite();
-      // Both moved: the owner's edit stays, and the baseline stays too, so the conflict shows again until one side gives.
-      else p.conflicts.push({ ...item, why: 'the lead changed and the sheet cell was changed by hand since the last sync, the sheet is kept' });
+      }
     }
   }
 
@@ -214,30 +258,30 @@ export function plan(leads: Lead[], dRows: Grid, oRows: Grid, base: Baseline, sh
   const shift = (tab: string, row0: number) => inserts.filter(i => i.tab === tab && i.at <= row0).reduce((n, i) => n + i.rows.length, 0);
   const finalRow1 = (tab: string, row0: number) => row0 + shift(tab, row0) + 1;
   for (const w of writes) w.range = a1(w.tab, w.col, finalRow1(w.tab, w.row0));
-  // Until here p.writes holds "<tab>:<col>:<row0>"; give each its final A1 cell.
-  for (const item of p.writes) {
-    const [tab, col, row0] = item.cell!.split(':');
+  // Until here the items of existing rows hold "<tab>:<col>:<row0>"; give each its final A1 cell.
+  for (const item of [...p.writes, ...p.overwritten, ...p.kept]) {
+    if (!item.cell?.includes(':')) continue;
+    const [tab, col, row0] = item.cell.split(':');
     item.cell = a1(tab, Number(col), finalRow1(tab, Number(row0)));
   }
 
-  const requests: object[] = [];
-  const newWrites: Write[] = [];
   for (const ins of inserts) {
-    const tab = ins.tab, rows = tab === 'Dealerships' ? dRows : oRows;
+    const tab = ins.tab, rows = grid(tab), kc = keyCol(tab);
     const before = inserts.filter(i => i.tab === tab && i.at < ins.at).reduce((n, i) => n + i.rows.length, 0);
     const start0 = ins.at + before; // first new row, 0-based, after every insert
     p.inserted.push({ tab, dealerKey: ins.dealerKey, at: start0, n: ins.rows.length, keys: ins.rows.map(r => r.key) });
     // The rows around the insert point must still be where the read saw them.
-    const keyCol = tab === 'Dealerships' ? D.AB : O.M;
-    expected.push({ range: a1(tab, keyCol, ins.at), values: [[at(rows, ins.at - 1, keyCol)]] });
-    if (ins.at < rows.length) expected.push({ range: a1(tab, keyCol, ins.at + 1), values: [[at(rows, ins.at, keyCol)]] });
-    const dealerRow0 = rows.findIndex(r => text(r[keyCol]) === ins.dealerKey);
-    verify.push({ range: a1(tab, keyCol, finalRow1(tab, dealerRow0)), values: [[ins.dealerKey]] });
+    expected.push({ range: a1(tab, kc, ins.at), values: [[at(rows, ins.at - 1, kc)]] });
+    if (ins.at < rows.length) expected.push({ range: a1(tab, kc, ins.at + 1), values: [[at(rows, ins.at, kc)]] });
+    const dealerRow0 = rows.findIndex(r => text(r[kc]) === ins.dealerKey);
+    verify.push({ range: a1(tab, kc, finalRow1(tab, dealerRow0)), values: [[ins.dealerKey]] });
     ins.rows.forEach(({ lead, key }, k) => {
       const r = start0 + k + 1, want = wanted(lead), secret = SECRET.test(lead.note);
       const raw = (col: number, v: string) => newWrites.push({ range: a1(tab, col, r), values: [[v]] });
       const formula = (col: number, v: string) => newWrites.push({ range: a1(tab, col, r), values: [[v]], inputOption: 'USER_ENTERED' });
       const item = { person: lead.name, dealership: lead.dealership };
+      raw(uidCol(tab), lead.uid);
+      p.writes.push({ ...item, field: 'uid', cell: a1(tab, uidCol(tab), r), from: '', to: lead.uid, why: 'new sub-line' });
       if (tab === 'Dealerships') {
         const dealerRow = dRows[dealerRow0];
         raw(D.A, text(dealerRow[D.A]));
@@ -273,14 +317,15 @@ export function plan(leads: Lead[], dRows: Grid, oRows: Grid, base: Baseline, sh
       }
     });
   }
-  // Highest insert first, so each request's index is still an original one when it runs.
+  // Highest insert first, so each request's index is still an original one when it runs. Column requests come first.
   for (const ins of [...inserts].sort((x, y) => y.at - x.at || x.tab.localeCompare(y.tab))) {
     requests.push({ insertDimension: { range: { sheetId: sheetIds[ins.tab], dimension: 'ROWS', startIndex: ins.at, endIndex: ins.at + ins.rows.length }, inheritFromBefore: true } });
   }
 
   const allWrites: Write[] = [...writes.map(({ range, values }) => ({ range, values })), ...newWrites];
   if (!allWrites.length) return p;
-  // sheet-edit refuses an edit with no expected range. Writes with no insert are each covered by their own expected cell.
+  // A lead id written on an existing row fills an empty cell: state it, in the coordinates of the read, when the column exists.
+  for (const w of writes) if (w.col === uidCol(w.tab) && columns[w.tab] > w.col) expected.push({ range: a1(w.tab, w.col, w.row0 + 1), values: [[at(grid(w.tab), w.row0, w.col)]] });
   p.edit = {
     description: `Migration list sync: ${p.added.length} new person row(s), ${p.writes.length} cell(s)`,
     expected,
@@ -335,7 +380,7 @@ export type RunResult = {
   /** ok: written and verified, or the dry run passed. nothing: no change to make. aborted: a target cell moved, nothing written. failed: see error. */
   outcome: 'ok' | 'nothing' | 'aborted' | 'failed';
   error?: string; dir: string;
-  writes: Item[]; added: Item[]; conflicts: Item[]; kept: Item[]; skipped: Item[];
+  writes: Item[]; added: Item[]; overwritten: Item[]; kept: Item[]; skipped: Item[];
   counts: Plan['counts'];
   sheetEdit: string[];
 };
@@ -355,7 +400,7 @@ function gwsClient(bin: string, sheetId: string) {
   };
   return {
     tab: (tab: string): Grid => call(['values', 'get'], { range: `'${tab}'`, valueRenderOption: 'FORMULA' }).values ?? [],
-    meta: (): SheetMeta[] => call(['get'], { fields: 'sheets(properties(sheetId,title),rowGroups)' }).sheets ?? [],
+    meta: (): SheetMeta[] => call(['get'], { fields: 'sheets(properties(sheetId,title,gridProperties(columnCount)),rowGroups)' }).sheets ?? [],
   };
 }
 
@@ -374,7 +419,7 @@ export function runSync(mode: 'dry-run' | 'write', deps: SyncDeps): RunResult {
   const startedAt = now().toISOString();
   const dir = join(deps.dataDir, 'runs', `${startedAt.replace(/[:.]/g, '-')}-${mode}`);
   mkdirSync(dir, { recursive: true });
-  const res: RunResult = { at: startedAt, mode, outcome: 'nothing', dir, writes: [], added: [], conflicts: [], kept: [], skipped: [], counts: [], sheetEdit: [] };
+  const res: RunResult = { at: startedAt, mode, outcome: 'nothing', dir, writes: [], added: [], overwritten: [], kept: [], skipped: [], counts: [], sheetEdit: [] };
   const finish = (r: RunResult) => { writeFileSync(join(dir, 'result.json'), JSON.stringify(r, null, 2)); writeFileSync(join(deps.dataDir, 'last.json'), JSON.stringify(r, null, 2)); return r; };
   try {
     if (!deps.sheetId || deps.sheetId === 'EXAMPLE_SHEET_ID') throw new Error('JARVIS_MIGRATION_SHEET_ID is not set');
@@ -382,10 +427,11 @@ export function runSync(mode: 'dry-run' | 'write', deps: SyncDeps): RunResult {
     const meta = gws.meta();
     const id = (t: string) => { const s = meta.find(m => m.properties.title === t); if (!s) throw new Error(`the sheet has no ${t} tab`); return s.properties.sheetId; };
     const ids = { Dealerships: id('Dealerships'), Overview: id('Overview') };
+    const cols = (t: string) => meta.find(m => m.properties.title === t)?.properties.gridProperties?.columnCount ?? Infinity;
     const base = readBaseline(deps.dataDir);
-    const p = plan(readLeads(deps.db), gws.tab('Dealerships'), gws.tab('Overview'), base, ids, `https://docs.google.com/spreadsheets/d/${deps.sheetId}/edit`);
-    Object.assign(res, { writes: p.writes, added: p.added, conflicts: p.conflicts, kept: p.kept, skipped: p.skipped, counts: p.counts });
-    for (const c of p.conflicts) log('migration sheet sync conflict', { ...c, mode });
+    const p = plan(readLeads(deps.db), gws.tab('Dealerships'), gws.tab('Overview'), base, ids, `https://docs.google.com/spreadsheets/d/${deps.sheetId}/edit`, { Dealerships: cols('Dealerships'), Overview: cols('Overview') });
+    Object.assign(res, { writes: p.writes, added: p.added, overwritten: p.overwritten, kept: p.kept, skipped: p.skipped, counts: p.counts });
+    for (const c of p.overwritten) log('migration sheet sync replaces a hand edit', { ...c, mode });
     if (!p.edit) {
       // Nothing to write. The baseline still learns the cells that agree, so a later hand edit is told apart.
       if (mode === 'write') writeFileSync(join(deps.dataDir, BASELINE), JSON.stringify(p.baseline, null, 2));
@@ -419,17 +465,17 @@ export function runSync(mode: 'dry-run' | 'write', deps: SyncDeps): RunResult {
   }
 }
 
-/** The run as a short Markdown report: what it wrote or would write, the conflicts, what it kept and skipped. */
+/** The run as a short Markdown report: what it wrote or would write, the hand edits it replaced, what it kept and skipped. */
 export function reportOf(r: RunResult): string {
   const line = (i: Item) => `- ${i.person} (${i.dealership})${i.field ? `, ${i.field}` : ''}${i.cell ? ` at ${i.cell}` : ''}: ${i.from !== undefined && i.to !== undefined ? `${JSON.stringify(i.from)} to ${JSON.stringify(i.to)}. ` : ''}${i.why}.`;
   const section = (title: string, items: Item[]) => items.length ? [`## ${title}`, '', ...items.map(line), ''] : [];
   return [
     `# Migration sheet sync, ${r.mode === 'dry-run' ? 'dry run' : 'write'} of ${r.at}`, '',
-    `Outcome: ${r.outcome}${r.error ? ` (${r.error})` : ''}. ${r.added.length} new person row(s), ${r.writes.length} cell(s), ${r.conflicts.length} conflict(s).`, '',
+    `Outcome: ${r.outcome}${r.error ? ` (${r.error})` : ''}. ${r.added.length} new person row(s), ${r.writes.length} cell(s), ${r.overwritten.length} hand edit(s) replaced.`, '',
     ...section('New person rows', r.added),
     ...(r.counts.length ? ['## Dealership counts (Dealerships AD, Overview B)', '', ...r.counts.map(c => `- ${c.dealership}: ${c.before} to ${c.after}.`), ''] : []),
     ...section(r.mode === 'dry-run' ? 'Cells it would write' : 'Cells written', r.writes),
-    ...section('Conflicts (the sheet is kept)', r.conflicts),
+    ...section('Hand edits on the sheet that the Leads list replaces', r.overwritten),
     ...section('Kept as the sheet has it', r.kept),
     ...section('Skipped', r.skipped),
     ...(r.sheetEdit.length ? ['## sheet-edit output', '', '```', ...r.sheetEdit, '```', ''] : []),

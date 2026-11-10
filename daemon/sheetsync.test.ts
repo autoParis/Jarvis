@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { runSync, syncDue, easternTime } from './sheetsync.ts';
+import { runSync, syncDue, easternTime, plan } from './sheetsync.ts';
 import { run as sheetEditRun } from './sheet-edit.ts';
 import { createTables } from './migration.ts';
 
@@ -95,7 +95,7 @@ function sheet() {
         dRow('Bolt Nissan', 'boltnissan'),
       ],
       Overview: [
-        ['Dealership / sub-account'],
+        ['Dealership / sub-account', '', '', '', '', '', '', '', '', '', '', '', 'Record key'],
         oRow('=acme', 'Contacted', 'acmekia'),
         oRow('    Acme legacy', '=legacy', ''),
         oRow('    Ann Lee', 'Migrated', 'acmekia/annlee'),
@@ -176,8 +176,8 @@ test('a person added after an existing sub-line joins the group above, which sta
   assert.equal(s.tabs.Overview[4][M], 'acmekia/bobroy');
   const og = s.sheets.find((x: { properties: { title: string } }) => x.properties.title === 'Overview').rowGroups;
   assert.deepEqual(og.map((g: { range: { startIndex: number; endIndex: number }; collapsed?: boolean }) => [g.range.startIndex, g.range.endIndex, !!g.collapsed]), [[2, 5, true]]);
-  // Ann Lee is Migrated on both sides, so her stage is not written. Only her empty contact cell is filled.
-  assert.deepEqual(r.writes.filter(w => w.person === 'Ann Lee').map(w => [w.field, w.cell, w.to]), [['contact', 'Dealerships!I3', 'Ann Lee (email)']]);
+  // Ann Lee is Migrated on both sides, so her stage is not written. Her empty contact cell is filled, and she gets her lead id.
+  assert.deepEqual(r.writes.filter(w => w.person === 'Ann Lee' && w.field !== 'uid').map(w => [w.field, w.cell, w.to]), [['contact', 'Dealerships!I3', 'Ann Lee (email)']]);
   assert.deepEqual(r.counts, [{ dealership: 'Acme Kia', before: '1 of 1 migrated', after: '1 of 2 migrated' }]);
 });
 
@@ -196,7 +196,7 @@ test('a changed lead updates only its own stage cell', () => {
   assert.equal(t.state().tabs.Overview[4][2], 'Migrated');
 });
 
-test('a cell changed by hand since the last sync is never overwritten: a conflict when the lead changed too', () => {
+test('the Leads list wins over a stage changed by hand, and the run log lists the hand edit it replaced', () => {
   const t = setup();
   const id = t.add('Bob Roy', 1, 'contacted');
   t.sync('write');
@@ -204,32 +204,68 @@ test('a cell changed by hand since the last sync is never overwritten: a conflic
   t.db.prepare(`UPDATE migration_people SET status = 'meeting', meeting_at = '2026-11-12 14:00:00' WHERE id = ?`).run(id);
   const r = t.sync('write');
   assert.equal(r.outcome, 'ok', r.error);
-  assert.equal(t.state().tabs.Overview[4][2], 'Replied');
-  assert.deepEqual(r.conflicts.map(c => [c.field, c.from, c.to]), [['stage', 'Replied', 'Appointment booked']]);
-  // The meeting cell was not touched by hand, so it still follows the lead.
-  assert.deepEqual(r.writes.map(w => w.cell), ['Dealerships!G4']);
-  // The conflict shows again on the next run, until one side gives.
-  assert.equal(t.sync('write').conflicts.length, 1);
+  assert.equal(t.state().tabs.Overview[4][2], 'Appointment booked');
+  assert.deepEqual(r.overwritten.map(c => [c.field, c.cell, c.from, c.to]), [['stage', 'Overview!C5', 'Replied', 'Appointment booked']]);
+  assert.deepEqual(r.writes.map(w => w.cell).sort(), ['Dealerships!G4', 'Overview!C5']);
+  // A stage hand edit with no lead change goes back to the list too.
+  t.setCell('Overview', 5, 2, 'Declined');
+  const again = t.sync('write');
+  assert.equal(t.state().tabs.Overview[4][2], 'Appointment booked');
+  assert.equal(again.overwritten.length, 1);
+  assert.equal(t.sync('write').outcome, 'nothing');
 });
 
-test('a hand edit with no lead change is kept and not reported as a conflict', () => {
+test('a hand edit of the note with no lead change is kept', () => {
   const t = setup();
   t.add('Bob Roy', 1, 'contacted', { note: 'first note' });
   t.sync('write');
   t.setCell('Dealerships', 4, 21, 'the owner rewrote this');
   const r = t.sync('write');
   assert.equal(r.outcome, 'nothing');
-  assert.equal(r.conflicts.length, 0);
+  assert.equal(r.overwritten.length, 0);
   assert.equal(r.kept[0].field, 'note');
   assert.equal(t.state().tabs.Dealerships[3][21], 'the owner rewrote this');
 });
 
-test('first sync: a person already on the sheet with another stage is a conflict, and the sheet is kept', () => {
+test('first sync: a person already on the sheet takes the stage of the Leads list, Migrated or not', () => {
   const t = setup();
   t.add('Ann Lee', 1, 'contacted');
   const r = t.sync('write');
-  assert.deepEqual(r.conflicts.map(c => [c.person, c.from, c.to]), [['Ann Lee', 'Migrated', 'Contacted']]);
-  assert.equal(t.state().tabs.Overview[3][2], 'Migrated');
+  assert.equal(r.outcome, 'ok', r.error);
+  assert.ok(r.writes.some(w => w.person === 'Ann Lee' && w.field === 'stage' && w.from === 'Migrated' && w.to === 'Contacted'));
+  assert.equal(t.state().tabs.Overview[3][2], 'Contacted');
+});
+
+test('rows match by the lead id: a rename updates the same row and keeps its readable key', () => {
+  const t = setup();
+  const id = t.add('Bob Roy', 1, 'contacted');
+  t.sync('write');
+  const s1 = t.state();
+  assert.equal(s1.tabs.Dealerships[3][30], 'uid-1');
+  assert.equal(s1.tabs.Overview[4][14], 'uid-1');
+  assert.equal(s1.tabs.Dealerships[0][30], 'Lead id (Jarvis)');
+  assert.equal(s1.tabs.Overview[0][14], 'Lead id (Jarvis)');
+  t.db.prepare(`UPDATE migration_people SET name = 'Robert Roy' WHERE id = ?`).run(id);
+  const r = t.sync('write');
+  assert.equal(r.outcome, 'ok', r.error);
+  assert.equal(r.added.length, 0);
+  const s = t.state();
+  assert.equal(s.tabs.Dealerships.length, 5);
+  assert.equal(s.tabs.Dealerships[3][1], '    Robert Roy');
+  assert.equal(s.tabs.Overview[4][0], '    Robert Roy');
+  assert.equal(s.tabs.Dealerships[3][AB], 'acmekia/bobroy');
+});
+
+test('an existing row with no lead id gets one, and a sheet with no spare column gets a hidden one', () => {
+  const t = setup();
+  t.add('Ann Lee', 1, 'migrated');
+  const r = t.sync('write');
+  assert.equal(r.outcome, 'ok', r.error);
+  assert.deepEqual(r.writes.filter(w => w.field === 'uid').map(w => w.cell), ['Dealerships!AE3', 'Overview!O4']);
+  const s = sheet();
+  const p = plan([], s.tabs.Dealerships, s.tabs.Overview, { keys: {}, cells: {} }, { Dealerships: 30, Overview: 31 }, 'x', { Dealerships: 30, Overview: 14 });
+  const kinds = (p.edit?.requests ?? []).map(q => Object.keys(q)[0]);
+  assert.deepEqual(kinds, ['appendDimension', 'updateDimensionProperties', 'appendDimension', 'updateDimensionProperties']);
 });
 
 test('a dry run writes nothing and saves no baseline', () => {
