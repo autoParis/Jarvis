@@ -1,6 +1,6 @@
 import { OWNER_CAP, OWNER, cleanEnv } from './config.ts';
 import http from 'node:http';
-import { readFileSync, existsSync, createReadStream, readdirSync, statSync, watch as fsWatch } from 'node:fs';
+import { readFileSync, existsSync, createReadStream, readdirSync, statSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore, type Item, type Approval } from './store.ts';
@@ -23,9 +23,9 @@ import { makeLog } from './log.ts';
 import { watchGmail, gws, haiku, readPeople, withRecipients, POLL_MS as GMAIL_POLL_MS, type EmailMeta } from './gmail.ts';
 import { makeTasks, execRun, tasksRoute } from './tasks.ts';
 import { homedir } from 'node:os';
-import { githubRepo, type WorkRow, type Work } from './work.ts';
+import { githubRepo, type Work } from './work.ts';
 import { makeRequests, backfillRequests, requestsRoute } from './requests.ts';
-import { stop } from './steer.ts';
+import { workRoute, hiddenIds, makePaneWatcher } from './workroutes.ts';
 import { listenConfig, judge } from './listen.ts';
 import { askCard, answerAsk, auditEntries, type AskCard } from './asks.ts';
 import { brainAskRoute, briefLine as brainAskLine, isBrainAsk } from './brainasks.ts';
@@ -39,12 +39,11 @@ import { makeTicketWorker } from './replyworker.ts';
 import { makeMigration, migrationRoute, migrationBrief, readDealerFile } from './migration.ts';
 import { makeNative, ROW_PREFIX, type NativeWorker } from './native.ts';
 import { nativeRoute, routeWorkerTurn } from './nativeroutes.ts';
-import { readChatFile, withEvents, fileCursor } from './transcript.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { voiceMessage, withPictures } from '../web/dictate.js';
 import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
-import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE } from './config.ts';
+import { DEALERS_FILE } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -193,16 +192,6 @@ function closeItems(ids: string[], why: string) {
     askChanged(id);
   }
 }
-/** The Claude session behind a work-list row, for Continue on phone: a native row's own. */
-async function phoneTarget(row: WorkRow): Promise<{ sessionId: string; cwd: string; title: string; transcript?: string } | { error: string }> {
-  if (row.tmux) return { error: 'A project terminal has no Claude session to continue.' };
-  if (!row.native) return { error: 'Only a native worker can continue on the phone.' };
-  const w = native.get(row.native.id);
-  if (!w?.session_id) return { error: 'This worker has no session id yet.' };
-  return { sessionId: w.session_id, cwd: w.cwd, title: w.remote ?? row.title, transcript: native.transcriptFile(w.id) };
-}
-// Rows the owner hid from the app. Hiding only changes the view: no worker is stopped or deleted.
-const hiddenIds = (): string[] => JSON.parse(store.getState('workHidden') ?? '[]');
 /**
  * After every native poll and every final native report: the requests and the Today rows behind them, from the native
  * rows. Waits for `today`, which is made further down.
@@ -219,23 +208,6 @@ const nativePoll = () => native.poll().then(() => {
 // Native workers: `claude agents` every 30 s (native.ts poll).
 setInterval(nativePoll, 30_000);
 nativePoll();
-// Transcript files of finished requests, found once.
-const chatFiles = new Map<string, string>();
-// A native pane that was read is watched: a write to its transcript broadcasts a `pane` event, and the open page reads at
-// once instead of waiting for its 3 s poll. One watcher per file, debounced; dropped when the row leaves the list.
-const paneWatchers = new Map<string, { close: () => void; timer?: NodeJS.Timeout }>();
-function watchPane(id: string, file: string) {
-  if (paneWatchers.has(id)) return;
-  try {
-    const w = fsWatch(file, () => {
-      const p = paneWatchers.get(id); if (!p) return;
-      clearTimeout(p.timer);
-      p.timer = setTimeout(() => { if (native.get(id)) broadcast({ type: 'pane', id }); else { p.close(); paneWatchers.delete(id); } }, 300);
-    });
-    w.on('error', () => { paneWatchers.get(id)?.close(); paneWatchers.delete(id); });
-    paneWatchers.set(id, { close: () => w.close() });
-  } catch (e) { log('pane watch failed', { id, error: (e as Error).message }); }
-}
 
 // ---- Ask cards: each worker question or escalation shows as a card with its options as buttons (asks.ts) ----
 const storyOf = (dispatch: string | null) => dispatch ? mergedWork().rows.find(r => r.dispatch === dispatch)?.title : undefined;
@@ -489,6 +461,12 @@ const brainModelCtx = {
   brain, setState: store.setState, killed: () => existsSync(KILL_FILE), info: brainInfo,
   changed: () => { log('brain model set', { model: brain.setting.model, effort: brain.setting.effort }); broadcast({ type: 'brain', brain: brainInfo() }); },
 };
+const workCtx = {
+  native, store, gate, requests, log, work: mergedWork, repos, broadcast, publish: publishWork,
+  sync: () => { nativeSync().catch(() => {}); }, askChanged, killed: () => existsSync(KILL_FILE), wake: (text: string) => brain.send(text),
+  watchPane: makePaneWatcher({ native, broadcast, log }), chatFiles: new Map<string, string>(),
+  readLog: () => { try { return readFileSync(join(ROOT, 'data', 'jarvisd.log'), 'utf8'); } catch { return ''; } },
+};
 const messagesCtx = {
   messages,
   approved: (a: Approval) => { if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`); },
@@ -523,6 +501,8 @@ http.createServer(async (req, res) => {
       async () => url === '/api/migration' || url.startsWith('/api/migration/') || url.startsWith('/api/internal/migration') ? migrationRoute(migration, method, url, await post()) : undefined,
       async () => url.startsWith('/api/internal/replies') ? replyRoute(store, log, method, url, await post(), owner) : undefined,
       async () => url.startsWith('/api/internal/reminders') ? reminderRoute(store, log, method, url, await post()) : undefined,
+      // The work list and its row buttons (workroutes.ts).
+      () => workRoute(workCtx, method, url, body, query),
     ];
     for (const route of routes) { const r = await route(); if (r) return send(res, r.status, r.body); }
     if (req.method === 'GET' && STATIC[url]) {
@@ -572,7 +552,7 @@ http.createServer(async (req, res) => {
           : t.role === 'jarvis' ? { ...t, clips: spokenSentences(t.text).length }
           : t.reply_to ? { ...t, quote: quoteOf(store.turn(t.reply_to)) } : t);
       const secret = ui.open();
-      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(store), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); ui.close(secret); termGate.dropPage(secret); });
@@ -671,119 +651,6 @@ http.createServer(async (req, res) => {
     }
     // The audit log panel: answered asks and decided approvals. Read-only.
     if (req.method === 'GET' && url === '/api/audit') return send(res, 200, auditEntries(store, cardOf, PRESSED));
-    // ---- Work list ----
-    if (req.method === 'GET' && url === '/api/work') return send(res, 200, { ...mergedWork(), hidden: hiddenIds(), repos: repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL }, owner: { called: OWNER, cap: OWNER_CAP } });
-    // Hide or show a row in the app. Only the list of hidden ids changes.
-    if (req.method === 'POST' && url === '/api/work/hide') {
-      const { id, hidden } = await json(req);
-      if (typeof id !== 'string' || !id) return send(res, 400, { error: 'id is required' });
-      const ids = new Set(hiddenIds());
-      ids.delete(id);
-      if (hidden !== false) ids.add(id);
-      // The newest 500 are kept, so the list cannot grow forever.
-      const next = [...ids].slice(-500);
-      store.setState('workHidden', JSON.stringify(next));
-      broadcast({ type: 'hidden', hidden: next });
-      return send(res, 200, { hidden: next });
-    }
-    // One "Worked for" row's steps, read when the owner opens it.
-    const fold = req.method === 'GET' && url.match(/^\/api\/fold\/(\d+)$/);
-    if (fold) {
-      const text = store.workSteps(Number(fold[1]));
-      return text ? send(res, 200, { steps: JSON.parse(text).steps }) : send(res, 404, { error: 'Not found' });
-    }
-    // The transcript pane: messages after `cursor` from a listed worker or session. Read-only.
-    const read = req.method === 'GET' && url.match(/^\/api\/work\/([^/]+)\/read$/);
-    // A request with no listed conversation (`req:<id>`): what Jarvis recorded, then the worker's transcript if it is found.
-    const closed = read && /^req:(\d+)$/.exec(decodeURIComponent(read[1]));
-    if (closed) {
-      const cursor = new URL(req.url ?? '/', 'http://x').searchParams.get('cursor') || undefined;
-      const r = await requests.read(Number(closed[1]), cursor, chatFiles, () => { try { return readFileSync(join(ROOT, 'data', 'jarvisd.log'), 'utf8'); } catch { return ''; } });
-      return r ? send(res, 200, r) : send(res, 404, { error: 'Jarvis has no record of it.' });
-    }
-    if (read && decodeURIComponent(read[1]).startsWith(ROW_PREFIX)) {
-      // A native worker: its own JSONL on disk. Replies in it are the typed lines (interactive) or the
-      // cross-session messages (relay); jarvisd's own events (a resume) are gap lines; `busy` is the session's state.
-      const id = decodeURIComponent(read[1]);
-      const w = native.get(id);
-      const file = native.transcriptFile(id);
-      if (!w) return send(res, 404, { error: 'It is not in the work list any more.' });
-      const busy = w.state === 'working' || w.state === 'starting';
-      if (!file) return send(res, 200, { lines: [], busy, error: 'No transcript yet: the worker has not written its first turn.' });
-      const cursor = new URL(req.url ?? '/', 'http://x').searchParams.get('cursor') || undefined;
-      watchPane(id, file);
-      try { return send(res, 200, { ...withEvents(readChatFile(file, fileCursor(cursor)), store.eventsFor(id), cursor), busy }); }
-      catch (e) { return send(res, 200, { lines: [], busy, error: `Transcript unreadable: ${(e as Error).message}` }); }
-    }
-    if (read) return send(res, 404, { error: 'It is not in the work list any more.' });
-    // the owner pressed Side chat: a normal working session in the chosen repo's main checkout, no yes needed.
-    if (req.method === 'POST' && url === '/api/work/side-chat') {
-      // From the new-session picker there is no first message (The owner types it in the conversation that opens) and Worktree may be on.
-      const { repo, text = '', worktree } = await json(req);
-      const card = repos().find(r => r.path === repo);
-      if (typeof text !== 'string' || !card) return send(res, 400, { error: 'pick a project' });
-      const first = text.trim();
-      const a = await gate.pressed('side-chat', { repo, text: first, ...(worktree === true ? { worktree: true } : {}) }, `Side chat: ${(first || `new in ${card.name}`).slice(0, 80)}`);
-      return send(res, a.status === 'done' ? 200 : 502, a);
-    }
-    // The steer box under the transcript. A native worker gets the words at once.
-    if (req.method === 'POST' && url === '/api/work/steer') {
-      const { id, text } = await json(req);
-      const row = mergedWork().rows.find(r => r.id === id);
-      if (!row || typeof text !== 'string') return send(res, 404, { error: 'It is not in the work list any more.' });
-      if (!row.native) return send(res, 409, { error: 'Only a native worker takes a message here.' });
-      // the owner's words go straight into the background session (respawned first if its process was stopped).
-      if (!text.trim()) return send(res, 400, { error: 'Write a message first.' });
-      const r = await native.reply(row.native.id, text.trim(), 'owner');
-      if (!r.ok) return send(res, 502, { error: r.error });
-      const a = store.addApproval({ action: 'session-type', args: JSON.stringify({ worker: row.id, text: text.trim() }), say: `Message to "${row.title.slice(0, 60)}"` });
-      store.decide(a.id, 'approved', 'button', text.trim()); store.finishApproval(a.id, 'done', 'sent');
-      const open = store.openItems().filter(i => i.source === 'native' && i.dispatch_id === row.id);
-      for (const i of open) { store.markItem(i.external_id, 'answered', text.trim()); askChanged(i.external_id); }
-      if (!existsSync(KILL_FILE)) brain.send(`[work list] ${OWNER} sent native worker ${row.native.name} (${row.id}) a message himself from the work list: ${JSON.stringify(text.trim())}.${open.length ? ' That answers its open question.' : ''} Reply SILENT.`);
-      publishWork();
-      nativeSync().catch(() => {}); // a request that was Done goes back to Working now, not at the next poll (requests.ts)
-      return send(res, 200, { done: 'sent' });
-    }
-    if (req.method === 'POST' && url === '/api/work/stop') {
-      const { id } = await json(req);
-      const row = mergedWork().rows.find(r => r.id === id);
-      if (!row) return send(res, 404, { error: 'It is not in the work list any more.' });
-      const r = await stop(row, gate);
-      return send(res, r.status, r.body);
-    }
-    // Opens a Terminal window on the Mac, attached to a native worker's session.
-    if (req.method === 'POST' && url === '/api/work/open') {
-      const { id, dispatch } = await json(req);
-      const row = mergedWork().rows.find(r => r.id === (id ?? dispatch));
-      if (!row?.native) return send(res, 404, { error: 'no such worker' });
-      try { await native.attach(row.native.id); return send(res, 204); }
-      catch (e) { return send(res, 502, { error: `Could not open Terminal: ${(e as Error).message}` }); }
-    }
-    // The Desktop button: stops the background session and opens the same conversation in the Claude desktop app.
-    if (req.method === 'POST' && url === '/api/work/desktop') {
-      const { id } = await json(req);
-      const row = mergedWork().rows.find(r => r.id === id);
-      if (!row?.native) return send(res, 404, { error: 'Only a native worker can open in the desktop app.' });
-      try { await native.desktop(row.native.id); publishWork(); return send(res, 204); }
-      catch (e) { return send(res, 502, { error: (e as Error).message }); }
-    }
-    // Continue on phone: the row's own Claude session, resumed as a native interactive row with Remote Control on (native.phone).
-    // `stop` lists the pids of the processes that held it, which the owner chose to end from the refusal in the pane.
-    if (req.method === 'POST' && url === '/api/work/phone') {
-      const { id, stop } = await json(req);
-      const row = mergedWork().rows.find(r => r.id === id);
-      if (!row) return send(res, 404, { error: 'It is not in the work list any more.' });
-      const t = await phoneTarget(row);
-      if ('error' in t) return send(res, 400, { error: t.error });
-      const pids = Array.isArray(stop) ? stop.filter((p: unknown): p is number => Number.isInteger(p) && (p as number) > 1) : [];
-      const a = await gate.pressed('session-phone', { session: t.sessionId, title: t.title, ...(pids.length ? { stop: pids } : {}) }, `Continue "${t.title.slice(0, 60)}" on the phone`);
-      const r = await native.phone({ ...t, approvalId: a.id, stop: pids });
-      gate.recorded(a.id, r.ok ? 'done' : 'failed', r.ok ? (r.already ? 'Already in the Claude app' : `Remote Control as "${r.worker.remote}" (${ROW_PREFIX}${r.worker.id})`) : r.error);
-      publishWork();
-      if (!r.ok) return send(res, 409, { error: r.error, holders: r.holders ?? [] });
-      return send(res, 200, { id: `${ROW_PREFIX}${r.worker.id}`, remote: r.worker.remote, already: !!r.already });
-    }
     // ---- Called by bin/jarvis-act and bin/jarvis-remind on behalf of the brain ----
     if (req.method === 'POST' && url === '/api/internal/answered') {
       const { id, answer } = await json(req);
