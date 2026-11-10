@@ -219,8 +219,30 @@ export function rowHtml(p, s = {}, now = Date.now(), inShop = false) {
     + (open && !editing ? `<div class="m-note"><div class="m-open-head">${contactHtml(p.contact)}<button type="button" class="m-edit-btn" data-edit aria-label="Edit ${esc(p.name)}">${ICON.pencil}Edit</button></div><label for="m-note-${p.id}">Notes</label><textarea id="m-note-${p.id}" class="in" rows="3" data-note>${esc(s.noteText ?? p.note)}</textarea>`
       + `<div class="acts"><button type="button" class="act primary" data-save>Save</button><button type="button" class="act" data-cancel>Cancel</button><small>${esc(editedAgo(p.noteAt, now))}</small></div>`
       + (s.error ? `<p class="m-err" role="alert">${esc(s.error)}</p>` : '')
-      + `<div class="m-meta"><span>${esc(meta)} · ${esc(p.statusWords)} since ${esc(when(p.statusAt, now))}</span><button type="button" class="m-remove" data-remove>${s.confirmRemove ? 'Tap again to remove' : 'Remove'}</button></div></div>` : '')
+      + (s.confirmRemove
+        ? `<div class="m-confirm" role="group" aria-label="Remove ${esc(first)}?"><span>Remove ${esc(first)} from the list?</span><button type="button" class="act danger" data-remove-yes>Remove</button><button type="button" class="act" data-remove-keep>Keep</button></div>`
+        : `<div class="m-meta"><span>${esc(meta)} · ${esc(p.statusWords)} since ${esc(when(p.statusAt, now))}</span><button type="button" class="m-remove" data-remove>Remove</button></div>`) + `</div>` : '')
     + `</li>`;
+}
+
+/** A Remove tap needs this long between asking and confirming, so a double tap or a tap that lands as the list moves removes nothing. */
+export const REMOVE_WAIT_MS = 600;
+/** The row's buttons, in the order the click handler checks them. */
+export const ROW_TAPS = ['data-toggle', 'data-cancel', 'data-edit', 'data-edit-cancel', 'data-edit-save', 'data-esrc', 'data-pick-open', 'data-pick-cancel', 'data-pick-set', 'data-hide-by', 'data-save', 'data-remove', 'data-remove-keep', 'data-remove-yes'];
+/**
+ * What a tap on a row's button does to the open-row state `s`, and what the handler runs next. Only 'remove' deletes, and only
+ * from the confirm, on the open row, outside edit mode, at least REMOVE_WAIT_MS after Remove asked. Edit and Cancel in edit
+ * mode clear a pending confirm, so a Remove tapped earlier never carries over.
+ */
+export function rowTap(tap, s, id, now = Date.now()) {
+  switch (tap) {
+    case 'data-edit': s.confirmRemove = 0; return 'edit';
+    case 'data-edit-cancel': s.edit = null; s.confirmRemove = 0; return 'draw';
+    case 'data-remove': if (s.edit || s.open !== id) return 'none'; s.confirmRemove = now; return 'draw';
+    case 'data-remove-keep': s.confirmRemove = 0; return 'draw';
+    case 'data-remove-yes': return s.confirmRemove && !s.edit && s.open === id && now - s.confirmRemove >= REMOVE_WAIT_MS ? 'remove' : 'none';
+    default: return tap;
+  }
 }
 
 /** The contact as a link: an email opens the mail app, a phone number the dialer. */
@@ -338,7 +360,8 @@ export function makeMigrationPop(d) {
     if (!p) return;
     s.edit = { id, name: p.name, dealer: String(p.dealerId), source: p.source, contact: p.contact ?? '', error: '' };
     drawList();
-    listEl.querySelector('[data-e="name"]')?.focus({ preventScroll: true });
+    // On the phone a focused field opens the keyboard, and its closing moves the list under the finger. Focus on a computer only.
+    if (matchMedia('(pointer: fine)').matches) listEl.querySelector('[data-e="name"]')?.focus({ preventScroll: true });
     listEl.querySelector('[data-edit-form]')?.scrollIntoView?.({ block: 'nearest' });
   }
   async function saveEdit() {
@@ -433,22 +456,20 @@ export function makeMigrationPop(d) {
       drawList();
       return same ? undefined : listEl.querySelector('[data-note]')?.focus({ preventScroll: true });
     }
-    if (e.target.closest('[data-cancel]')) { closeRow(); return drawList(); }
-    if (e.target.closest('[data-edit]')) return openEdit(id);
-    if (e.target.closest('[data-edit-cancel]')) { s.edit = null; return drawList(); }
-    if (e.target.closest('[data-edit-save]')) return void saveEdit();
-    const esrc = e.target.closest('[data-esrc]');
-    if (esrc && s.edit) { s.edit.source = esrc.dataset.esrc; return drawList(); }
-    if (e.target.closest('[data-pick-open]')) return openPick(id, 'move');
-    if (e.target.closest('[data-pick-cancel]')) { s.pick = null; return drawList(); }
-    if (e.target.closest('[data-pick-set]')) return void setPick();
-    if (e.target.closest('[data-hide-by]')) return void act(id, 'hide-by');
-    openNative(e);
-    if (e.target.closest('[data-save]')) return void act(id, 'note', { note: listEl.querySelector('[data-note]')?.value ?? '' });
-    if (e.target.closest('[data-remove]')) {
-      if (!s.confirmRemove) { s.confirmRemove = true; return drawList(); }
-      return void act(id, 'remove');
-    }
+    const tap = ROW_TAPS.find(a => e.target.closest(`[${a}]`));
+    if (!tap) return openNative(e);
+    const next = rowTap(tap, s, id);
+    if (next === 'draw') return drawList();
+    if (next === 'edit') return openEdit(id);
+    if (next === 'remove') return void act(id, 'remove');
+    if (next === 'data-cancel') { closeRow(); return drawList(); }
+    if (next === 'data-edit-save') return void saveEdit();
+    if (next === 'data-esrc') { if (s.edit) { s.edit.source = e.target.closest('[data-esrc]').dataset.esrc; drawList(); } return; }
+    if (next === 'data-pick-open') return openPick(id, 'move');
+    if (next === 'data-pick-cancel') { s.pick = null; return drawList(); }
+    if (next === 'data-pick-set') return void setPick();
+    if (next === 'data-hide-by') return void act(id, 'hide-by');
+    if (next === 'data-save') return void act(id, 'note', { note: listEl.querySelector('[data-note]')?.value ?? '' });
   });
   function typedPick(e) {
     const k = e.target.dataset?.pick;

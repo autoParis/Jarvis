@@ -204,7 +204,12 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .m-note label { font-size: 12px; font-weight: 600; color: var(--muted); }
 .m-note .acts { display: flex; gap: 6px; align-items: center; }
 .m-note .acts small { margin-left: auto; font-size: 12px; color: var(--muted); }
+/* Remove sits under a rule, away from Save and Cancel, and asks before it removes */
+.m-meta, .m-confirm { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--pop-line); }
 .m-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.m-confirm { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); }
+.m-confirm span { flex: 1; min-width: 0; }
+#pop-migration .act.danger { background: var(--bad); border-color: var(--bad); color: var(--ground); }
 .m-meta span { flex: 1; min-width: 0; }
 /* The open row: the contact (a link) on the left, the small pencil Edit on the right, above the note */
 .m-open-head { display: flex; align-items: center; gap: 8px; min-height: 32px; }

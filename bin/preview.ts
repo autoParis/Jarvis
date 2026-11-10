@@ -287,12 +287,16 @@ function sampleToday(name: string, changed: (list: () => unknown) => void) {
 const SAMPLE_DEALERS = ['One', 'Two', 'Four', 'Five', 'Seven'].map(n => ({ name: `Dealer ${n}`, key: `dealer${n.toLowerCase()}` }));
 function sampleMigration(name: string, changed: (m: ReturnType<typeof makeMigration>) => void) {
   const store = openStore(':memory:');
-  const m: ReturnType<typeof makeMigration> = makeMigration({ db: store.db, log: () => {}, getState: store.getState, setState: store.setState, onChange: () => changed(m), seed: () => SAMPLE_DEALERS });
+  // A PREVIEW_MIGRATION file brings its own dealerships, so its real names are on the list.
+  const fromFile = name === 'migration' && process.env.PREVIEW_MIGRATION
+    ? [...new Map((JSON.parse(readFileSync(process.env.PREVIEW_MIGRATION, 'utf8')) as { dealership: string; dealerKey: string | null }[]).map(p => [p.dealership, { name: p.dealership, key: p.dealerKey }])).values()]
+    : null;
+  const m: ReturnType<typeof makeMigration> = makeMigration({ db: store.db, log: () => {}, getState: store.getState, setState: store.setState, onChange: () => changed(m), seed: () => fromFile ?? SAMPLE_DEALERS });
   if (name !== 'migration') return m;
   if (process.env.PREVIEW_MIGRATION) {
     const db = (t: string | null) => t && t.replace('T', ' ').replace(/(\.\d+)?Z$/, '');
     for (const p of JSON.parse(readFileSync(process.env.PREVIEW_MIGRATION, 'utf8'))) {
-      const id = m.add({ name: p.name, dealership: p.dealership, source: p.source, status: p.status === 'meeting' ? 'contacted' : p.status, note: p.note, from: p.addedFrom ?? 'chat' }, p.addedBy === 'jarvis' ? 'jarvis' : 'owner').body.person.id;
+      const id = m.add({ name: p.name, dealership: p.dealership, source: p.source, status: p.status === 'meeting' ? 'contacted' : p.status, note: p.note, contact: p.contact, from: p.addedFrom ?? 'chat' }, p.addedBy === 'jarvis' ? 'jarvis' : 'owner').body.person.id;
       store.db.prepare('UPDATE migration_people SET status = ?, meeting_at = ?, created_at = ?, status_at = ?, note_at = ?, by_hidden_at = ? WHERE id = ?')
         .run(p.status, db(p.meetingAt), db(p.createdAt), db(p.statusAt), db(p.noteAt), p.byHidden ? db(p.updatedAt) : null, id);
     }

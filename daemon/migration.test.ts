@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './store.ts';
 import { makeMigration, migrationRoute, migrationBrief, readDealerFile, statusOf, fold, meetingOf, createTables, contactOf } from './migration.ts';
-import { migrationButton, migrationSub, listHtml, rowHtml, contactHtml, dealerOptions, addFormHtml, when, editedAgo, byLine, since, meetingWords, easternIso, easternFields, readBack, groups, order, byDealership, pickerHtml, nextMeeting, addReady, meetingToast, toastKey, untilWords } from '../web/migration.js';
+import { migrationButton, migrationSub, listHtml, rowHtml, contactHtml, rowTap, ROW_TAPS, REMOVE_WAIT_MS, dealerOptions, addFormHtml, when, editedAgo, byLine, since, meetingWords, easternIso, easternFields, readBack, groups, order, byDealership, pickerHtml, nextMeeting, addReady, meetingToast, toastKey, untilWords } from '../web/migration.js';
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
 const SEED = fileURLToPath(new URL('../docs/migration/dealerships.json', import.meta.url));
@@ -239,7 +239,9 @@ test('each status is a heading that folds with its count, Migrated starts folded
   assert.match(open, /data-note/);
   assert.match(open, /data-save/);
   assert.match(open, /data-remove>Remove</);
-  assert.match(listHtml(list, { open: 1, confirmRemove: true }, NOW), /Tap again to remove/);
+  const asking = listHtml(list, { open: 1, confirmRemove: NOW }, NOW);
+  assert.match(asking, /Remove Open from the list\?<\/span><button type="button" class="act danger" data-remove-yes>Remove<\/button><button type="button" class="act" data-remove-keep>Keep<\/button>/, 'Keep sits where Remove was');
+  assert.doesNotMatch(asking, /data-remove>/);
   assert.match(listHtml([], {}, NOW), /Nobody yet/);
 });
 
@@ -798,6 +800,40 @@ test('an open row shows the contact as a link and a small pencil Edit; edit mode
   assert.match(html, /role="alert">Not saved: bad</);
   assert.doesNotMatch(html, /data-note|data-remove/, 'edit mode replaces the note panel');
   assert.match(addFormHtml(dealers, { name: '', dealer: '', source: 'email', status: 'todo', note: '', contact: '' }, NOW), /data-f="contact"/);
+});
+
+test('Cancel in edit mode keeps the row: no tap there removes, and a Remove asked before edit mode does not carry over', () => {
+  const s: any = { open: 1, edit: null, confirmRemove: false };
+  // Simon's path: Remove tapped (or landed on) once, then Edit, then Cancel, then a tap on the same spot.
+  assert.equal(rowTap('data-remove', s, 1, NOW), 'draw');
+  assert.equal(rowTap('data-edit', s, 1, NOW + 1000), 'edit');
+  assert.equal(s.confirmRemove, 0, 'Edit clears the pending confirm');
+  s.edit = { id: 1, name: 'Max', dealer: '1', source: 'email', contact: '', error: '' };
+  assert.equal(rowTap('data-remove', s, 1, NOW + 1100), 'none', 'no Remove in edit mode');
+  assert.equal(rowTap('data-remove-yes', s, 1, NOW + 1200), 'none');
+  assert.equal(rowTap('data-edit-cancel', s, 1, NOW + 1300), 'draw');
+  assert.deepEqual([s.open, s.edit, s.confirmRemove], [1, null, 0], 'the row stays open, out of edit mode, nothing armed');
+  assert.equal(rowTap('data-remove-yes', s, 1, NOW + 5000), 'none', 'a confirm tap with nothing asked removes nothing');
+  const html = rowHtml(person({}), s, NOW);
+  assert.match(html, /data-remove>Remove</);
+  assert.doesNotMatch(html, /data-remove-yes/);
+  // Every tap the edit form has, in any order, never says remove.
+  const s2: any = { open: 1, edit: { id: 1 }, confirmRemove: false };
+  for (const t of ['data-edit-save', 'data-esrc', 'data-edit-cancel', 'data-cancel']) assert.notEqual(rowTap(t, s2, 1, NOW), 'remove', t);
+});
+
+test('Remove asks first, and a double tap or a tap within the wait removes nothing', () => {
+  const s: any = { open: 1, edit: null, confirmRemove: false };
+  assert.equal(rowTap('data-remove', s, 1, NOW), 'draw');
+  assert.equal(rowTap('data-remove-yes', s, 1, NOW + 100), 'none', 'too soon: a double tap');
+  assert.equal(rowTap('data-remove-yes', s, 2, NOW + REMOVE_WAIT_MS), 'none', 'another row');
+  assert.equal(rowTap('data-remove-yes', s, 1, NOW + REMOVE_WAIT_MS), 'remove');
+  assert.equal(rowTap('data-remove-keep', s, 1, NOW), 'draw');
+  assert.equal(s.confirmRemove, 0, 'Keep disarms');
+  assert.equal(rowTap('data-remove', { open: 2, confirmRemove: false }, 1, NOW), 'none', 'Remove on a closed row');
+  assert.ok(ROW_TAPS.indexOf('data-edit-cancel') >= 0 && ROW_TAPS.indexOf('data-remove-yes') >= 0, 'the handler checks both');
+  assert.match(read('../web/migration.js'), /rowTap\(tap, s, id\)/, 'the click handler goes through rowTap');
+  assert.doesNotMatch(read('../web/migration.js'), /act\(id, 'remove'\)[^]*act\(id, 'remove'\)/, 'one path to remove');
 });
 
 test('the brain\'s file lists the edit verb and --contact', () => {
