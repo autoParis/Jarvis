@@ -201,6 +201,21 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .m-note .acts small { margin-left: auto; font-size: 12px; color: var(--muted); }
 .m-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .m-meta span { flex: 1; min-width: 0; }
+/* The open row: the contact (a link) on the left, the small pencil Edit on the right, above the note */
+.m-open-head { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.m-contact { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--ink); text-decoration: none; }
+.m-contact svg { width: 15px; height: 15px; color: var(--muted); flex: none; }
+.m-contact span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-contact:hover span { text-decoration: underline; text-underline-offset: 3px; }
+.m-edit-btn { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 0 8px; border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.m-edit-btn svg { width: 14px; height: 14px; }
+.m-edit-btn:hover { background: var(--hover); color: var(--ink); }
+/* Edit mode: the fields in two columns on a computer, one on the phone */
+.m-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.m-edit-head { grid-column: 1 / -1; font-size: 12px; font-weight: 600; color: var(--muted); }
+.m-note .m-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.m-edit .opt, .m-form .opt { font-weight: 400; }
+.m-edit .m-err, .m-edit .acts { grid-column: 1 / -1; }
 .m-remove { min-height: 32px; padding: 0 4px; font-size: 13px; color: var(--bad); text-decoration: underline; text-underline-offset: 3px; }
 .m-sec + .m-sec { margin-top: 6px; }
 .m-head { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px; font-size: 14px; text-align: left; border-radius: var(--r-s); }
@@ -877,6 +892,9 @@ a.num:hover { color: var(--ink); }
   .m-status select { height: 40px; border-radius: 20px; }
   .m-status svg { top: 13px; }
   .m-remove { min-height: 44px; }
+  .m-edit { grid-template-columns: 1fr; }
+  .m-edit-btn, .m-open-head { min-height: 44px; }
+  .m-contact { min-height: 44px; font-size: 14px; }
   .m-foot { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
   #today-text, .t-note input { font-size: 16px; }
   #today-go { height: 44px; border-radius: 22px; padding: 0 16px; }
