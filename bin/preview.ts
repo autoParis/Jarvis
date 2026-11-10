@@ -20,6 +20,7 @@
 //   menu > Scheduled tasks     sample rows in every status; PREVIEW_TASKS=real reads the real launchd jobs, read-only
 //   (every scene with requests) Jarvis's second message carries Approve and Reject for the slow-feed issue
 //   ?s=native                  a native worker just started: its "Handed to a worker" row comes from daemon/requests.ts
+//   ?s=reportask               PREVIEW_REPORT=<file.md>: a worker ask with a REPORT line, its row with "Read first", a Completed row with the report icon
 //   ?s=pictures                the owner's "Anything stuck?" carries 4 attached pictures: the row of small squares
 //
 // Terminal and Codex from the plus run the real terminal code (daemon/terminal.ts, termgate.ts, termroutes.ts) on a
@@ -40,6 +41,8 @@ import { tmpdir } from 'node:os';
 import { join, extname, dirname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { askCard } from '../daemon/asks.ts';
+import { reportSummary, readReport } from '../daemon/reports.ts';
+import { docHref } from '../web/contract.js';
 import { byteRange, sentences } from '../daemon/voice.ts';
 import { messageCard, messageOrder } from '../daemon/messages.ts';
 import type { Item } from '../daemon/store.ts';
@@ -59,6 +62,13 @@ import { quoteOf, quoteLine, replyIdOf, type TurnRow } from '../daemon/quote.ts'
 import { makePreviewTasks } from './preview-tasks.ts';
 
 const CLOSED = process.env.PREVIEW_CLOSED ? JSON.parse(readFileSync(process.env.PREVIEW_CLOSED, 'utf8')) : undefined;
+// PREVIEW_REPORT=<file.md> fills ?s=reportask: a worker ask whose REPORT line names that file, its request row with
+// "Read first", and a Completed row with the icon only. The report and the pictures in its folder are served read-only.
+// The file is given by hand, as for PREVIEW_CLOSED.
+const REPORT_FILE = process.env.PREVIEW_REPORT ?? '';
+const REPORT_DIR = REPORT_FILE ? dirname(REPORT_FILE) : '';
+const reportShown = (p: string) => !!REPORT_DIR && p.startsWith(REPORT_DIR + '/') && /\.(png|jpe?g|webp|gif)$/i.test(p) && existsSync(p);
+const previewReportOf = (p: string) => REPORT_FILE ? reportSummary(p, REPORT_DIR, reportShown) : undefined;
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const PORT = Number(process.env.PREVIEW_PORT ?? 7718);
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
@@ -176,7 +186,17 @@ function build(s: string) {
     email('e3', 90, false, 'Jordan Roy', 'jordan@example.test', 'Invoice for October', 'Jordan asks whether the October invoice can be paid this week.', ''),
     item('outbox:o1', 120, { source: 'outbox', kind: 'outbox', subject: 'FBM secrets grant', meta: JSON.stringify({ to: 'Sam', channel: 'slack', text: 'Hi Sam, could you grant me the permission to add service secrets? Thanks.' }) }),
   ];
-  const asks = s === 'dense' ? [denseAsk, blocked] : s === 'messages' ? [] : s === 'escalation' ? [blocked] : s === 'failed' ? [failed] : s === 'named' ? [refused] : s === 'approval' ? [q2] : empty ? [] : [q1, q2];
+  const reportAsk = item('q4812', 4, { dispatch_id: 'n:4812', body: [
+    'STORY: 4812 seller footer template',
+    'WHERE: I wrote the design for the seller footer. Two designs are possible.',
+    'QUESTION: Which design should the seller footer use?',
+    'CONTEXT: The report has the current page, both designs and 5 screenshots.',
+    `REPORT: ${REPORT_FILE}`,
+    'OPTIONS:',
+    '- Seller edits own footer because the client asked for it',
+    '- Admin sets it per seller because no new permission needed',
+  ].join('\n'), options: JSON.stringify(['Seller edits own footer', 'Admin sets it per seller']) });
+  const asks = s === 'reportask' ? [reportAsk, q1] : s === 'dense' ? [denseAsk, blocked] : s === 'messages' ? [] : s === 'escalation' ? [blocked] : s === 'failed' ? [failed] : s === 'named' ? [refused] : s === 'approval' ? [q2] : empty ? [] : [q1, q2];
   const mail = { id: 11, action: 'gmail-send', args: JSON.stringify({ to: 'sam@example.test', subject: w.sub, text: w.text }), say: w.say, status: 'pending', after_turn: 0, decided_by: null, owner_text: null, result: null, created_at: ago(18) };
   const start = { id: 12, action: 'worker-start', args: JSON.stringify({ repo: '/Users/owner/Repos/acmeapp', taskTitle: '#4640 Lead alert', spec: 'Text alert when a lead waits more than an hour.' }), say: w.say2, status: 'pending', after_turn: 0, decided_by: null, owner_text: null, result: null, created_at: ago(26) };
   const issue = { id: 13, action: 'gh-issue-create', args: JSON.stringify({ repo: 'example/repo', title: 'Feed slows down at night', body: 'The export feed takes twice as long after 10 PM.' }), say: 'Open an issue about the slow feed?', status: 'pending', after_turn: 0, chat_turn: 902, decided_by: null, owner_text: null, result: null, created_at: ago(12) };
@@ -198,6 +218,13 @@ function build(s: string) {
     { key: 'approval:9', kind: 'approval', tag: 'Email to Jordan', at: iso(120), question: w.ae, answer: 'Approved' },
     { key: 'approval:8', kind: 'approval', tag: 'Story 4555', at: iso(150), question: 'Start a worker on story 4555?', answer: 'Approved, then failed: spawn_failed: no worktree slot', failed: true },
   ];
+  const doc = s === 'reportask' ? previewReportOf(REPORT_FILE) : undefined;
+  if (doc) {
+    const d = (waits: boolean) => ({ path: doc.path, title: doc.title, href: docHref(doc.path), waits });
+    rows.unshift(worker('4812', { title: '#4812 Seller footer template', group: 'story', label: '#4812', state: 'waiting', note: 'Question', worktree: 'heron' }));
+    requests.unshift({ id: 20, title: '#4812 Seller footer template', words: null, status: 'waiting', at: iso(4), startedAt: iso(80), row: 'n:4812', doc: d(true) } as any,
+      { id: 21, title: '#4886 Facebook price test', words: null, status: 'done', at: iso(30), startedAt: iso(120), doc: d(false) } as any);
+  }
   if (s === 'native') return { rows: [NATIVE_ROW, ...rows], requests: nativeRequests() as typeof requests, items: [], emails: [], approvals: [], turns, audit: [], hidden: [] as string[] };
   return { rows, requests, items: asks, emails, approvals, turns, audit, hidden: [] as string[] };
 }
@@ -298,7 +325,7 @@ function sampleMigration(name: string, changed: (m: ReturnType<typeof makeMigrat
   return m;
 }
 const messagesOf = (scene: Scene) => messageOrder(scene.emails.filter(i => i.status === 'spoken').map(i => messageCard(i)));
-const cardOf = (i: Item) => askCard(i, i.kind === 'escalation' ? '#4612 Export history screen' : undefined, () => true);
+const cardOf = (i: Item) => askCard(i, i.kind === 'escalation' ? '#4612 Export history screen' : undefined, () => true, previewReportOf);
 const uploads = new Map<string, { type: string; bytes: Buffer }>();
 const body = async (req: http.IncomingMessage) => { let s = ''; for await (const c of req) s += c; return s ? JSON.parse(s) : {}; };
 const send = (res: http.ServerResponse, status: number, data?: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(data === undefined ? '' : JSON.stringify(data)); };
@@ -375,6 +402,10 @@ http.createServer(async (req, res) => {
     if (url === '/api/requests') return send(res, 200, scene.requests);
     const docAt = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
     if (url === '/api/reports') return send(res, 200, SAMPLE_DOCS.map(d => ({ path: d.path, title: d.title, at: docAt(d.min) })));
+    if (url === '/api/reports/file' && REPORT_FILE && new URL(req.url!, 'http://x').searchParams.get('path') === REPORT_FILE) {
+      const d = readReport(REPORT_FILE, REPORT_DIR);
+      return d ? send(res, 200, d) : send(res, 404, { error: 'PREVIEW_REPORT could not be read.' });
+    }
     if (url === '/api/reports/file') {
       const d = SAMPLE_DOCS.find(x => x.path === new URL(req.url!, 'http://x').searchParams.get('path'));
       return d ? send(res, 200, { path: d.path, title: d.title, at: docAt(d.min), body: d.body }) : send(res, 404, { error: 'Only .md files in data/reports can be opened.' });
@@ -398,6 +429,8 @@ http.createServer(async (req, res) => {
     if (url === '/image') {
       const up = uploads.get(new URL(req.url!, 'http://x').searchParams.get('path') ?? '');
       if (up) { res.writeHead(200, { 'content-type': up.type }); return res.end(up.bytes); }
+      const shotPath = new URL(req.url!, 'http://x').searchParams.get('path') ?? '';
+      if (reportShown(normalize(shotPath))) { res.writeHead(200, { 'content-type': `image/${extname(shotPath).slice(1).replace('jpg', 'jpeg')}` }); return res.end(readFileSync(normalize(shotPath))); }
       res.writeHead(200, { 'content-type': 'image/svg+xml' });
       return res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="520" height="320"><rect width="520" height="320" fill="#fff"/><text x="20" y="34" font-family="sans-serif" font-size="16" font-weight="600" fill="#111">Sample picture</text>${[60, 96, 132, 168, 204, 240, 276].map(y => `<rect x="20" y="${y}" width="480" height="14" rx="3" fill="#E4E4E1"/>`).join('')}</svg>`);
     }

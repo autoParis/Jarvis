@@ -4,6 +4,7 @@
 // daemon/report.test.ts import the same code.
 import { esc, STATE, requestMark } from './requestlist.js';
 import { formatStamp } from './workfold.js';
+import { docHref } from './contract.js';
 
 const FENCE = /^\s*(```|~~~)/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
@@ -278,8 +279,8 @@ export function reportHtml(r, ctx) {
 
 // ---- documents in data/reports: a list from the menu, one page per file, and the chat's [report: path] card ----
 
-/** The address of a document's page, or of the list when `path` is empty. */
-export const docHref = path => path ? `#reports/${encodeURIComponent(path)}` : '#reports';
+/** The address of a document's page, or of the list when `path` is empty (web/contract.js). */
+export { docHref };
 
 /** The path in a `#reports/<path>` address, '' for the list itself, undefined for any other address. */
 export function docRoute(hash) {

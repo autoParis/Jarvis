@@ -525,6 +525,9 @@ function askUpdate(card) {
   renderRequests();
 }
 $('req-card').addEventListener('click', e => {
+  // The report button follows its link to the report viewer. The popup closes, and comes back on this ask when the report closes.
+  const doc = e.target.closest('.ask-report');
+  if (doc) { askAfterReport = doc.closest('.ask').dataset.ask; setPop(null); return; }
   const opt = e.target.closest('.ask-opt');
   if (opt && !opt.disabled) {
     const id = opt.closest('.ask').dataset.ask, option = askData.get(id)?.options[Number(opt.dataset.i)];
@@ -1118,6 +1121,8 @@ worklist.addEventListener('keydown', e => {
 // ---- an open worker: replaces the conversation in the center, polled about every 3 s from the cursor the daemon returns ----
 const paneEl = $('pane'), paneLines = $('pane-lines'), paneLog = $('pane-log');
 const report = { id: null, gen: 0, fromApp: false, drawer: false }; // the report page, further down
+/** The ask to show again when the report page closes: its report was opened from its card or its push. */
+let askAfterReport = null;
 const pane = { id: null, cursor: null, timer: 0, gen: 0, error: '', warning: '', busy: false, phone: null };
 const PANE_MAX = 400;
 function openPane(id) {
@@ -1414,6 +1419,8 @@ function reportRoute(fromApp) {
   const drawer = report.drawer;
   hideReport();
   closePane();
+  // A report opened from an ask card or its push: closing it shows that ask again.
+  if (askAfterReport) { const id = askAfterReport; askAfterReport = null; return showItem(id); }
   if (drawer && !wide.matches) panel(true); // on a phone the list is a drawer, and Back from a worker's report means back to it
 }
 $('reportsbtn').onclick = () => { showMenu(false); location.hash = docHref(''); };
@@ -2090,7 +2097,13 @@ connect();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 // ---- push alerts: Jarvis notifies this device about unanswered asks and urgent news when the app is closed ----
 let wantItem = new URLSearchParams(location.search).get('item');
-if (wantItem) history.replaceState(null, '', '/');
+// An ask's push with a report opens /?item=<id>#reports/<path>: the report shows first, and the ask when it closes.
+if (wantItem && docRoute(location.hash)) { askAfterReport = wantItem; wantItem = null; }
+if (wantItem || askAfterReport) {
+  const at = new URL(location.href);
+  at.searchParams.delete('item');
+  history.replaceState(null, '', at.pathname + at.search + at.hash);
+}
 // A tapped notification opens /?item=<message id>. An open ask or email opens in its popup; an event line is scrolled to and marked.
 function showItem(id) {
   if (id.startsWith('gmail:')) {
@@ -2145,7 +2158,13 @@ if (pushReady) {
   alertsBtn.hidden = false;
   // Re-send an existing subscription on every load, so the daemon has it even after its database was reset.
   showAlerts().then(sub => sub && postSub(sub)).catch(() => {});
-  navigator.serviceWorker.addEventListener('message', e => { if (e.data?.type === 'item') showItem(e.data.id); });
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type !== 'item') return;
+    if (docRoute(e.data.hash) === undefined) return showItem(e.data.id);
+    setPop(null);
+    askAfterReport = e.data.id;
+    location.hash = e.data.hash;
+  });
 }
 // A page opened at a report's address (#report/<id>, #reports/<path>) shows it. Last, so every `let` it reaches exists:
 // above the terminal's `let term`, a report opened by its address threw and stopped the rest of this script.

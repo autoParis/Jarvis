@@ -1,10 +1,16 @@
 // The worker contract: every rule Jarvis writes into a worker's brief, and the parsers that read the worker's replies
 // back. The labels are defined once here, so the brief and its parser cannot drift apart. workercontract.test.ts writes
 // an ask and a report in the shape each brief describes and checks that they read back.
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { OWNER, OWNER_CAP, PRODUCT_LABEL } from './config.ts';
+import { reportsDir } from './reports.ts';
+
+/** The folder of the reports the app opens. A worker that names a report for a decision writes it here. */
+export const REPORTS_DIR = reportsDir(join(dirname(fileURLToPath(import.meta.url)), '..'));
 
 /** The labeled fields of an ask. The parser also takes FAILED and PROPOSES (with PROPOSAL and PROPOSE) on escalations. */
-export const ASK_FIELDS = ['STORY', 'WHERE', 'QUESTION', 'CONTEXT', 'IMAGE', 'OPTIONS'] as const;
+export const ASK_FIELDS = ['STORY', 'WHERE', 'QUESTION', 'CONTEXT', 'REPORT', 'IMAGE', 'OPTIONS'] as const;
 /** The first-line labels of a worker's message that ask nothing: a final report, a pause, a status notice. */
 export const REPORT_LABELS = ['DONE', 'FAILED', 'WAITING', 'NOTICE'] as const;
 export type ReportLabel = typeof REPORT_LABELS[number];
@@ -50,9 +56,11 @@ STORY: <number and topic, at most 8 words>
 WHERE: <what you are doing, one or two short sentences>
 QUESTION: <one sentence>
 CONTEXT: <optional, at most 3 sentences>
+REPORT: <optional, the absolute path of the .md report in ${REPORTS_DIR} that the decision rests on>
 OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
 Then end your turn. The answer arrives as a message from jarvis-brain or jarvis-brain-relay (${OWNER}'s words, carried by jarvisd) and starts a new turn.
 An ask must have OPTIONS. Jarvis sends an ask with no options back to you, and ${OWNER} does not see it.
+If you wrote a report that ${OWNER} must read before he decides, give its path on the REPORT line, not only in CONTEXT. The card then shows a button that opens the report.
 
 A notice is not a question. A notice tells ${OWNER} a status and asks nothing, for example "the switch starts now, jarvisd restarts in 1 minute". Send a notice only if ${OWNER} must know it now. Start it with \`NOTICE: <one sentence>\` and do not use the ask fields. Jarvis shows it as a status line, with nothing to answer, and no answer comes back. Do not wait for one.
 
@@ -124,6 +132,22 @@ If you need a decision, send it again with an OPTIONS line: recommended first, a
 If it is only a status update, start it with \`NOTICE:\` and ask nothing. It then shows as a status line, with nothing to answer.`;
 
 // Reading a worker's replies.
+/** An absolute path to a .md file in a data/reports folder, anywhere in a text. */
+const REPORT_DOC = /(?:^|[\s(`<[:])(\/[^\s`'"()<>[\]]*\/data\/reports\/[^\s`'"()<>[\]]+?\.md)(?=$|[\s`'"()<>[\].,;:!?])/im;
+
+/**
+ * The report an ask names on its REPORT line: one absolute path to a .md file, bare, in backticks or in a
+ * `[report: ...]` marker. Undefined when the ask has no REPORT line or the line is not such a path. Whether the file is
+ * really in data/reports is the daemon's check (reports.ts reportFile).
+ */
+export function askReportPath(body: string): string | undefined {
+  const line = (fields(body).REPORT ?? '').split('\n')[0].trim();
+  const path = line.replace(/^\[report:\s*(.*?)\s*\]$/i, '$1').replace(/^`(.*)`$/, '$1').replace(/^<(.*)>$/, '$1').trim();
+  return /^\/\S*\.md$/i.test(path) ? path : undefined;
+}
+
+/** The first data/reports .md path a worker's text names (a DONE report, an ask's CONTEXT), or undefined. */
+export const reportPathIn = (text: string | null | undefined): string | undefined => REPORT_DOC.exec(text ?? '')?.[1];
 /** A turn that ends on purpose before the work is done starts its last message with this: it waits for something. */
 export const WAITING_LINE = /^\s*WAITING\s*:/i;
 

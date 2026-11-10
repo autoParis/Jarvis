@@ -7,6 +7,20 @@
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const age = iso => { const m = Math.max(0, (Date.now() - Date.parse(iso)) / 60_000); return m < 1 ? 'now' : m < 60 ? `${Math.round(m)} min` : m < 2880 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`; };
 
+  const DOC = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z M14 3v5h5 M10 13h6 M10 17h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+  const pictures = n => n === 1 ? '1 picture' : `${n} pictures`;
+  /**
+   * The report the decision rests on, right under the title: one tap opens it in the report viewer. Its first picture is
+   * the thumbnail, else a document icon. `r.href` comes from web/contract.js docHref (daemon/asks.ts sets it).
+   */
+  function reportHtml(r) {
+    if (!r?.href) return '';
+    const thumb = r.image ? `<img class="ask-report-img" src="/image?path=${esc(encodeURIComponent(r.image))}" alt="" loading="lazy">` : `<span class="ask-report-img">${DOC}</span>`;
+    const count = r.pictures ? ` · ${pictures(r.pictures)}` : '';
+    return `<a class="ask-report" href="${esc(r.href)}" aria-label="Read the report first: ${esc(r.title)}${esc(count)}">${thumb}`
+      + `<span class="ask-report-txt"><span class="ask-report-k">Read the report first${esc(count)}</span><span class="ask-report-t">${esc(r.title)}</span></span></a>`;
+  }
+
   /** `md` is markdown(text) from markdown.js. `error` is a failed tap's message, shown under the buttons. */
   function askCardHtml(card, md, error) {
     const answered = card.status === 'answered', sending = card.status === 'sending';
@@ -26,7 +40,8 @@
     else if (answered) outcome = '<div class="ask-outcome"><span class="pill done">sent</span></div>';
     if (error) outcome += `<div class="ask-outcome"><span class="pill failed">not sent</span>${esc(error)}</div>`;
     const tag = `<div class="ask-tag"><div class="ask-title">${esc(card.title)}</div>${card.at ? `<span class="ago">${age(card.at)}</span>` : ''}</div>`;
-    const lines = card.kind === 'escalation' ? line('Refused', card.refused) + line('Failed', card.failed) + line('Proposes', card.proposes) : '';
+    const lines = (card.kind === 'escalation' ? line('Refused', card.refused) + line('Failed', card.failed) + line('Proposes', card.proposes) : '')
+      + reportHtml(card.report);
     // An ask in the fields shape reads in a fixed order under short headings. The long part waits behind More.
     if (card.parts && card.question) {
       const p = card.parts, head = text => `<h3 class="card-h">${text}</h3>`;

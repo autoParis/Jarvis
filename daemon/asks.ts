@@ -4,7 +4,9 @@ import type { Log } from './log.ts';
 import { approvalTag, approvalOutcomeText } from '../web/worklist.js';
 import { namedActionIn, namedLabel, refusedByPermissionLayer, type Named } from './namedactions.ts';
 import { brainCard, answerBrainAsk, isBrainAsk } from './brainasks.ts';
-import { fields } from './workercontract.ts';
+import { fields, askReportPath, reportPathIn } from './workercontract.ts';
+import type { ReportSummary } from './reports.ts';
+import { docHref } from '../web/contract.js';
 import type { RouteResult, Body } from './route.ts';
 export { fields } from './workercontract.ts';
 
@@ -49,7 +51,14 @@ export type AskCard = {
    * Without it the page draws `body` as one block, as before.
    */
   parts?: { doing?: string; more?: string; image?: string };
+  /**
+   * The report this decision rests on: the ask's REPORT line, else a data/reports path in its text. Set only for a file
+   * the daemon can open. `href` opens it in the report viewer, `image` is its first picture, `pictures` how many it has.
+   */
+  report?: AskReport;
 };
+
+export type AskReport = ReportSummary & { href: string };
 
 // "Options: (a) one; (b) two" or "Options: 1) one 2) two" at the end of a free-form ask.
 const INLINE_OPTIONS = /(?:^|\n|\s)options?\s*:\s*([\s\S]*)$/i;
@@ -193,8 +202,9 @@ const answeredBy = (i: Item) => i.answered_by === 'jarvis' ? { answeredBy: 'jarv
  * Builds the card for a question or escalation; undefined for anything else.
  * `story` is the worker's title from the work list, used when the ask names no story.
  * `shown` says whether the page may show a picture at that path (the daemon passes its /image folder check).
+ * `reportOf` reads a report in data/reports (reports.ts reportSummary); undefined means the file cannot be opened.
  */
-export function askCard(i: Item, story?: string, shown: (path: string) => boolean = looksLikeImage): AskCard | undefined {
+export function askCard(i: Item, story?: string, shown: (path: string) => boolean = looksLikeImage, reportOf?: (path: string) => ReportSummary | undefined): AskCard | undefined {
   if (i.kind !== 'question' && i.kind !== 'escalation') return undefined;
   if (isBrainAsk(i)) return brainCard(i);
   const body = (i.body ?? '').trim();
@@ -253,8 +263,16 @@ export function askCard(i: Item, story?: string, shown: (path: string) => boolea
   // replies. A path outside the allowed folders shows as text, never as a broken thumbnail.
   const [imageLine = '', ...afterImage] = (f.IMAGE ?? '').split('\n');
   const named = imageLine.replace(/^\[image:\s*(.*?)\s*\]$/i, '$1').replace(/^`(.*)`$/, '$1').trim();
-  let text = structured ? [f.PREAMBLE, f.WHERE, f.QUESTION, f.CONTEXT, afterImage.join('\n').trim(), opts.after].filter(Boolean).join('\n\n') : rest;
+  // The report: the REPORT line, else a data/reports path the text names (an ask written before the REPORT line existed).
+  // A REPORT line the daemon cannot open stays in view as text, so the path is not lost.
+  const reportLine = askReportPath(body);
+  const doc = reportLine ?? reportPathIn(body);
+  const summary = doc ? reportOf?.(doc) : undefined;
+  if (summary) card.report = { ...summary, href: docHref(summary.path) };
+  const missing = f.REPORT && !summary ? `Report (not found in data/reports): \`${reportLine ?? f.REPORT.split('\n')[0]}\`` : '';
+  let text = structured ? [f.PREAMBLE, f.WHERE, f.QUESTION, f.CONTEXT, missing, afterImage.join('\n').trim(), opts.after].filter(Boolean).join('\n\n') : rest;
   if (!structured && named) text = text.replace(/^\s*IMAGE\s*:.*$/im, '');
+  if (!structured && f.REPORT) text = text.replace(/^\s*REPORT\s*:.*$/im, missing);
   const source = structured ? body : text;
   const path = named || [...source.matchAll(IMAGE_MARKER)][0]?.[1] || BARE_IMAGE.exec(source)?.[1];
   const image = path && shown(path) ? `[image: ${path}]` : named ? `Image (not in an allowed folder): \`${named}\`` : undefined;
@@ -266,7 +284,7 @@ export function askCard(i: Item, story?: string, shown: (path: string) => boolea
   if (question) card.question = question;
   if (f.QUESTION) {
     const clean = (s?: string) => (s ?? '').replace(IMAGE_MARKER, (_, p: string) => shown(p) ? '' : `\`${p}\``).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    const doing = clean(f.WHERE), more = clean([f.PREAMBLE, f.CONTEXT, afterImage.join('\n').trim(), opts.after].filter(Boolean).join('\n\n'));
+    const doing = clean(f.WHERE), more = clean([f.PREAMBLE, f.CONTEXT, missing, afterImage.join('\n').trim(), opts.after].filter(Boolean).join('\n\n'));
     card.parts = { ...(doing ? { doing } : {}), ...(more ? { more: escalation ? shortParts(more) : more } : {}), ...(image ? { image } : {}) };
   }
   if (escalation) {

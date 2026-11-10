@@ -16,7 +16,7 @@ const item = (body: string): Item => ({ id: 1, source: 'native', external_id: 'q
 
 const SAMPLE: Record<string, string> = {
   STORY: '498 merge the audit changes', WHERE: 'I finished change 2. The tests pass.', QUESTION: 'Merge it now?',
-  CONTEXT: 'CI is green on the branch.', IMAGE: '/tmp/shot.png',
+  CONTEXT: 'CI is green on the branch.', REPORT: '/srv/jarvis/data/reports/498-audit.md', IMAGE: '/tmp/shot.png',
   OPTIONS: 'Merge now because the tests pass\nWait because CI still runs',
 };
 
@@ -34,7 +34,8 @@ test('an ask written in the shape of each brief reads back as a card with every 
     const body = askTemplate(brief).map(l => `${l}: ${SAMPLE[l]}`).join('\n');
     const f = fields(body);
     for (const l of askTemplate(brief)) assert.equal(f[l], SAMPLE[l], `${name}: ${l} reads back`);
-    const card = askCard(item(body), undefined, () => true)!;
+    const card = askCard(item(body), undefined, () => true, path => ({ path, title: 'The audit', pictures: 0 }))!;
+    assert.equal(card.report?.path, SAMPLE.REPORT, `${name}: the REPORT line reaches the card`);
     assert.equal(card.question, SAMPLE.QUESTION, name);
     assert.equal(card.parts?.doing, SAMPLE.WHERE, name);
     assert.match(card.parts?.more ?? '', /CI is green/, name);

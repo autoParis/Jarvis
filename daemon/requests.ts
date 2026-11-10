@@ -7,7 +7,8 @@ import type { Log } from './log.ts';
 import { fields, STOP_ANSWER } from './asks.ts';
 import { readChatFile, type Read } from './transcript.ts';
 import { ROW_PREFIX } from './native.ts';
-import { readReport } from './workercontract.ts';
+import { readReport, askReportPath, reportPathIn } from './workercontract.ts';
+import { docHref } from '../web/contract.js';
 import type { RouteResult, Body } from './route.ts';
 
 // The Requests sidebar: one row per thing the owner asked Jarvis for, from the worker start to its PR. A request is
@@ -16,7 +17,13 @@ import type { RouteResult, Body } from './route.ts';
 
 export type RequestStatus = 'waiting' | 'working' | 'review' | 'done' | 'failed';
 /** What the app shows for one request. `row` is the work-list row that opens its conversation, if one is listed. */
-export type RequestView = { id: number; title: string; words: string | null; status: RequestStatus; at: string; startedAt: string; pr?: string; url?: string; row?: string; report?: boolean };
+export type RequestView = { id: number; title: string; words: string | null; status: RequestStatus; at: string; startedAt: string; pr?: string; url?: string; row?: string; report?: boolean; doc?: RequestDoc };
+/**
+ * A document in data/reports the request's worker wrote: from an ask's REPORT line, else a data/reports path in its
+ * DONE report. `waits` is true when an open question rests on it, so the owner must read it. `href` opens it in the
+ * report viewer (web/contract.js docHref).
+ */
+export type RequestDoc = { path: string; title: string; href: string; waits: boolean };
 /** A worker's last report, for the app's report page. `failed` is its own outcome, which can differ from the request's status. */
 export type RequestReport = { id: number; title: string; status: string; at: string; subject: string; body: string; failed: boolean };
 
@@ -170,6 +177,28 @@ function repliedAfter(store: Store, dispatch: string, reportAt: string): boolean
   return !!store.db.prepare(`SELECT 1 FROM items WHERE source = 'native' AND kind = 'reply' AND dispatch_id = ? AND created_at > ? LIMIT 1`).get(dispatch, reportAt);
 }
 
+/** The asks' statuses that still wait on the owner (store.openItems). */
+const OPEN_ASK = new Set(['new', 'spoken', 'replying']);
+
+/**
+ * The report a request's worker wrote, newest first: an open ask's report (the owner must read it), else the report its
+ * last DONE or FAILED names, else an answered ask's report. Undefined when none names a file `reportOf` can open.
+ */
+export function requestDoc(store: Store, dispatch: string, reportOf: (path: string) => { path: string; title: string } | undefined): RequestDoc | undefined {
+  const asks = store.db.prepare(`SELECT body, status FROM items WHERE dispatch_id = ? AND kind IN ('question', 'escalation') ORDER BY id DESC LIMIT 20`)
+    .all(dispatch) as { body: string | null; status: string }[];
+  const doc = (path: string | undefined, waits: boolean): RequestDoc | undefined => {
+    const s = path ? reportOf(path) : undefined;
+    return s && { path: s.path, title: s.title, href: docHref(s.path), waits };
+  };
+  const askDoc = (open: boolean) => {
+    for (const a of asks) if (OPEN_ASK.has(a.status) === open) { const d = doc(askReportPath(a.body ?? '') ?? reportPathIn(a.body), open); if (d) return d; }
+  };
+  const done = store.db.prepare(`SELECT body FROM items WHERE kind = 'worker_done' AND dispatch_id = ? ORDER BY id DESC LIMIT 1`).get(dispatch) as { body: string | null } | undefined
+    ?? nativeReport(store, dispatch);
+  return askDoc(true) ?? doc(reportPathIn(done?.body), false) ?? askDoc(false);
+}
+
 const failing = (outcome: string | undefined) => !!outcome && outcome !== 'succeeded' && outcome !== 'in_progress';
 
 /**
@@ -238,6 +267,8 @@ export function makeRequests(opts: {
   branchMerged?: (dir: string) => Promise<boolean | undefined>;
   onChange: (list: RequestView[]) => void;
   now?: () => number;
+  /** Reads a report in data/reports (reports.ts reportSummary); undefined when it cannot be opened. Without it no row has a doc. */
+  reportOf?: (path: string) => { path: string; title: string } | undefined;
 }) {
   const { store, log } = opts;
   const now = opts.now ?? Date.now;
@@ -260,9 +291,10 @@ export function makeRequests(opts: {
       const fresh = r.dispatch_id.startsWith(ROW_PREFIX) && (r.status === 'working' || r.status === 'waiting') ? { id: r.dispatch_id } : undefined;
       const row = conversation(r, rows) ?? fresh;
       const hasReport = reported.has(r.dispatch_id) || !!nativeReport(store, r.dispatch_id)?.body.trim();
+      const doc = opts.reportOf ? requestDoc(store, r.dispatch_id, opts.reportOf) : undefined;
       return {
         id: r.id, title: shownTitle(r.title), words: r.words, status: r.status as RequestStatus, at: `${r.status_at.replace(' ', 'T')}Z`, startedAt: `${r.created_at.replace(' ', 'T')}Z`,
-        ...(r.pr ? { pr: r.pr } : {}), ...(r.pr_url ? { url: r.pr_url } : {}), ...(row ? { row: row.id } : {}), ...(hasReport ? { report: true } : {}),
+        ...(r.pr ? { pr: r.pr } : {}), ...(r.pr_url ? { url: r.pr_url } : {}), ...(row ? { row: row.id } : {}), ...(hasReport ? { report: true } : {}), ...(doc ? { doc } : {}),
       };
     });
   }

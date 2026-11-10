@@ -16,7 +16,7 @@ import { makeTermGate } from './termgate.ts';
 import { termRoute } from './termroutes.ts';
 import { terminalRows } from './termrows.ts';
 import { imageFile, imageRoots, imageRoute } from './images.ts';
-import { reportsDir, reportsRoute } from './reports.ts';
+import { reportsDir, reportsRoute, reportSummary } from './reports.ts';
 import { saveUpload, uploadDir, UPLOAD_LIMIT } from './uploads.ts';
 import { loadVapid, pushAll, pushOpenAsks, makeNotifier, pushRoute } from './push.ts';
 import { makeLog } from './log.ts';
@@ -85,8 +85,11 @@ function say(role: string, text: string, quote?: Quote): number {
   return turnId;
 }
 
+/** A report in data/reports as an ask card, a request row and a push show it. Only pictures /image serves count. */
+const reportOf = (path: string) => reportSummary(path, reportsDir(ROOT), p => Boolean(imageFile(p, imageRoots(ROOT))));
+
 // ---- Requests sidebar: one row per worker started for the owner, its status kept from the native workers' rows (requests.ts) ----
-const requests = makeRequests({ store, log, repoOf: githubRepo, mergeRepo: ROOT, onChange: list => broadcast({ type: 'requests', requests: list }) });
+const requests = makeRequests({ store, log, repoOf: githubRepo, mergeRepo: ROOT, reportOf, onChange: list => broadcast({ type: 'requests', requests: list }) });
 const backfilled = backfillRequests(store);
 if (backfilled) log(`requests: backfilled ${backfilled} from earlier worker starts`);
 
@@ -173,7 +176,7 @@ startNativePoll({ poll: () => native.poll(), closeEarlier: () => closeItems(stor
 // ---- Ask cards: each worker question or escalation shows as a card with its options as buttons (asks.ts) ----
 const storyOf = (dispatch: string | null) => dispatch ? mergedWork().rows.find(r => r.dispatch === dispatch)?.title : undefined;
 // A card shows a picture only from the folders /image serves.
-const cardOf = (i: Item | undefined): AskCard | undefined => i && askCard(i, storyOf(i.dispatch_id), p => Boolean(imageFile(p, IMAGE_ROOTS)));
+const cardOf = (i: Item | undefined): AskCard | undefined => i && askCard(i, storyOf(i.dispatch_id), p => Boolean(imageFile(p, IMAGE_ROOTS)), reportOf);
 /** Sends the card's new state (sending, answered, open again) to every open page. */
 function askChanged(id: string) {
   const ask = cardOf(store.item(id));
@@ -302,7 +305,7 @@ if (process.env.JARVIS_GMAIL !== 'off') (async () => {
 })();
 
 // ---- Push: pushes held for quiet hours, then open asks and escalations the owner has not answered (rules in push.ts) ----
-startPushSweep({ flush: flushHeldPushes, openAsks: () => pushOpenAsks(store, notify), killed: () => existsSync(KILL_FILE), log });
+startPushSweep({ flush: flushHeldPushes, openAsks: () => pushOpenAsks(store, notify, Date.now(), reportOf), killed: () => existsSync(KILL_FILE), log });
 
 // ---- Ten-minute check, 8 AM to 4 PM Eastern: reads the state in code, wakes the brain only on a new finding or a due reminder (rules in check.ts) ----
 // Pending support replies are a step of that check: each goes out once its fix is in production (rules in replies.ts).

@@ -3,6 +3,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Store, Item } from './store.ts';
 import type { RouteResult, Body } from './route.ts';
+import { askReportPath, reportPathIn } from './workercontract.ts';
+import { docHref } from '../web/contract.js';
 
 // Web push without a library: VAPID (RFC 8292) signs who is sending, aes128gcm (RFC 8291) encrypts the payload.
 
@@ -156,21 +158,35 @@ export const REMINDER_MS = 10 * 60_000;
  * Anything the owner says after the ask (or after its last push) counts as being there, since he may answer
  * through a reply the store never sees.
  */
-export async function pushOpenAsks(store: Store, send: (m: PushMessage, opts: { item: string }) => Promise<number>, now = Date.now()) {
+export async function pushOpenAsks(store: Store, send: (m: PushMessage, opts: { item: string }) => Promise<number>, now = Date.now(), reportOf?: ReportOf) {
   for (const i of store.openItems()) {
     if (i.status === 'replying') continue; // Jarvis is answering it; the brief shows it if that stalls
     const since = i.pushed_at ?? i.created_at;
     const wait = i.pushes === 0 ? ASK_DELAY_MS : i.pushes === 1 ? REMINDER_MS : Infinity;
     if (now - Date.parse(since.replace(' ', 'T') + 'Z') < wait || store.ownerSpokeSince(since)) continue;
-    const reached = await send(askMessage(i), { item: i.external_id });
+    const reached = await send(askMessage(i, reportOf), { item: i.external_id });
     if (reached > 0) store.markPushed(i.external_id);
   }
 }
 
-export function askMessage(i: Item): PushMessage {
+/** Reads a report in data/reports for the push; undefined when it cannot be opened (main.ts passes reports.ts reportSummary). */
+type ReportOf = (path: string) => { path: string; title: string } | undefined;
+
+/**
+ * The push for an ask. An ask with a report (its REPORT line, else a data/reports path in its text) opens that report
+ * when tapped, and its text says there is a report to read. `?item=` stays in the address, so the page shows the
+ * ask again when the owner closes the report.
+ */
+export function askMessage(i: Item, reportOf?: ReportOf): PushMessage {
   const title = i.source === 'brain' ? 'Jarvis is asking' : i.kind === 'escalation' ? 'Jarvis: a worker is stuck' : 'Jarvis: a worker is asking';
   const q = /QUESTION:\s*(.+)/.exec(i.body ?? '')?.[1];
-  return { title, body: (q ?? i.subject ?? i.body ?? '').slice(0, 180), url: `/?item=${encodeURIComponent(i.external_id)}`, tag: `item-${i.external_id}` };
+  const text = (q ?? i.subject ?? i.body ?? '').trim();
+  const path = askReportPath(i.body ?? '') ?? reportPathIn(i.body);
+  const report = path ? reportOf?.(path) : undefined;
+  const url = `/?item=${encodeURIComponent(i.external_id)}`, tag = `item-${i.external_id}`;
+  if (!report) return { title, body: text.slice(0, 180), url, tag };
+  const read = `Read the report first: ${report.title}`.slice(0, 90);
+  return { title, body: `${read}\n${text}`.slice(0, 180), url: url + docHref(report.path), tag };
 }
 
 /** Jarvis marks a reply urgent by starting it with `[urgent]`; the marker is never shown or spoken. */

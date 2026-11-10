@@ -47,3 +47,9 @@ export const TODAY_STATUSES = ['new', 'waiting', 'queued', 'working', 'ready', '
 export const SUPPORT_REPLY_STATUSES = ['waiting', 'held', 'sending', 'sent', 'failed', 'unknown', 'dropped'];
 /** The status of a row in the Requests sidebar. */
 export const REQUEST_STATUSES = ['waiting', 'working', 'review', 'done', 'failed'];
+
+/**
+ * The page address of a report in data/reports, or of the Reports list when `path` is empty. The page opens it in the
+ * report viewer. An ask card, a request row and a push for an ask with a report all link here.
+ */
+export const docHref = path => path ? `#reports/${encodeURIComponent(path)}` : '#reports';

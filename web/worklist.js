@@ -10,7 +10,7 @@
 // - A row with no request is a plain row.
 // - A row finished (done, failed or stopped) over an hour ago goes under its group's closed Done fold. It stays in view
 //   while its request is open (working, waiting, failed), or while it has no finish time. The fold only hides; it deletes nothing.
-import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, STATE } from './requestlist.js';
+import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, docLinkHtml, STATE } from './requestlist.js';
 import { formatStamp } from './workfold.js';
 import { actionsWith } from './contract.js';
 
@@ -86,7 +86,7 @@ function itemHtml(i, ctx) {
   const hide = `<button type="button" class="hide"${row ? ` data-hide-row="${esc(row.id)}"` : ''}${req ? ` data-hide="${req.id}"` : ''}${isHidden ? ' data-unhide' : ''} aria-label="${isHidden ? 'Show' : 'Hide'} ${esc(title)} in this list" title="${isHidden ? 'Show in the list again' : 'Hide from this list. Nothing stops.'}">${isHidden ? '↺' : '×'}</button>`;
   const state = failed ? 'failed' : row?.state ?? req.status;
   return `<div class="wrow s-${esc(state)}${openId && ctx.reading === openId ? ' reading' : ''}${isHidden ? ' hidden-row' : ''}"${openId ? ` data-id="${esc(openId)}" role="button" tabindex="0"` : ''} title="${esc(status)}${row?.note && row.state !== 'idle' ? `: ${esc(row.note)}` : ''}">`
-    + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
+    + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? docLinkHtml(req) + reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
     + (note ? `<div class="note">${esc(note)}</div>` : '') + '</div>';
 }
 
