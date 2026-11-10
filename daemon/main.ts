@@ -27,7 +27,7 @@ import { githubRepo, type Work } from './work.ts';
 import { makeRequests, backfillRequests, requestsRoute } from './requests.ts';
 import { workRoute, hiddenIds, makePaneWatcher } from './workroutes.ts';
 import { listenConfig, judge } from './listen.ts';
-import { askCard, answerAsk, auditEntries, type AskCard } from './asks.ts';
+import { askCard, askRoute, auditEntries, type AskCard } from './asks.ts';
 import { brainAskRoute, briefLine as brainAskLine, isBrainAsk } from './brainasks.ts';
 import { makeCheck, readDelivery, masterHead, CHECK_MS } from './check.ts';
 import { gitSelfCheck, gitNotice } from './gitcheck.ts';
@@ -467,6 +467,12 @@ const workCtx = {
   watchPane: makePaneWatcher({ native, broadcast, log }), chatFiles: new Map<string, string>(),
   readLog: () => { try { return readFileSync(join(ROOT, 'data', 'jarvisd.log'), 'utf8'); } catch { return ''; } },
 };
+const askCtx = {
+  store, log, native, cardOf, pressed: PRESSED, askChanged, publish: publishWork,
+  note: (n: string) => { if (!existsSync(KILL_FILE)) brain.hold(n); },
+  sync: () => { nativeSync().catch(() => {}); },
+  emailDone: (id: string) => { messages.dropProposals(id); messagesChanged(); },
+};
 const messagesCtx = {
   messages,
   approved: (a: Approval) => { if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`); },
@@ -503,6 +509,8 @@ http.createServer(async (req, res) => {
       async () => url.startsWith('/api/internal/reminders') ? reminderRoute(store, log, method, url, await post()) : undefined,
       // The work list and its row buttons (workroutes.ts).
       () => workRoute(workCtx, method, url, body, query),
+      // Ask cards: a tap on an option, the audit log, an answer the brain recorded (asks.ts).
+      () => askRoute(askCtx, method, url, body),
     ];
     for (const route of routes) { const r = await route(); if (r) return send(res, r.status, r.body); }
     if (req.method === 'GET' && STATIC[url]) {
@@ -604,15 +612,6 @@ http.createServer(async (req, res) => {
       fromOwner(withPictures(r.text, pics.lines));
       return send(res, 200, { text: r.text, confidence: r.confidence, kept: true, why: v.why });
     }
-    // the owner tapped an option on an ask card: it goes to the worker at once, as if he had said it.
-    if (req.method === 'POST' && url === '/api/ask/answer') {
-      const { id, value } = await json(req);
-      if (typeof id !== 'string' || typeof value !== 'string') return send(res, 400, { error: 'id and value are required' });
-      const r = await answerAsk({ id, value: value.trim(), store, log, native, note: n => { if (!existsSync(KILL_FILE)) brain.hold(n); } });
-      askChanged(id);
-      if (r.status === 200) { publishWork(); nativeSync().catch(() => {}); }
-      return send(res, r.status, { error: r.error, ask: cardOf(store.item(id)) });
-    }
     if (req.method === 'POST' && url === '/api/approval') {
       const { id, approve } = await json(req);
       // A native worker's permission prompt: the tap answers the held hook, and the worker goes on or is refused.
@@ -649,19 +648,7 @@ http.createServer(async (req, res) => {
       const added = today.add({ words: r.text, go: new URL(req.url ?? '/', 'http://x').searchParams.get('go') === '1' });
       return send(res, added.status, { words: r.text, ...added.body });
     }
-    // The audit log panel: answered asks and decided approvals. Read-only.
-    if (req.method === 'GET' && url === '/api/audit') return send(res, 200, auditEntries(store, cardOf, PRESSED));
     // ---- Called by bin/jarvis-act and bin/jarvis-remind on behalf of the brain ----
-    if (req.method === 'POST' && url === '/api/internal/answered') {
-      const { id, answer } = await json(req);
-      if (typeof id !== 'string' || !id) return send(res, 400, { error: 'id is required' });
-      store.markItem(id, 'answered', typeof answer === 'string' ? answer : undefined);
-      log('reply recorded', { item: id });
-      askChanged(id); // a spoken or typed answer marks the card answered too
-      if (store.item(id)?.source === 'gmail') { messages.dropProposals(id); messagesChanged(); } // jarvis-act email-done
-      publishWork(); nativeSync().catch(() => {}); // the answered ask leaves "waiting" (and the Requests badge) now, not in up to 30 s
-      return send(res, 204);
-    }
     if (url.startsWith('/api/internal/gate/')) {
       const op = url.slice('/api/internal/gate/'.length);
       const b = req.method === 'POST' ? await json(req) : {};

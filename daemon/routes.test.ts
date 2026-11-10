@@ -12,6 +12,7 @@ import { reportsRoute } from './reports.ts';
 import { brainModelRoute } from './brainmodel.ts';
 import { messagesRoute } from './messages.ts';
 import { brainAskRoute } from './brainasks.ts';
+import { askRoute, askCard } from './asks.ts';
 
 const body = (v: unknown) => async () => v;
 const none = () => { throw new Error('the route read a body it does not need'); };
@@ -105,4 +106,36 @@ test('brain asks: an ask is stored and its card changes, ask-done closes it, a o
   assert.equal((await brainAskRoute(o, 'POST', '/api/internal/ask-done', body({ id, answer: 'Yes' })))?.status, 200);
   assert.deepEqual(changed, [id, id]);
   assert.equal(store.item(id)?.status, 'answered');
+});
+
+test('asks: a tap answers a native worker once, the audit log lists it, and the brain can mark an email answered', async () => {
+  const store = openStore(':memory:');
+  const seen: any = { changed: [], notes: [], replied: [], published: 0, synced: 0, emails: [] };
+  const o = {
+    store, log: () => {}, cardOf: (i: any) => i && askCard(i), pressed: new Set<string>(),
+    native: { reply: async (id: string, text: string) => { seen.replied.push([id, text]); return { ok: true } as const; } },
+    note: (n: string) => seen.notes.push(n), askChanged: (id: string) => seen.changed.push(id),
+    publish: () => { seen.published++; }, sync: () => { seen.synced++; }, emailDone: (id: string) => seen.emails.push(id),
+  };
+  store.insertItem({ source: 'native', external_id: 'msg_1', kind: 'question', dispatch_id: 'n:w1', subject: 'Merge?', status: 'spoken' });
+  assert.deepEqual(await askRoute(o, 'POST', '/api/ask/answer', body({ id: 'msg_1' })), { status: 400, body: { error: 'id and value are required' } });
+  const r = await askRoute(o, 'POST', '/api/ask/answer', body({ id: 'msg_1', value: ' Yes ' }));
+  assert.equal(r?.status, 200);
+  assert.equal((r?.body as any).error, undefined);
+  assert.equal((r?.body as any).ask.id, 'msg_1');
+  assert.deepEqual(seen.replied, [['n:w1', 'Yes']]);
+  assert.equal(seen.notes.length, 1);
+  assert.deepEqual([seen.published, seen.synced], [1, 1]);
+  assert.equal((await askRoute(o, 'POST', '/api/ask/answer', body({ id: 'msg_1', value: 'Yes' })))?.status, 409, 'never twice');
+  assert.deepEqual([seen.published, seen.synced], [1, 1], 'a refused tap moves nothing on');
+  assert.equal((await askRoute(o, 'POST', '/api/ask/answer', body({ id: 'nope', value: 'Yes' })))?.status, 404);
+  const audit = await askRoute(o, 'GET', '/api/audit', none);
+  assert.deepEqual((audit?.body as any[]).map(e => e.key), ['ask:msg_1']);
+  store.insertItem({ source: 'gmail', external_id: 'gmail:1', kind: 'email', status: 'new' });
+  assert.equal((await askRoute(o, 'POST', '/api/internal/answered', body({})))?.status, 400);
+  assert.deepEqual(await askRoute(o, 'POST', '/api/internal/answered', body({ id: 'gmail:1', answer: 'sent' })), { status: 204 });
+  assert.equal(store.item('gmail:1')?.status, 'answered');
+  assert.deepEqual(seen.emails, ['gmail:1']);
+  assert.deepEqual(seen.changed, ['msg_1', 'msg_1', 'nope', 'gmail:1']);
+  assert.equal(await askRoute(o, 'GET', '/api/ask/answer', none), undefined);
 });

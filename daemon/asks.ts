@@ -5,6 +5,7 @@ import { approvalTag, approvalOutcomeText } from '../web/worklist.js';
 import { namedActionIn, namedLabel, refusedByPermissionLayer, type Named } from './namedactions.ts';
 import { brainCard, answerBrainAsk, isBrainAsk } from './brainasks.ts';
 import { fields } from './workercontract.ts';
+import type { RouteResult, Body } from './route.ts';
 export { fields } from './workercontract.ts';
 
 // A worker's question or escalation as a card in the chat: title, markdown body, and the options as buttons.
@@ -332,4 +333,49 @@ export async function answerAsk(o: AnswerArgs): Promise<AnswerResult> {
   log('ask card: The owner answered a native worker', ids);
   o.note(`[ask card] ${OWNER} tapped ${JSON.stringify(value)} on ask message_id=${id} in the app. It already went to the worker; do not reply to it again. Reply SILENT.`);
   return { status: 200 };
+}
+
+export type AskCtx = {
+  store: Store; log: Log;
+  native: AnswerArgs['native'];
+  /** Holds a line for the brain's next turn. The caller checks the kill switch. */
+  note: (text: string) => void;
+  /** Sends the card's new state to every open page. */
+  askChanged: (id: string) => void;
+  cardOf: (i: Item | undefined) => AskCard | undefined;
+  /** The gate's PRESSED actions, left out of the audit log. */
+  pressed: Set<string>;
+  /** Sends the work list to every open page. */
+  publish: () => void;
+  /** Moves the requests and the Today rows on from the native rows now, not at the next poll. */
+  sync: () => void;
+  /** An email the brain marked answered: its send proposals go, and the Messages list updates. */
+  emailDone: (id: string) => void;
+};
+
+/** The ask cards' routes: a tap on an option, the audit log, and the brain marking an ask or email answered. */
+export async function askRoute(o: AskCtx, method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+  // the owner tapped an option on an ask card: it goes to the worker at once, as if he had said it.
+  if (method === 'POST' && url === '/api/ask/answer') {
+    const { id, value } = await body();
+    if (typeof id !== 'string' || typeof value !== 'string') return { status: 400, body: { error: 'id and value are required' } };
+    const r = await answerAsk({ id, value: value.trim(), store: o.store, log: o.log, native: o.native, note: o.note });
+    o.askChanged(id);
+    if (r.status === 200) { o.publish(); o.sync(); }
+    return { status: r.status, body: { error: r.error, ask: o.cardOf(o.store.item(id)) } };
+  }
+  // The audit log panel: answered asks and decided approvals. Read-only.
+  if (method === 'GET' && url === '/api/audit') return { status: 200, body: auditEntries(o.store, o.cardOf, o.pressed) };
+  // Called by bin/jarvis-act on behalf of the brain: a spoken or typed answer, or jarvis-act email-done.
+  if (method === 'POST' && url === '/api/internal/answered') {
+    const { id, answer } = await body();
+    if (typeof id !== 'string' || !id) return { status: 400, body: { error: 'id is required' } };
+    o.store.markItem(id, 'answered', typeof answer === 'string' ? answer : undefined);
+    o.log('reply recorded', { item: id });
+    o.askChanged(id); // a spoken or typed answer marks the card answered too
+    if (o.store.item(id)?.source === 'gmail') o.emailDone(id); // jarvis-act email-done
+    o.publish(); o.sync(); // the answered ask leaves "waiting" (and the Requests badge) now, not in up to 30 s
+    return { status: 204 };
+  }
+  return undefined;
 }
