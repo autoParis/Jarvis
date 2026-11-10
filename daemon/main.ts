@@ -1,6 +1,6 @@
 import { OWNER_CAP, OWNER, cleanEnv } from './config.ts';
 import http from 'node:http';
-import { readFileSync, existsSync, createReadStream, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, createReadStream, readdirSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore, type Item, type Approval } from './store.ts';
@@ -9,15 +9,15 @@ import { brainModelRoute, readBrainModel, MODELS, EFFORTS } from './brainmodel.t
 import { lazyBody, type RouteResult } from './route.ts';
 import { STATIC, TYPES } from './webfiles.ts';
 import { makeGate, gateRoute, PRESSED } from './gate.ts';
-import { makeVoice, sentences, detectLang, byteRange } from './voice.ts';
+import { makeVoice, makeSpeaker, voiceRoute, voiceFileRoute, detectLang, IMAGE_MARKER, unmarked, spokenSentences } from './voice.ts';
 import { allowed, makeUiSessions, probePhone, phoneRefusal } from './access.ts';
 import { makeTerminals } from './terminal.ts';
 import { makeTermGate } from './termgate.ts';
 import { termRoute } from './termroutes.ts';
 import { terminalRows } from './termrows.ts';
 import { imageFile, imageRoots, IMAGE_TYPES } from './images.ts';
-import { reportsDir, reportsRoute, REPORT_MARKER } from './reports.ts';
-import { saveUpload, uploadDir, UPLOAD_LIMIT, pictureLines } from './uploads.ts';
+import { reportsDir, reportsRoute } from './reports.ts';
+import { saveUpload, uploadDir, UPLOAD_LIMIT } from './uploads.ts';
 import { loadVapid, pushAll, pushOpenAsks, makeNotifier, urgent, pushRoute } from './push.ts';
 import { makeLog } from './log.ts';
 import { watchGmail, gws, haiku, readPeople, withRecipients, POLL_MS as GMAIL_POLL_MS, type EmailMeta } from './gmail.ts';
@@ -26,7 +26,7 @@ import { homedir } from 'node:os';
 import { githubRepo, type Work } from './work.ts';
 import { makeRequests, backfillRequests, requestsRoute } from './requests.ts';
 import { workRoute, hiddenIds, makePaneWatcher } from './workroutes.ts';
-import { listenConfig, judge } from './listen.ts';
+import { listenConfig } from './listen.ts';
 import { askCard, askRoute, auditEntries, type AskCard } from './asks.ts';
 import { brainAskRoute, briefLine as brainAskLine, isBrainAsk } from './brainasks.ts';
 import { makeCheck, readDelivery, masterHead, CHECK_MS } from './check.ts';
@@ -41,7 +41,6 @@ import { makeNative, ROW_PREFIX, type NativeWorker } from './native.ts';
 import { nativeRoute, routeWorkerTurn } from './nativeroutes.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
-import { voiceMessage, withPictures } from '../web/dictate.js';
 import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
 import { DEALERS_FILE } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
@@ -75,46 +74,13 @@ const migration = makeMigration({
   onChange: () => broadcast({ type: 'migration', migration: migration.state() }),
 });
 
-// Speech goes out one sentence at a time, in order across replies, so the first sentence plays while the rest render.
-let speech = Promise.resolve();
-// What Jarvis said lately, for hands-free listening: the wake word's follow-up window and the echo guard.
-let lastSpokeAt = 0, lastAddressedAt = 0;
-let spoken: { at: number; text: string }[] = [];
-// `[image: /abs/path.png]` and `[report: /abs/path.md]` markers show a picture or a card in the chat and are never read aloud.
-const IMAGE_MARKER = /\[image:\s*[^\]\n]+\]/g;
-const unmarked = (text: string) => text.replace(IMAGE_MARKER, ' ').replace(REPORT_MARKER, ' ');
-const spokenSentences = (text: string) => sentences(unmarked(text));
-function noteSpoken(s: string) {
-  lastSpokeAt = Date.now();
-  spoken = [...spoken.filter(x => lastSpokeAt - x.at <= listen.windowMs), { at: lastSpokeAt, text: s }];
-}
-function speak(text: string, turnId: number) {
-  const list = spokenSentences(text);
-  list.forEach((s, i) => {
-    speech = speech.then(async () => {
-      try {
-        await voice.tts(s);
-        broadcast({ type: 'audio', turnId, i, total: list.length });
-        noteSpoken(s);
-      }
-      catch (e) { log(`tts: ${e}`); }
-    });
-  });
-}
-/** An audio file, with byte ranges: a resume seeks into the clip, and Safari refuses media without them. */
-function sendClip(req: http.IncomingMessage, res: http.ServerResponse, file: string) {
-  const size = statSync(file).size, range = byteRange(req.headers.range, size);
-  const head = { 'content-type': 'audio/mp4', 'accept-ranges': 'bytes' };
-  if (range === 'bad') { res.writeHead(416, { 'content-range': `bytes */${size}` }); return res.end(); }
-  if (!range) { res.writeHead(200, { ...head, 'content-length': size }); return createReadStream(file).pipe(res); }
-  res.writeHead(206, { ...head, 'content-range': `bytes ${range.start}-${range.end}/${size}`, 'content-length': range.end - range.start + 1 });
-  return createReadStream(file, range).pipe(res);
-}
+// Jarvis's voice out, one sentence at a time, and what it said lately for hands-free listening (voice.ts).
+const speaker = makeSpeaker({ tts: s => voice.tts(s), broadcast, log, windowMs: listen.windowMs });
 
 function say(role: string, text: string, quote?: Quote): number {
   const turnId = store.addTurn({ role, text, reply_to: quote?.id });
   broadcast({ type: 'turn', role, text, turnId, quote, clips: role === 'jarvis' ? spokenSentences(text).length : 0, at: new Date().toISOString() });
-  if (role === 'jarvis') speak(text, turnId);
+  if (role === 'jarvis') speaker.speak(text, turnId);
   return turnId;
 }
 
@@ -477,6 +443,8 @@ const gateCtx = {
   gate, store, native, killed: () => existsSync(KILL_FILE), notice: gateNotice, proposed: chatLinks.proposed,
   hold: (text: string) => brain.hold(text), wake: (text: string) => brain.send(text),
 };
+const voiceFileCtx = { voice, speaker, jarvisText: (id: number) => store.jarvisText(id), bakeoffDir: join(ROOT, 'data', 'bakeoff') };
+const voiceCtx = { voice, listen, speaker, log, fromOwner, uploads: uploadDir(ROOT), today };
 const messagesCtx = {
   messages,
   approved: (a: Approval) => { if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`); },
@@ -517,6 +485,8 @@ http.createServer(async (req, res) => {
       () => askRoute(askCtx, method, url, body),
       // The approval buttons and the brain's jarvis-act calls (gate.ts).
       () => gateRoute(gateCtx, method, url, body),
+      // The chat microphone, hands-free listening and the Today microphone (voice.ts). The body is audio, read as bytes.
+      () => voiceRoute(voiceCtx, method, url, limit => readBody(req, limit), query),
     ];
     for (const route of routes) { const r = await route(); if (r) return send(res, r.status, r.body); }
     if (req.method === 'GET' && STATIC[url]) {
@@ -524,39 +494,13 @@ http.createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
       return res.end(readFileSync(file));
     }
-    if (req.method === 'GET' && /^\/audio\/[\w-]+\.m4a$/.test(url)) {
-      const file = join(voice.dir, url.slice('/audio/'.length));
-      if (!existsSync(file)) return send(res, 404);
-      return sendClip(req, res, file);
-    }
-    // One sentence of a message from Jarvis, rendered on first request. The speaker button under the message plays these.
-    const clip = req.method === 'GET' ? /^\/api\/speech\/(\d+)\/(\d+)$/.exec(url) : null;
-    if (clip) {
-      const s = spokenSentences(store.jarvisText(Number(clip[1])) ?? '')[Number(clip[2])];
-      if (!s) return send(res, 404);
-      const name = await voice.tts(s);
-      noteSpoken(s); // the echo guard must know these words too, or the open mic takes a replay for the owner
-      return sendClip(req, res, join(voice.dir, name));
-    }
+    // Rendered clips, one sentence of a stored message, and the TTS bake-off (voice.ts).
+    if (await voiceFileRoute(voiceFileCtx, req, res, url)) return;
     // Images named in Jarvis's `[image: ...]` markers, only from the folders in images.ts.
     if (req.method === 'GET' && url === '/image') {
       const file = imageFile(new URL(req.url ?? '/', 'http://x').searchParams.get('path') ?? '', IMAGE_ROOTS);
       if (!file) return send(res, 404);
       res.writeHead(200, { 'content-type': IMAGE_TYPES[extname(file).toLowerCase()], 'cache-control': 'private, max-age=300' });
-      return createReadStream(file).pipe(res);
-    }
-    // Voice samples for picking the TTS model by ear (data/bakeoff/*.m4a).
-    if (req.method === 'GET' && url === '/bakeoff') {
-      const dir = join(ROOT, 'data', 'bakeoff');
-      const files = existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith('.m4a')).sort() : [];
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(`<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;padding:12px">
-        <h3>TTS bake-off</h3>${files.map(f => `<p>${f}<br><audio controls preload="none" src="/bakeoff/${f}"></audio></p>`).join('')}`);
-    }
-    if (req.method === 'GET' && /^\/bakeoff\/[\w.-]+\.m4a$/.test(url)) {
-      const file = join(ROOT, 'data', 'bakeoff', url.slice('/bakeoff/'.length));
-      if (!existsSync(file)) return send(res, 404);
-      res.writeHead(200, { 'content-type': 'audio/mp4' });
       return createReadStream(file).pipe(res);
     }
     if (req.method === 'GET' && url === '/api/events') {
@@ -587,45 +531,6 @@ http.createServer(async (req, res) => {
       if ('error' in r) return send(res, r.status, { error: r.error });
       log(`upload ${r.path} ${body.length} bytes`);
       return send(res, 200, r);
-    }
-    // Hands-free: the browser's detector settings (env overrides of web/listen.js DEFAULTS).
-    if (req.method === 'GET' && url === '/api/listen/config') return send(res, 200, { client: listen.client, wakeWord: listen.wakeWords.length > 0 });
-    if (req.method === 'POST' && url === '/api/voice') {
-      const audio = await readBody(req, 20e6);
-      const q = new URL(req.url ?? '/', 'http://x').searchParams;
-      const hands = q.get('mode') === 'listen', bargeIn = q.get('barge') === '1';
-      // The pictures attached in the chat box go with the words (web/compose.js). Only files /api/upload saved pass.
-      const pics = pictureLines(q.getAll('image'), uploadDir(ROOT));
-      if (pics.refused.length) log('voice: picture refused, not an upload', { paths: pics.refused });
-      const t0 = Date.now();
-      const r = await voice.stt(audio, hands ? { threshold: listen.vadThreshold, minSpeechMs: listen.vadMinSpeechMs } : undefined);
-      if (r.vadError) log(`listen: vad failed, transcribing anyway: ${r.vadError}`);
-      if (!hands) {
-        log(`stt ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)}${pics.lines.length ? ` pictures=${pics.lines.length}` : ''}: ${r.text}`);
-        // Text the owner typed before he tapped the mic goes in front of the words, and the pictures after them, as one
-        // message (web/dictate.js).
-        const message = voiceMessage(q.get('typed'), r.text, pics.lines);
-        if (message) fromOwner(message, replyIdOf(q.get('replyTo')));
-        return send(res, 200, { text: r.text, confidence: r.confidence, sent: !!message });
-      }
-      if (!r.speech) { log(`listen: no speech (${Date.now() - t0} ms, ${audio.length} bytes)`); return send(res, 200, { text: '', kept: false, why: 'no speech' }); }
-      const now = Date.now();
-      const v = judge({ text: r.text, bargeIn, now, lastSpokeAt, lastAddressedAt, recentSpoken: spoken.filter(x => now - x.at <= listen.windowMs).map(x => x.text) }, listen);
-      // A dropped clip is often someone else talking; its words stay out of the log unless JARVIS_LISTEN_DEBUG=1.
-      log(`listen ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)} ${v.keep ? 'kept' : 'dropped'} (${v.why})${bargeIn ? ' barge-in' : ''}: ${v.keep || listen.debug ? r.text : `${r.text.split(/\s+/).filter(Boolean).length} words`}`);
-      if (!v.keep) return send(res, 200, { text: '', kept: false, why: v.why });
-      lastAddressedAt = now;
-      fromOwner(withPictures(r.text, pics.lines));
-      return send(res, 200, { text: r.text, confidence: r.confidence, kept: true, why: v.why });
-    }
-    // The microphone in the Today popup: the words become one item, and nothing goes to the chat.
-    if (req.method === 'POST' && url === '/api/today/voice') {
-      const audio = await readBody(req, 20e6);
-      const r = await voice.stt(audio);
-      log(`today voice conf=${r.confidence.toFixed(2)}: ${r.text}`);
-      if (!r.text) return send(res, 200, { words: '', today: today.list() });
-      const added = today.add({ words: r.text, go: new URL(req.url ?? '/', 'http://x').searchParams.get('go') === '1' });
-      return send(res, added.status, { words: r.text, ...added.body });
     }
     send(res, 404);
   } catch (e) {
