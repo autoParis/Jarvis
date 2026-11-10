@@ -8,7 +8,8 @@ export const TASKS_SAMPLE_MS = 60_000;
 export const PUSH_SWEEP_MS = 30_000;
 export const TERM_POLL_MS = 15_000;
 
-type Record = (id: string, outcome: 'ok' | 'fail', note?: string) => void;
+type Record = (id: string, outcome: 'ok' | 'warn' | 'fail', note?: string) => void;
+export const SHEET_SYNC_TICK_MS = 5 * 60_000;
 
 /**
  * Native workers: `claude agents` every 30 s (native.ts poll). After each poll, the asks a later answer closed leave the
@@ -71,4 +72,33 @@ export function startTermPoll<T>(o: { list: () => Promise<T>; current: () => T; 
   setInterval(() => { pollTerms().catch(() => {}); }, TERM_POLL_MS);
   pollTerms().catch(() => {});
   return pollTerms;
+}
+
+/**
+ * The migration sheet sync (sheetsync.ts): once a day from 7:30 AM Eastern, checked every 5 minutes. `due` decides the day and
+ * `markDay` claims it before the run, so a restart never runs it twice. Each run is a mark on the Scheduled tasks screen.
+ * A failure also wakes the brain. Off, or the kill switch on, skips the check. One run at a time.
+ */
+export function startSheetSync(o: {
+  mode: 'off' | 'dry-run' | 'write'; due: () => { due: boolean; day: string }; markDay: (day: string) => void;
+  run: (mode: 'dry-run' | 'write') => Promise<{ outcome: 'ok' | 'warn' | 'fail'; note: string }>;
+  killed: () => boolean; record: Record; wake: (text: string) => void; log: Log;
+}) {
+  let running = false;
+  const tick = () => {
+    const mode = o.mode;
+    if (running || mode === 'off' || o.killed()) return;
+    const { due, day } = o.due();
+    if (!due) return;
+    o.markDay(day);
+    running = true;
+    o.log('migration sheet sync start', { mode });
+    o.run(mode).then(s => {
+      o.log('migration sheet sync done', { mode, ...s });
+      o.record('jarvisd:sheet-sync', s.outcome, s.note);
+      if (s.outcome === 'fail') o.wake(`[sheet sync] The ${mode} run of the migration sheet sync failed: ${s.note} Tell the owner in one sentence. The next run is tomorrow at 7:30 AM.`);
+    }).finally(() => { running = false; });
+  };
+  setInterval(tick, SHEET_SYNC_TICK_MS);
+  tick();
 }

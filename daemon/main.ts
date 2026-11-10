@@ -41,10 +41,12 @@ import { makeNative, ROW_PREFIX, type NativeWorker } from './native.ts';
 import { nativeRoute } from './nativeroutes.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
-import { DEALERS_FILE } from './config.ts';
+import { DEALERS_FILE, MIGRATION_SHEET_SYNC } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
 import { wireBrain } from './brainevents.ts';
-import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll } from './timers.ts';
+import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, startSheetSync } from './timers.ts';
+import { syncDue, runSyncChild } from './sheetsync.ts';
+import { SHEET_ID } from './sheet-edit.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OWNER_NOTE = join(ROOT, 'vault', 'owner.md');
@@ -266,6 +268,8 @@ function fromOwner(text: string, replyTo?: number) {
 }
 
 // ---- Scheduled tasks screen: launchd jobs and jarvisd's own timers, read fresh each time (tasks.ts) ----
+// The migration sheet sync needs a real sheet id (sheet-edit.ts reads JARVIS_MIGRATION_SHEET_ID) and a mode that is not off.
+const SHEET_SYNC_ON = MIGRATION_SHEET_SYNC !== 'off' && SHEET_ID !== 'EXAMPLE_SHEET_ID';
 const tasks = makeTasks({
   db: store.db, run: execRun(cleanEnv), uid: process.getuid?.() ?? 501, log, getState: store.getState, setState: store.setState,
   agentsDir: join(homedir(), 'Library', 'LaunchAgents'),
@@ -274,6 +278,7 @@ const tasks = makeTasks({
   jarvisd: [
     { id: 'jarvisd:check', name: 'Ten-minute check', schedule: 'Every 10 minutes, 8 AM to 4 PM', everyMs: CHECK_MS, description: 'Wakes the brain on a new finding or a due reminder, and sends approved support replies.' },
     { id: 'jarvisd:today', name: 'Today list backstop', schedule: `Every ${BACKSTOP_MS / 60_000} minutes`, everyMs: BACKSTOP_MS, description: 'Catches Today items that an event missed.' },
+    ...(SHEET_SYNC_ON ? [{ id: 'jarvisd:sheet-sync', name: 'Migration sheet sync', schedule: 'Every day at 7:30 AM Eastern', everyMs: 24 * 3600_000, description: `Copies the Leads list to the migration sheet through bin/sheet-edit (${MIGRATION_SHEET_SYNC === 'write' ? 'writes' : 'dry run only, writes nothing'}). Each run keeps a report in data/migration-sheet-sync/runs.` }] : []),
     ...(process.env.JARVIS_GMAIL !== 'off' ? [{ id: 'jarvisd:gmail', name: 'Gmail watcher', schedule: `Every ${GMAIL_POLL_MS / 60_000} minutes`, everyMs: GMAIL_POLL_MS, description: 'Reads new mail from the people in vault/people.md and stores it.' }] : []),
   ],
 });
@@ -328,6 +333,14 @@ const today = makeToday({
 });
 todayReady = true;
 startTodayBackstop({ today, everyMs: BACKSTOP_MS, killed: () => existsSync(KILL_FILE), record: tasks.record, log });
+
+// ---- Migration sheet sync: the Leads list to the migration sheet, once a day at 7:30 AM Eastern (sheetsync.ts) ----
+if (SHEET_SYNC_ON) startSheetSync({
+  mode: MIGRATION_SHEET_SYNC,
+  due: () => syncDue(new Date(), store.getState('migrationSheetSyncDay')), markDay: day => store.setState('migrationSheetSyncDay', day),
+  run: mode => runSyncChild(ROOT, mode, cleanEnv),
+  killed: () => existsSync(KILL_FILE), record: tasks.record, wake: text => brain.send(text), log,
+});
 
 // ---- HTTP ----
 async function readBody(req: http.IncomingMessage, limit = 1e6): Promise<Buffer> {

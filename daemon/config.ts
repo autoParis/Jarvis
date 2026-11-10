@@ -31,6 +31,9 @@ export const OWNER = env.JARVIS_OWNER_CALLED?.trim() || 'the owner';
 export const OWNER_CAP = OWNER.charAt(0).toUpperCase() + OWNER.slice(1);
 /** The dealer list the migration list seeds from once, on the first start. A local file keeps a real list out of the repo. */
 export const DEALERS_FILE = env.JARVIS_DEALERS_FILE?.trim() || '';
+/** The 7:30 AM Eastern sync of the migration list to the sheet (sheetsync.ts): off, dry-run (plans and reports only) or write. */
+const sync = env.JARVIS_MIGRATION_SHEET_SYNC?.trim().toLowerCase();
+export const MIGRATION_SHEET_SYNC: 'off' | 'dry-run' | 'write' = sync === 'off' || sync === 'write' ? sync : 'dry-run';
 /** Words of the email triage prompt: "<owner name>, <role> <company>", the team's first names, and what the clients are called. */
 export const OWNER_ROLE = env.JARVIS_OWNER_ROLE?.trim() || 'who runs';
 export const TEAM = list(env.JARVIS_TEAM);
