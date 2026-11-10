@@ -459,8 +459,18 @@ body.pane-open #chat, body.pane-open #doneline { display: none; }
 .jarvis { font-size: 17px; line-height: 26px; }
 .event { font-size: 13px; color: var(--muted); }
 .event.focus { color: var(--ink); border-left: 2px solid var(--need); padding-left: 10px; }
-.hand { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-s); transition: background-color .12s, border-color .12s; }
-button.hand:not(:disabled):hover { background: var(--hover); border-color: var(--control); }
+.hand { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-s); transition: background-color 180ms cubic-bezier(.22, 1, .36, 1), border-color 180ms cubic-bezier(.22, 1, .36, 1), transform 180ms cubic-bezier(.22, 1, .36, 1); }
+/* Resting, the row sits flat on the page. Pointed at or reached by keyboard, it reads as a small card: a lighter border, a
+   lighter fill and a 1px lift. Mouse only for the lift and fill, because a phone keeps :hover on a tapped row. */
+@media (hover: hover) {
+  button.hand:not(:disabled):hover { background: var(--raised); border-color: color-mix(in srgb, var(--muted) 45%, transparent); transform: translateY(-1px); }
+}
+button.hand:not(:disabled):focus-visible { background: var(--raised); border-color: color-mix(in srgb, var(--muted) 45%, transparent); transform: translateY(-1px); }
+button.hand:not(:disabled):active { background: var(--hover); transform: none; transition-duration: 100ms; }
+@media (prefers-reduced-motion: reduce) {
+  .hand { transition-property: background-color, border-color; }
+  button.hand:not(:disabled):hover, button.hand:not(:disabled):focus-visible { transform: none; }
+}
 .hand:disabled { cursor: default; }
 .hand small { grid-column: 2; font-size: 12px; color: var(--muted); }
 .hand b { grid-column: 2; grid-row: 2; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
