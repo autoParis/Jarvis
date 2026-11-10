@@ -128,11 +128,16 @@ export type BrainStatus = { setting: BrainModel; running: BrainModel | null; swi
  * instead of 'reply'; The owner's messages queue until it ends, as for any busy turn.
  * Every hand-over and every turn's end goes to the log, so a message that got no answer shows as a gap.
  */
+/** One message for the next turn. `turn` is the owner's stored message. `cardApproves` marks his non-refusal answer on a brain ask card. */
+type Queued = { text: string; turn?: number; cardApproves?: boolean };
+
 export class Brain extends EventEmitter {
   private proc?: ChildProcess;
-  private queue: { text: string; turn?: number }[] = [];
+  private queue: Queued[] = [];
   /** the owner's messages in the running turn. */
   private handed: number[] = [];
+  /** The running turn holds the owner's answer on one of the brain's own ask cards, and that answer is not a refusal. */
+  private cardApproves = false;
   busy = false;
   /** The running turn was started by a cross-session message, not by jarvisd. */
   private unrequested = false;
@@ -156,7 +161,7 @@ export class Brain extends EventEmitter {
   private saved?: SavedSession;
   /** The process resumed the saved session and has not finished a turn yet: if it exits now, the batch goes to a fresh one. */
   private resumingSaved = false;
-  private inflight: { text: string; turn?: number }[] = [];
+  private inflight: Queued[] = [];
   /** Notices that need no answer of their own (gate buttons, ask cards). They ride as one line on the next real turn. */
   private held: string[] = [];
 
@@ -196,8 +201,11 @@ export class Brain extends EventEmitter {
     this.pump();
   }
 
-  /** `turn` is the stored turn id of a message from the owner. */
-  send(text: string, turn?: number) { this.queue.push({ text, turn }); this.pump(); }
+  /**
+   * `turn` is the stored turn id of a message from the owner. `card.approves` is set only by brainasks.ts, for the
+   * owner's own answer on one of the brain's ask cards that is not a refusal (answeringOwnerCard).
+   */
+  send(text: string, turn?: number, card?: { approves: boolean }) { this.queue.push({ text, turn, cardApproves: card?.approves === true }); this.pump(); }
   /**
    * A notice the brain needs to know but not answer: it does not start a turn. It rides as one context line in front
    * of the next turn that something else starts. A failure must use send(), so it wakes the brain at once.
@@ -216,6 +224,11 @@ export class Brain extends EventEmitter {
   }
   /** The running turn holds a message from the owner. Event, check and gate messages carry no turn id. */
   get answeringOwner() { return this.handed.length > 0; }
+  /**
+   * The running turn holds the owner's tap or typed answer on one of the brain's own ask cards, not a refusal.
+   * Only reply-add reads it. A worker ask tap, a held notice, a [check] or a [work list] line never sets it.
+   */
+  get answeringOwnerCard() { return this.cardApproves; }
 
   stop() { this.stopping = true; if (this.busy) this.emit('working', false); this.busy = false; this.unrequested = false; clearTimeout(this.hangTimer); this.proc?.kill(); this.proc = undefined; }
 
@@ -269,7 +282,7 @@ export class Brain extends EventEmitter {
         this.emit('log', 'brain saved session would not resume, starting fresh');
         this.queue.unshift(...this.inflight);
         this.inflight = [];
-        this.handed = [];
+        this.handed = []; this.cardApproves = false;
         this.endWork('');
         this.emit('working', false);
         this.start();
@@ -284,7 +297,7 @@ export class Brain extends EventEmitter {
 
   private restartWithNotice() {
     if (this.handed.length) this.emit('log', 'brain lost a running turn', { turns: this.handed });
-    this.handed = [];
+    this.handed = []; this.cardApproves = false;
     // What the lost turn did stays readable.
     this.endWork('');
     this.emit('working', false);
@@ -310,6 +323,7 @@ export class Brain extends EventEmitter {
     if (notes.length) parts.splice(at, 0, `[held notices, no answer needed] ${notes.join(' | ')}`);
     const text = parts.join('\n\n');
     this.handed = batch.flatMap(m => m.turn ?? []);
+    this.cardApproves = batch.some(m => m.cardApproves);
     // The start of each message names its kind ("[worker event]", "[The owner, in English"), and stops before the owner's words.
     this.emit('log', 'brain handed', { turns: this.handed, messages: batch.map(m => m.text.slice(0, 18)), held: notes.length, chars: text.length });
     this.busy = true;
@@ -329,7 +343,7 @@ export class Brain extends EventEmitter {
     this.unrequested = true;
     this.sentAt = Date.now();
     this.steps = [];
-    this.handed = [];
+    this.handed = []; this.cardApproves = false;
     this.emit('working', true);
     this.armHang();
   }
@@ -396,7 +410,7 @@ export class Brain extends EventEmitter {
         this.emit('reply', text, usage, this.handed);
         this.emit('log', 'brain answered', { turns: this.handed, error: Boolean(e.is_error), silent: text === 'SILENT' });
       }
-      this.handed = [];
+      this.handed = []; this.cardApproves = false;
       this.pump();
     }
   }

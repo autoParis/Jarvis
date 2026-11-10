@@ -67,11 +67,32 @@ export function answerLine(i: Item, answer: string, how: 'tapped' | 'typed'): st
   return `[ask card answer] ${i.body} -> ${answer} (message_id=${i.external_id}, ${how} in the app${i.subject ? `, about ${JSON.stringify(i.subject)}` : ''})`;
 }
 
+// An answer that says no, not yet or wait, in English or French. Checked on the start of the answer only.
+const REFUSAL = /^(?:no|nope|nah|non|not|don'?t|do not|never|cancel|stop|hold|wait|skip|drop|later|reject|refuse|pas|ne|attends?|annule[rz]?|arr[êe]te[rz]?)\b|^n['’]/i;
+
+/**
+ * Whether the owner's answer turns the ask down. For a tap it is the option he chose, for a typed answer his text.
+ * It errs toward a refusal: a false refusal only means the brain asks him again in the chat.
+ */
+export function isRefusal(answer: string): boolean {
+  return REFUSAL.test(answer.trim().replace(/^[^\p{L}]+/u, ''));
+}
+
+/** What a brain ask answer passes to the brain: `card.approves` lets that turn count as the owner's message for reply-add. */
+export type BrainNote = (text: string, card?: { approves: boolean }) => void;
+
+/**
+ * How main.ts hands a card line to the brain. An answer on the brain's own ask (`card` set) starts a turn at once, marked
+ * for reply-add when it approves. A worker ask notice (no `card`) waits for the next turn as a held notice and marks nothing.
+ */
+export const toBrain = (brain: { send: (text: string, turn?: number, card?: { approves: boolean }) => void; hold: (text: string) => void }): BrainNote =>
+  (text, card) => { if (card) brain.send(text, undefined, card); else brain.hold(text); };
+
 /**
  * The owner tapped an option or typed an answer on a brain ask. The card closes and the brain gets the question and the
- * answer as one line. `note` sends that line to the brain.
+ * answer as one line. `note` sends that line to the brain and wakes it, with `approves` false for a refusal.
  */
-export function answerBrainAsk(o: { id: string; value: string; store: Store; log: Log; note: (text: string) => void }): { status: number; error?: string } {
+export function answerBrainAsk(o: { id: string; value: string; store: Store; log: Log; note: BrainNote }): { status: number; error?: string } {
   const i = o.store.item(o.id);
   if (!isBrainAsk(i)) return { status: 404, error: 'That ask is not known here.' };
   const value = o.value.trim();
@@ -79,8 +100,9 @@ export function answerBrainAsk(o: { id: string; value: string; store: Store; log
   if (i.status !== 'new' && i.status !== 'spoken') return { status: 409, error: 'That question is already answered.' };
   o.store.markItem(o.id, 'answered', value);
   const how = optionsOf(i).includes(value) ? 'tapped' : 'typed';
-  o.log('ask card: The owner answered a brain ask', { item: o.id, how });
-  o.note(answerLine(i, value, how));
+  const approves = !isRefusal(value);
+  o.log('ask card: The owner answered a brain ask', { item: o.id, how, approves });
+  o.note(answerLine(i, value, how), { approves });
   return { status: 200 };
 }
 

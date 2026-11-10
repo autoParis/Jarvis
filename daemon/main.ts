@@ -28,7 +28,7 @@ import { makeRequests, backfillRequests, requestsRoute } from './requests.ts';
 import { workRoute, hiddenIds, makePaneWatcher } from './workroutes.ts';
 import { listenConfig } from './listen.ts';
 import { askCard, askRoute, auditEntries, type AskCard } from './asks.ts';
-import { brainAskRoute, briefLine as brainAskLine, isBrainAsk } from './brainasks.ts';
+import { brainAskRoute, briefLine as brainAskLine, isBrainAsk, toBrain } from './brainasks.ts';
 import { makeCheck, readDelivery, masterHead, CHECK_MS } from './check.ts';
 import { gitSelfCheck, gitNotice } from './gitcheck.ts';
 import { reminderRoute } from './reminders.ts';
@@ -390,9 +390,10 @@ const workCtx = {
   watchPane: makePaneWatcher({ native, broadcast, log }), chatFiles: new Map<string, string>(),
   readLog: () => { try { return readFileSync(join(ROOT, 'data', 'jarvisd.log'), 'utf8'); } catch { return ''; } },
 };
+const cardToBrain = toBrain(brain);
 const askCtx = {
   store, log, native, cardOf, pressed: PRESSED, askChanged, publish: publishWork,
-  note: (n: string) => { if (!existsSync(KILL_FILE)) brain.hold(n); },
+  note: (n: string, card?: { approves: boolean }) => { if (!existsSync(KILL_FILE)) cardToBrain(n, card); },
   sync: () => { nativeSync().catch(() => {}); },
   emailDone: (id: string) => { messages.dropProposals(id); messagesChanged(); },
 };
@@ -437,7 +438,7 @@ http.createServer(async (req, res) => {
       () => voiceRoute(voiceCtx, method, url, limit => readBody(req, limit), query),
       async () => url === '/api/today' || url.startsWith('/api/today/') || url.startsWith('/api/internal/today') ? todayRoute(today, method, url, await post(), owner) : undefined,
       async () => url === '/api/migration' || url.startsWith('/api/migration/') || url.startsWith('/api/internal/migration') ? migrationRoute(migration, method, url, await post()) : undefined,
-      async () => url.startsWith('/api/internal/replies') ? replyRoute(store, log, method, url, await post(), owner) : undefined,
+      async () => url.startsWith('/api/internal/replies') ? replyRoute(store, log, method, url, await post(), { ...owner, fromOwnerCard: () => brain.answeringOwnerCard }) : undefined,
       async () => url.startsWith('/api/internal/reminders') ? reminderRoute(store, log, method, url, await post()) : undefined,
       // The work list and its row buttons (workroutes.ts).
       () => workRoute(workCtx, method, url, body, query),

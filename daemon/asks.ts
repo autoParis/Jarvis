@@ -3,7 +3,7 @@ import type { Store, Item, Approval } from './store.ts';
 import type { Log } from './log.ts';
 import { approvalTag, approvalOutcomeText } from '../web/worklist.js';
 import { namedActionIn, namedLabel, refusedByPermissionLayer, type Named } from './namedactions.ts';
-import { brainCard, answerBrainAsk, isBrainAsk } from './brainasks.ts';
+import { brainCard, answerBrainAsk, isBrainAsk, type BrainNote } from './brainasks.ts';
 import { fields, askReportPath, reportPathIn } from './workercontract.ts';
 import type { ReportSummary } from './reports.ts';
 import { docHref } from '../web/contract.js';
@@ -324,7 +324,7 @@ export function auditEntries(store: Store, cardOf: (i: Item) => AskCard | undefi
 export type AnswerResult = { status: number; error?: string };
 
 type AnswerArgs = {
-  id: string; value: string; store: Store; log: Log; note: (text: string) => void;
+  id: string; value: string; store: Store; log: Log; note: BrainNote;
   /** Carries an answer into a background Claude worker (native.ts). */
   native?: { reply: (id: string, text: string, by: 'owner' | 'jarvis') => Promise<{ ok: true } | { ok: false; error: string }> };
 };
@@ -356,8 +356,11 @@ export async function answerAsk(o: AnswerArgs): Promise<AnswerResult> {
 export type AskCtx = {
   store: Store; log: Log;
   native: AnswerArgs['native'];
-  /** Holds a line for the brain's next turn. The caller checks the kill switch. */
-  note: (text: string) => void;
+  /**
+   * A line for the brain. With no `card` (a worker ask), it waits for the next turn. With `card` (an answer on the brain's
+   * own ask), it starts a turn at once. The caller checks the kill switch.
+   */
+  note: BrainNote;
   /** Sends the card's new state to every open page. */
   askChanged: (id: string) => void;
   cardOf: (i: Item | undefined) => AskCard | undefined;
