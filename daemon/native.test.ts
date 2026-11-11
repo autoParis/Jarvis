@@ -928,13 +928,40 @@ test('a worker is sent back at most three times in ten minutes, whatever the hoo
 });
 
 // ---- Stuck workers (worker 579, 2026-11-11) ----
+/** A running background task, as Claude Code lists it in the Stop hook body. */
+const BG = [{ id: 'b1', status: 'running', description: 'helper session' }];
+
+test('a worker that waits on the owner never turns stuck and is never nudged; the same WAITING on a task still does', async () => {
+  const at = Date.parse('2026-11-11T09:37:00Z'); // 4:37 AM Eastern, the 5361 case
+  const s = setupInteractive(at);
+  await s.native.start({ name: 'empty-annonces-5361', cwd: '/repo', brief: 'b', interactive: true });
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: Simon signs in to the empty Facebook profile and tells me.' });
+  s.listing[0].status = 'idle';
+  s.tick(STALL_MS * 4);
+  await s.native.poll();
+  assert.deepEqual(s.notices, [], 'no stuck notice, so nothing tells the brain to nudge it');
+  assert.equal(s.calls.filter(c => c[0] === '-p').length, 0, 'nothing was sent to the worker');
+  const r = s.native.rows()[0];
+  assert.equal(r.state, 'waiting');
+  assert.equal(r.note, 'Simon signs in to the empty Facebook profile and tells me.');
+  assert.equal(r.native?.stalledSince, undefined);
+  assert.ok(r.native?.waitingOn);
+  // The same wait with a background task is not a wait on the owner: it turns stuck as before.
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the helper session', background_tasks: BG });
+  s.tick(STALL_MS);
+  await s.native.poll();
+  assert.equal(s.notices.length, 1);
+  assert.match(s.notices[0], /is stuck/);
+  assert.match(s.native.rows()[0].note ?? '', /^Stuck: /);
+});
 
 test('a worker idle on a WAITING line is told to the brain once after STALL_MS, at any hour, and the row says stuck', async () => {
   const at = Date.parse('2026-11-11T01:05:33Z'); // 8:05 PM Eastern, outside the check hours
   const s = setupInteractive(at);
   const w = await s.native.start({ name: 'worker-pane-579', cwd: '/repo', brief: 'b', interactive: true });
   s.tick(6 * 60_000);
-  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the throwaway test session must write its first reply.' });
+  // A WAITING on its own background task: a wait that only the owner ends is never stuck (next test).
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the throwaway test session must write its first reply.', background_tasks: BG });
   s.listing[0].status = 'idle';
   await s.native.poll();
   s.tick(STALL_MS - 1);
@@ -964,7 +991,7 @@ test('a worker idle on a WAITING line is told to the brain once after STALL_MS, 
   assert.ok(n2.rows()[0].native?.stalledSince);
 
   // New activity (a nudge starts a turn that reports) clears it, and a second stall is told again.
-  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: CI on the new head.' });
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: CI on the new head.', background_tasks: BG });
   await s.native.poll();
   assert.equal(s.native.rows()[0].native?.stalledSince, undefined);
   s.tick(STALL_MS);
@@ -1042,7 +1069,7 @@ test('a transcript write keeps a worker from being stuck, and a busy one with no
   let wrote = 0;
   const s = setupInteractive(1_800_000_000_000, { written: () => wrote });
   await s.native.start({ name: 'busy-1', cwd: '/repo', brief: 'b', interactive: true });
-  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the build', transcript_path: '/t.jsonl' });
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the build', transcript_path: '/t.jsonl', background_tasks: BG });
   s.tick(STALL_MS + 1);
   wrote = 1_800_000_000_000 + STALL_MS; // the transcript moved a moment ago
   await s.native.poll();

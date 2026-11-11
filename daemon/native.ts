@@ -363,6 +363,12 @@ export function makeNative(o: {
     return times.length ? Math.max(...times) : undefined;
   };
   /**
+   * Its last turn ended on a WAITING line that only the owner ends (stopHook: no background task, no scheduled wake-up,
+   * no ask), and no report came since. An open ask shows as the ask instead (rows).
+   */
+  const waitsOnOwner = (w: NativeWorker) => w.state === 'working' && !w.outcome && !!w.report_at
+    && store.getState(ownerWaitKey(w.id)) === w.report_at;
+  /**
    * When a stuck worker last did anything, or undefined when it is not stuck. Stuck: its task is unfinished, it is not a
    * conversation (a side chat, a phone session), no ask or permission card of its own waits on the owner, and nothing
    * happened for STALL_MS: no start, report or resume, and no write to its transcript. A worker idle on a WAITING line counts,
@@ -371,6 +377,8 @@ export function makeNative(o: {
    */
   const stalledFrom = (w: NativeWorker, a: Agent | undefined): number | undefined => {
     if (!unfinished(w) || w.state === 'blocked' || w.remote || pendingCard(w.id)) return undefined;
+    // A worker that waits on the owner is not stuck, and nudging it does nothing. The check repeats its finding instead.
+    if (waitsOnOwner(w)) return undefined;
     if (w.approval_id && store.approval(w.approval_id)?.action === 'side-chat') return undefined;
     if (store.openItems().some(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${w.id}`)) return undefined;
     let wrote: number | undefined;
@@ -787,10 +795,8 @@ export function makeNative(o: {
       // An open ask holds the row in view as waiting, whatever its process does (rowState).
       const asks = new Map(store.openItems().filter(i => i.source === 'native' && i.dispatch_id).map(i => [i.dispatch_id!, i.subject || 'A question for you'] as const));
       const asking = (w: NativeWorker) => asks.has(`${ROW_PREFIX}${w.id}`);
-      // Its last turn ended on a WAITING line that only the owner ends (stopHook), and nothing came since. Once it is
-      // stuck (STALL_MS), the stuck row and notice take over, as before.
-      const ownerWait = (w: NativeWorker) => w.state === 'working' && !w.outcome && !asking(w) && !stalled.has(w.id) && !!w.report_at
-        && store.getState(ownerWaitKey(w.id)) === w.report_at;
+      // It waits on the owner (waitsOnOwner), with no open ask. It is never stuck, so the row stays Waiting on you.
+      const ownerWait = (w: NativeWorker) => !asking(w) && waitsOnOwner(w);
       return api.list().filter(w => w.state !== 'abandoned' && !(['done', 'failed', 'stopped'].includes(w.state) && now() - finishedAt(w) > ROW_MAX_AGE_MS && !onPhone(w) && !asking(w))).map(w => {
         const task = taskOf(w);
         const r: WorkRow = {
