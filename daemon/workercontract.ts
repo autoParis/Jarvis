@@ -79,6 +79,7 @@ OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 w
 Then end your turn. The answer arrives as a message from jarvis-brain or jarvis-brain-relay (${OWNER}'s words, carried by jarvisd) and starts a new turn.
 An ask must have OPTIONS. Jarvis sends an ask with no options back to you, and ${OWNER} does not see it.
 If you wrote a report that ${OWNER} must read before he decides, give its path on the REPORT line, not only in CONTEXT. The card then shows a button that opens the report.
+On a story, a decision you find after coding starts is an ask: send it and end your turn.
 
 A notice is not a question. A notice tells ${OWNER} a status and asks nothing, for example "the switch starts now, jarvisd restarts in 1 minute". Send a notice only if ${OWNER} must know it now. Start it with \`NOTICE: <one sentence>\` and do not use the ask fields. Jarvis shows it as a status line, with nothing to answer, and no answer comes back. Do not wait for one.
 
