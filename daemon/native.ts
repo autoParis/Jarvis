@@ -1,5 +1,5 @@
 import { OWNER_CAP, OWNER } from './config.ts';
-import { WAITING_LINE, REPORT_NUDGE, STALL_MS, outcomeOf } from './workercontract.ts';
+import { WAITING_LINE, REPORT_NUDGE, STALL_MS, outcomeOf, fields } from './workercontract.ts';
 export { NATIVE_FOOTER, REPORT_NUDGE, WAITING_LINE, STALL_MS } from './workercontract.ts';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
@@ -262,11 +262,20 @@ export const askId = (worker: string, at: number) => `ask:${worker}:${at}`;
  * routeWorkerTurn), and an ask the worker wrote in its turn text when SendMessage failed (stopHook).
  */
 export function insertWorkerAsk(store: Store, w: Pick<NativeWorker, 'id' | 'name'>, text: string, at: number): Item | undefined {
+  // The same ask again (a resumed worker repeats it, a Stop hook fires twice, a SendMessage after the turn-text card) keeps the one open card.
+  if (openWorkerAsk(store, w.id, text)) return undefined;
   return store.insertItem({
     source: 'native', external_id: askId(w.id, at), kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`,
     subject: `Question from ${w.name}`, body: text, status: 'spoken',
   });
 }
+
+/** This worker's open question item with exactly this text, if any. */
+export const openWorkerAsk = (store: Store, worker: string, text: string): Item | undefined =>
+  store.openItems().find(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${worker}` && i.body === text);
+
+/** An ask in the worker contract format: labeled QUESTION and OPTIONS fields that read as options. Free prose with "Options: 1) 2)" is not one. */
+const contractAsk = (text: string) => { const f = fields(text); return !!f.QUESTION && !!f.OPTIONS && workerMessageKind(text) === 'ask'; };
 
 /** An ask written in the turn text, without its closing `WAITING:` paragraph: that line is for jarvisd, not for the card. */
 const turnAskText = (text: string) => text.trim().replace(/\n\s*\n\s*WAITING\s*:[^\n]*$/i, '').trim();
@@ -747,7 +756,7 @@ export function makeNative(o: {
         catch (e) { log('native: transcript unreadable at stop', { worker: w.id, error: (e as Error).message }); }
         // The ask is in the turn text and no SendMessage delivered it: jarvisd makes the card itself. Worker 5361
         // (2026-11-11 14:47Z) asked this way when jarvis-brain was unreachable after a restart, and nobody saw it.
-        turnAsk = !w.remote && action !== 'side-chat' && !asked && workerMessageKind(text) === 'ask';
+        turnAsk = !w.remote && action !== 'side-chat' && !asked && contractAsk(text);
         pause = w.remote || action === 'side-chat' ? 'conversation'
           : WAITING_LINE.test(text) ? 'waiting line'
           : asked ? 'ask to the brain'
@@ -767,8 +776,7 @@ export function makeNative(o: {
       o.onReport(next, text, !!outcome);
       if (turnAsk) {
         const body = turnAskText(text);
-        // A repeat of the same text (a resumed worker, a Stop hook fired twice) keeps the one open card.
-        const open = store.openItems().find(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${w.id}` && i.body === body);
+        const open = openWorkerAsk(store, w.id, body);
         const item = open ? undefined : insertWorkerAsk(store, w, body, now());
         log(open ? 'native ask in the turn text already has a card' : 'native ask in the turn text made a card', { worker: w.id, item: (open ?? item)?.external_id ?? null, chars: body.length });
         if (item) o.onTurnAsk?.(next, item);

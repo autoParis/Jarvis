@@ -322,6 +322,12 @@ test('an ask in the turn text whose SendMessage failed becomes one ask card, and
   assert.equal(s.turnAsks.length, 1);
   // A tap on the card answers it like any worker ask.
   assert.deepEqual(answerOpenAsks(s.store, w.id, 'Yes, switch and restore', 'owner'), [open[0].external_id]);
+  // Progress prose that names options, with no QUESTION and OPTIONS labels, is not an ask: no card, nothing to the brain.
+  const prose = { session_id: w.session_id, last_assistant_message: 'Two options: 1) refactor 2) patch. I chose 2. Tests are running.', stop_hook_active: false,
+    background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'npm test' }] };
+  assert.deepEqual((await nativeRoute(s.o, 'POST', '/api/hooks/stop', prose))?.body, {});
+  assert.equal(s.store.openItems().filter(i => i.dispatch_id === `n:${w.id}`).length, 0);
+  assert.equal(s.turnAsks.length, 1);
 
   // The SendMessage arrived: no card at the stop. The brain's turn makes the one card.
   const d = setup();
