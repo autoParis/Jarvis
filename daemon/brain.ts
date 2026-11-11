@@ -412,7 +412,14 @@ export class Brain extends EventEmitter {
         this.emit('log', 'brain answered a worker message that ran ahead of a jarvisd turn', { chars: text.length, from: peer?.from, turns: this.handed, error: Boolean(e.is_error) });
         return;
       }
-      if (this.unrequested) {
+      if (this.unrequested && !peer) {
+        // No peer message at all: this is the brain's own reply that came one result late. 2026-11-11 13:51Z: after a
+        // resume, a stale background-task notice answered first and closed the owner's turn 5973. His real reply then
+        // came as this turn and went to an unknown-sender card, unspoken. It is a reply: said and stored like any other.
+        this.unrequested = false;
+        this.emit('reply', text, usage, []);
+        this.emit('log', 'brain answered a turn it started with no peer message, delivered as a reply', { chars: text.length, error: Boolean(e.is_error), silent: text === 'SILENT' });
+      } else if (this.unrequested) {
         this.unrequested = false;
         this.emit('worker', text, usage, peer);
         this.emit('log', 'brain answered a worker message', { chars: text.length, from: peer?.from, error: Boolean(e.is_error) });

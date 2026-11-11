@@ -59,8 +59,8 @@ test('brain events: a worker turn with no sender is kept on an unknown-sender ca
     chatLinks: makeChatLinks(store), native: { get: () => undefined, list: () => [] } as any, cardOf: () => undefined,
     publish: () => {}, info: () => ({}), tell: t => told.push(t),
   });
-  // The 2026-11-09 shape: a turn with no `origin`, so no peer at all.
-  brain.emit('worker', 'PR 5321 is ready.', { is_error: false }, undefined);
+  // A peer message that names no worker jarvisd knows.
+  brain.emit('worker', 'Story 4390 asks.', { is_error: false }, { from: 'someone-else', text: 'QUESTION: ship or wait?' });
   const item = store.openItems().find(i => i.subject === 'Message from an unknown sender');
   assert.ok(item, 'never dropped');
   assert.deepEqual(said, [], 'an answer to an unknown sender is not spoken');
@@ -68,5 +68,10 @@ test('brain events: a worker turn with no sender is kept on an unknown-sender ca
   assert.equal(told.length, 1);
   assert.match(told[0], /^\[unknown sender\]/);
   assert.match(told[0], new RegExp(`--item ${item!.external_id}`));
-  assert.match(told[0], /PR 5321 is ready\./);
+  assert.match(told[0], /ship or wait\?/);
+  // No peer message at all: the brain's own reply. Said, no card, nothing told.
+  brain.emit('worker', 'Here is my answer to you.', { is_error: false }, undefined);
+  assert.deepEqual(said, ['Here is my answer to you.']);
+  assert.equal(store.openItems().filter(i => i.subject === 'Message from an unknown sender').length, 1);
+  assert.equal(told.length, 1);
 });
