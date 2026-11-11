@@ -195,3 +195,12 @@ export function readReport(text: string): { label: ReportLabel | null; line: str
 export function workerBrief(o: { issues?: boolean } = {}): string {
   return (o.issues ? ISSUE_RULE : '') + NATIVE_FOOTER + WAIT_RULE + CARD_RULE;
 }
+
+/** The advisor a story worker runs with, as Claude Code's `advisorModel` setting. Every other worker Jarvis starts runs
+ *  with the advisor off, so only stories pay for it. Simon asked for this on 2026-11-11. */
+export const STORY_ADVISOR = 'fable';
+/** Whether a worker start runs a story: a Today story or the brain's worker-start, with a spec that names a pick-and-ship
+ *  skill (storyStartSpec writes `Run the pick-and-ship-v3 skill on issue #<n>`; the brain may write `Run pick-and-ship
+ *  on issue #<n>`). A plain Today task is not a story. */
+export const isStoryStart = (action: string, spec: string): boolean =>
+  (action === 'today-start' || action === 'worker-start') && /\bpick-and-ship(?:-v\d+)?\b/.test(spec);

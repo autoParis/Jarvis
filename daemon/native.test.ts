@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, type Approval } from './store.ts';
@@ -8,6 +8,8 @@ import { helpRun, CLAUDE_HELP, AGENTS_HELP } from './fakeclaude.ts';
 import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, IDLE_STOPPED, DESKTOP_WAITING, NUDGE, typedBytes, rowState, finishedAt, missingFeatures, REPORT_NUDGE, STALL_MS, type NativeWorker } from './native.ts';
 import { statusOf } from './requests.ts';
 import { lastTurnMessages } from './transcript.ts';
+import { isStoryStart, STORY_ADVISOR } from './workercontract.ts';
+import { storyStartSpec } from './today.ts';
 
 const SESSION = '00000000-0000-4000-8000-000000000001';
 
@@ -1111,4 +1113,49 @@ test('an open ask, a side chat or a finished task is never stuck', async () => {
   done.tick(STALL_MS + 1);
   await done.native.poll();
   assert.ok(!done.notices.some(n => /is stuck/.test(n)));
+});
+
+test('workerSettings sets the advisor only when asked: a model turns it on, an empty string turns it off', () => {
+  assert.equal('advisorModel' in workerSettings('http://x'), false);
+  assert.equal((workerSettings('http://x', 'fable') as any).advisorModel, 'fable');
+  assert.equal((workerSettings('http://x', '') as any).advisorModel, '');
+});
+
+test('isStoryStart takes a story spec from Today or the brain, and nothing else', () => {
+  for (const skill of ['pick-and-ship', 'pick-and-ship-v3']) assert.ok(isStoryStart('today-start', storyStartSpec('4886', skill)), skill);
+  assert.ok(isStoryStart('worker-start', 'Run pick-and-ship on issue #4886.'));
+  assert.equal(isStoryStart('today-start', 'Book the dentist and report back.'), false);
+  assert.equal(isStoryStart('question', 'Run the pick-and-ship skill on issue #1.'), false);
+  assert.equal(isStoryStart('side-chat', 'pick-and-ship'), false);
+});
+
+const advisorOf = (args: string[]) => {
+  const s = JSON.parse(readFileSync(args[args.indexOf('--settings') + 1], 'utf8'));
+  assert.equal(s.hooks.Stop[0].hooks[0].url.endsWith('/api/hooks/stop'), true, 'every variant keeps the hooks');
+  return 'advisorModel' in s ? s.advisorModel : 'inherit';
+};
+
+test('a background start picks the advisor from its card: on for a story, off for a task, as is with no card', async () => {
+  const cases: [string | undefined, string][] = [[storyStartSpec('4886', 'pick-and-ship-v3'), STORY_ADVISOR], ['Book the dentist.', ''], [undefined, 'inherit']];
+  for (const [spec, want] of cases) {
+    const { native, fake, store } = setup();
+    const card = spec === undefined ? undefined : store.addApproval({ action: 'today-start', say: '', args: JSON.stringify({ spec }) });
+    await native.start({ name: 'w-1', cwd: '/repo', brief: 'go', approvalId: card?.id });
+    assert.equal(advisorOf(fake.calls.find(c => c[0] === '--bg')!), want, String(spec));
+  }
+});
+
+test('an interactive story worker starts and resumes with the advisor, a question worker without it', async () => {
+  for (const [action, spec, want] of [['worker-start', 'Run pick-and-ship on issue #4886.', STORY_ADVISOR], ['question', 'What does X do?', '']] as const) {
+    const { native, listing, spawns, store } = setupInteractive();
+    const card = store.addApproval({ action, say: '', args: JSON.stringify({ spec }) });
+    const w = await native.start({ name: 'iw-1', cwd: '/repo', brief: 'b', approvalId: card.id, interactive: true });
+    native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: finished' });
+    for (const a of listing) delete a.pid;
+    assert.deepEqual(await native.reply(w.id, 'one more thing', 'jarvis'), { ok: true });
+    assert.equal(spawns.length, 2);
+    assert.ok(argvOf(spawns[1]).includes('--resume'));
+    assert.equal(advisorOf(argvOf(spawns[0])), want, `${action} start`);
+    assert.equal(advisorOf(argvOf(spawns[1])), want, `${action} resume`);
+  }
 });
