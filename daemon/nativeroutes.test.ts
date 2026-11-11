@@ -7,7 +7,8 @@ import { openStore, type Item } from './store.ts';
 import { helpRun } from './fakeclaude.ts';
 import { askCard } from './asks.ts';
 import { makeNative, NATIVE_FOOTER, REPORT_NUDGE, type Claude } from './native.ts';
-import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId, workerMessageKind, NO_OPTIONS_REFUSAL } from './nativeroutes.ts';
+import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId, workerMessageKind, NO_OPTIONS_REFUSAL, matchSender, unknownId, UNKNOWN_SUBJECT } from './nativeroutes.ts';
+import { answerAsk } from './asks.ts';
 import { buildCommand, nativeName, WORKER_PERMISSION, BUTTON_ONLY } from './gate.ts';
 import { chatLines } from './transcript.ts';
 
@@ -74,15 +75,49 @@ test('the hook routes: a known worker\'s permission prompt becomes a card and re
   assert.equal(await nativeRoute(s.o, 'POST', '/api/other', {}), undefined);
 });
 
-test('a worker\'s message to the brain becomes a question item; a stranger\'s is dropped; the brain\'s reply answers it', async () => {
+test('a message with no sender is never dropped: it matches a worker by story, worktree or session, else it is an unknown-sender card', async () => {
+  const s = setup();
+  const w = await s.native.start({ name: '4390-sup-1025-page-address-problem-483', cwd: '/tmp', brief: 'x' });
+  const ro = { native: s.native, store: s.store, log: s.log };
+  const ask = 'STORY: #4390 SUP-1025 listing address not read\nQUESTION: Ship a guessed fix now?\nOPTIONS: wait because Pat\'s PR collects data; ship because the customer waits';
+  // No sender name: the STORY number names the worker.
+  const byStory = routeWorkerTurn({ ...ro, now: () => 1000 }, { text: ask }, 'Story 4390 asks.');
+  assert.equal(byStory.item?.dispatch_id, `n:${w.id}`);
+  assert.ok(s.logs.some(l => l.startsWith('native message matched to a worker without its name') && l.includes('"by":"story"')));
+  // A wrong name, with the worker's session id or worktree in the text.
+  assert.equal(matchSender(s.native, { from: 'someone-else', text: `session ${w.session_id}` })?.by, 'session');
+  assert.equal(matchSender(s.native, { text: 'QUESTION: x?', from: undefined }), undefined, 'no story, path or session: no guess');
+  // Two workers on the same story: no guess.
+  const two = [w, { ...w, id: 'other', name: '4390-follow-up-490' }];
+  assert.equal(matchSender({ get: () => undefined, list: () => two }, { text: ask }), undefined);
+  // A worktree path picks one worker.
+  const trees = [{ ...w, cwd: '/Users/x/wt/4390-a' }, { ...w, id: 'b', name: 'b-1', cwd: '/Users/x/wt/other-b' }];
+  assert.equal(matchSender({ get: () => undefined, list: () => trees }, { text: 'I am in /Users/x/wt/other-b now' })?.worker.id, 'b');
+  // No match: an open card from an unknown sender, with the message word for word, and nothing spoken.
+  const stranger = routeWorkerTurn({ ...ro, now: () => 2000 }, { from: 'someone-else', text: 'QUESTION: hi?' }, 'Hello stranger');
+  assert.equal(stranger.speak, false);
+  assert.equal(stranger.unknown?.external_id, unknownId(2000));
+  assert.equal(stranger.unknown?.subject, UNKNOWN_SUBJECT);
+  assert.equal(stranger.unknown?.body, 'QUESTION: hi?');
+  assert.equal(stranger.unknown?.dispatch_id, null);
+  // The 2026-11-09 case: no peer at all. The brain's answer is kept on the card.
+  const none = routeWorkerTurn({ ...ro, now: () => 3000 }, undefined, 'PR 5321 is ready.');
+  assert.match(none.unknown?.body ?? '', /did not get the message text[\s\S]*PR 5321 is ready\./);
+  assert.ok(s.store.openItems().some(i => i.external_id === unknownId(3000)));
+  // Tapping it sends nothing and says why. The brain's relay with --item closes it.
+  const tap = await answerAsk({ id: unknownId(2000), value: 'yes', store: s.store, log: s.log, note: () => {}, native: s.native });
+  assert.equal(tap.status, 409);
+  assert.match(tap.error ?? '', /does not know which worker/);
+  const relay = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: w.name, text: 'Wait for the data.', item: unknownId(2000) });
+  assert.equal(relay?.status, 200);
+  assert.equal(s.store.item(unknownId(2000))?.status, 'answered');
+  assert.equal(s.store.item(unknownId(2000))?.answered_by, 'jarvis');
+  assert.ok(s.changed.includes(unknownId(2000)));
+});
+
+test('a worker\'s message to the brain becomes a question item; the brain\'s reply answers it', async () => {
   const s = setup();
   const w = await s.native.start({ name: 'probe-1', cwd: '/tmp', brief: 'x' });
-  const dropped = routeWorkerTurn({ native: s.native, store: s.store, log: s.log }, { from: 'someone-else', text: 'hi' }, 'Hello stranger');
-  assert.equal(dropped.speak, false);
-  assert.equal(dropped.item, undefined);
-  assert.ok(s.logs.some(l => l.startsWith('brain ignored a message from a session jarvisd did not start')));
-  const none = routeWorkerTurn({ native: s.native, store: s.store, log: s.log }, undefined, 'x');
-  assert.equal(none.speak, false);
   const ask = 'QUESTION: merge?\nOPTIONS: merge because tests pass; wait because review is open';
   const r = routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 1000 }, { from: 'probe-1', text: ask }, 'Probe one asks whether to merge.');
   assert.equal(r.item?.external_id, askId(w.id, 1000));

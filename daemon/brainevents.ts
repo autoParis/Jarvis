@@ -6,6 +6,7 @@ import type { Native } from './native.ts';
 import type { PushMessage } from './push.ts';
 import type { makeChatLinks } from './chatlink.ts';
 import { urgent } from './push.ts';
+import { OWNER } from './config.ts';
 import { unmarked } from './voice.ts';
 import { routeWorkerTurn } from './nativeroutes.ts';
 
@@ -28,7 +29,17 @@ export type BrainEventCtx = {
   publish: () => void;
   /** The brain's model and state, for the app's model menu. */
   info: () => unknown;
+  /** Starts a brain turn with this text (main.ts checks the kill switch). */
+  tell?: (text: string) => void;
 };
+
+/** What the brain hears about a message jarvisd could not match to a worker. Its answer to that turn was not spoken. */
+export function unknownSenderNote(i: Item, peer: PeerMessage | undefined): string {
+  return `[unknown sender] A cross-session message reached you, and jarvisd could not match it to a native worker`
+    + ` (sender name: ${peer?.from ? JSON.stringify(peer.from) : 'none'}). It is on ask card message_id=${i.external_id}, and your answer to it was not spoken.`
+    + ` Find the sender in jarvis-native list (story number, worktree, recent report). Then tell ${OWNER} what it asks,`
+    + ` and send his answer with jarvis-native reply --worker <name> --item ${i.external_id} --text "<words>". The message:\n${i.body}`;
+}
 
 export function wireBrain(brain: Emitter, o: BrainEventCtx) {
   const { store, broadcast, say, chatLinks, native, log } = o;
@@ -58,6 +69,12 @@ export function wireBrain(brain: Emitter, o: BrainEventCtx) {
       store.addTurn({ role: 'event', text: line });
       broadcast({ type: 'event', text: line, at: new Date().toISOString() });
       o.publish();
+    }
+    if (r.unknown) {
+      const card = o.cardOf(r.unknown);
+      broadcast({ type: 'event', text: `[native question] unknown sender: ${r.unknown.body}`, at: new Date().toISOString(), asks: card ? [card] : [] });
+      o.publish();
+      o.tell?.(unknownSenderNote(r.unknown, peer));
     }
     if (r.refusal) {
       const w = r.worker!;

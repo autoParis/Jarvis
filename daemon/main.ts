@@ -246,7 +246,8 @@ const brain = new Brain({
 // The proposals of a turn get Approve and Reject on the reply that asks for them (chatlink.ts).
 const chatLinks = makeChatLinks(store);
 // The brain's replies, worker turns and state, into the store, the chat and every open page (brainevents.ts).
-wireBrain(brain, { store, log, broadcast, say, notify, chatLinks, native, cardOf, publish: publishWork, info: () => brainInfo() });
+wireBrain(brain, { store, log, broadcast, say, notify, chatLinks, native, cardOf, publish: publishWork, info: () => brainInfo(),
+  tell: text => { if (!existsSync(KILL_FILE)) brain.send(text); } });
 /** A gate button's outcome: a failure or an unknown result wakes the brain at once, anything else waits for the next turn. */
 function gateNotice(a: Approval, text: string) {
   if (gateFailed(a.status)) brain.send(text); else brain.hold(text);

@@ -342,7 +342,8 @@ export async function answerAsk(o: AnswerArgs): Promise<AnswerResult> {
   if (isBrainAsk(item)) return answerBrainAsk({ id, value, store, log, note: o.note });
   const ids = { item: id, dispatch: item.dispatch_id };
   if (item.source !== 'native') return { status: 409, error: 'This ask came from a worker Jarvis no longer runs, so nothing can answer it here.' };
-  if (!o.native || !item.dispatch_id) return { status: 500, error: 'Nothing was sent: this path cannot reach native workers.' };
+  if (!item.dispatch_id) return { status: 409, error: 'Jarvis does not know which worker sent this, so nothing was sent. Tell Jarvis your answer and it finds the worker.' };
+  if (!o.native) return { status: 500, error: 'Nothing was sent: this path cannot reach native workers.' };
   const claim = store.claimReply(id);
   if (claim !== 'claimed') return { status: 409, error: `That question is already ${claim}. Not answering it twice.` };
   const r = await o.native.reply(item.dispatch_id, value, 'owner');

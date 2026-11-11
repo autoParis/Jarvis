@@ -49,3 +49,24 @@ test('brain events: a worked turn is stored as a fold, notices are said, the mod
   brain.emit('log', 'brain line');
   assert.deepEqual(seen.logs, ['brain line']);
 });
+
+test('brain events: a worker turn with no sender is kept on an unknown-sender card, nothing is said, and the brain is told', () => {
+  const store = openStore(':memory:');
+  const brain = new EventEmitter();
+  const events: any[] = [], said: string[] = [], told: string[] = [];
+  wireBrain(brain, {
+    store, log: () => {}, broadcast: ev => events.push(ev), say: (_r, t) => { said.push(t); return 0; }, notify: async () => 1,
+    chatLinks: makeChatLinks(store), native: { get: () => undefined, list: () => [] } as any, cardOf: () => undefined,
+    publish: () => {}, info: () => ({}), tell: t => told.push(t),
+  });
+  // The 2026-11-09 shape: a turn with no `origin`, so no peer at all.
+  brain.emit('worker', 'PR 5321 is ready.', { is_error: false }, undefined);
+  const item = store.openItems().find(i => i.subject === 'Message from an unknown sender');
+  assert.ok(item, 'never dropped');
+  assert.deepEqual(said, [], 'an answer to an unknown sender is not spoken');
+  assert.ok(events.some(e => e.type === 'event' && /unknown sender/.test(e.text)));
+  assert.equal(told.length, 1);
+  assert.match(told[0], /^\[unknown sender\]/);
+  assert.match(told[0], new RegExp(`--item ${item!.external_id}`));
+  assert.match(told[0], /PR 5321 is ready\./);
+});
