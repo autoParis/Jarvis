@@ -224,6 +224,22 @@ test('worker_done closes the request at once, by the outcome it reported, with t
   assert.deepEqual(reqs.list().map(r => r.status), ['done', 'failed']);
 });
 
+test('a follow-up FAILED on a done story keeps the request done and shows the follow-up under it', async () => {
+  // Worker fe594be3 (4967), 2026-11-11: done with PR #5418, then a steer ended FAILED and the row turned red.
+  const { store, reqs, start, row, work } = setup();
+  start('n:fe594be3', 'Verify the launch');
+  store.insertItem({ source: 'native', external_id: 'm1', kind: 'worker_done', dispatch_id: 'n:fe594be3', subject: 'Done', body: 'DONE: PR #5418 is ready.', meta: '{"outcome":"succeeded"}' });
+  const native = { id: 'fe594be3', sessionId: null, name: '4967-verify', state: 'done' as const, waitingFor: null, outcome: 'done' as const,
+    followUp: { text: 'FAILED: the gate always says REVIEW on gate code, so I did not change the verdict.', at: '2026-10-30T12:00:00Z', outcome: 'failed' as const } };
+  await reqs.sync(work([row('n:fe594be3', { state: 'idle', native })]));
+  const r = reqs.list()[0];
+  assert.equal(r.status, 'review', 'its PR is open, so it waits for merge, never failed');
+  assert.equal(r.followUp, native.followUp.text);
+  const html = requestListHtml(reqs.list(), { review: true, done: true }, Date.parse('2026-10-30T12:00:00Z'));
+  assert.match(html, /<div class="follow">Follow-up: FAILED: the gate always says REVIEW/);
+  assert.doesNotMatch(html, /rrow failed/);
+});
+
 test('a shown title drops a leading Request: or Requests:', async () => {
   assert.equal(shownTitle('Requests: keep done rows for a day'), 'keep done rows for a day');
   assert.equal(shownTitle('request:Strip prefixes'), 'Strip prefixes');

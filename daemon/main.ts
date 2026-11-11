@@ -105,11 +105,13 @@ let todayReady = false;
 const native = makeNative({
   store, log, jarvisUrl: `http://127.0.0.1:${PORT}`, dataDir: join(ROOT, 'data'),
   onChange: () => publishWork(),
-  onReport: (w, text, final) => {
+  onReport: (w, text, final, followUp) => {
     if (!final) return; // a turn that ended without DONE or FAILED is the worker asking or pausing; native.stopHook reports a silent one
     // The request and the Today row move on now, not at the next poll.
     nativeSync().catch(e => log(`native sync after a report: ${e}`));
-    const line = `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) reported ${w.outcome}:\n${text}`;
+    const line = followUp
+      ? `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) answered a follow-up with FAILED. Its story stays done with its earlier DONE report:\n${text}`
+      : `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) reported ${w.outcome}:\n${text}`;
     store.addTurn({ role: 'event', text: line });
     broadcast({ type: 'event', text: line, at: new Date().toISOString() });
     if (!existsSync(KILL_FILE)) brain.send(`${line}\n\nThis is its report, word for word. Speak it to ${OWNER} if it is an answer or a problem; a plain success is SILENT unless he asked for it. It needs no release.`);

@@ -107,6 +107,14 @@ const quietKey = (id: string) => `nativeQuiet:${id}`;
  * ended on WAITING, and its row showed a spinner for 4 hours.
  */
 const ownerWaitKey = (id: string) => `nativeOwnerWait:${id}`;
+/** The state key that holds a follow-up turn's FAILED report on a worker that already reported DONE: `{ text, at, outcome }`. */
+const followUpKey = (id: string) => `nativeFollowUp:${id}`;
+/** The follow-up result kept beside a done story, or undefined. */
+export function followUpOf(store: Pick<Store, 'getState'>, id: string): { text: string; at: string; outcome: 'failed' } | undefined {
+  try { const v = JSON.parse(store.getState(followUpKey(id)) || 'null'); return v && typeof v.text === 'string' ? v : undefined; } catch { return undefined; }
+}
+/** The first line of a report, for a one-line note. */
+const firstLine = (s: string) => (s.trim().split('\n')[0] ?? '').slice(0, 200);
 /** The words after "WAITING:" on the report's first line, for the row's note and the check's finding. */
 export const waitingText = (report: string) => (report.trim().split('\n')[0] ?? '').replace(WAITING_LINE, '').trim().slice(0, 200) || 'Waiting';
 /** At most this many REPORT_NUDGE blocks per worker in this window, whatever Claude Code says about the chain. */
@@ -252,7 +260,7 @@ export function makeNative(o: {
   dataDir: string;
   onChange: (w: NativeWorker) => void;
   /** A Stop hook was stored; `final` when it set the outcome. */
-  onReport: (w: NativeWorker, text: string, final: boolean) => void;
+  onReport: (w: NativeWorker, text: string, final: boolean, followUp?: boolean) => void;
   /** A worker-permission approval was created or decided. */
   onCard: (a: Approval) => void;
   /** A liveness finding for the brain: failed, blocked with no card, done without a DONE line. */
@@ -679,6 +687,20 @@ export function makeNative(o: {
       const text = String(body.last_assistant_message ?? '');
       const outcome = outcomeOf(text);
       const transcript = body.transcript_path ?? w.transcript;
+      if (outcome === 'failed' && w.outcome === 'done') {
+        // A follow-up turn (a steer from the brain or the owner) ended FAILED on a story that already reported DONE. The
+        // story stays done with its DONE report; the follow-up result is kept beside it. Worker fe594be3 (4967),
+        // 2026-11-11 12:24Z: it refused to change a verdict, correctly, and that FAILED turned the done row red.
+        const t = iso();
+        store.setState(followUpKey(w.id), JSON.stringify({ text, at: t, outcome }));
+        // report_at moves to now: the steer came after the DONE, and requests.ts reopens a request whose report is older
+        // than the last message sent to its worker. The report text stays the DONE report.
+        const next = update(w.id, { state: 'done', report_at: t, transcript, waiting_for: null });
+        log('native follow-up reported failed, the story stays done', { worker: w.id, chars: text.length });
+        o.onReport(next, text, true, true);
+        return {};
+      }
+      if (outcome === 'done') store.setState(followUpKey(w.id), '');
       // A stop that is not the answer to a block starts a new chain of the turn: it may be sent back once.
       if (!body.stop_hook_active) nudgedChain.delete(w.id);
       let pause: string | undefined;
@@ -779,7 +801,8 @@ export function makeNative(o: {
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
           native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}),
             ...(stalled.has(w.id) ? { stalledSince: new Date(stalled.get(w.id)!).toISOString() } : {}),
-            ...(ownerWait(w) ? { waitingOn: { text: waitingText(w.report ?? ''), since: w.report_at! } } : {}) },
+            ...(ownerWait(w) ? { waitingOn: { text: waitingText(w.report ?? ''), since: w.report_at! } } : {}),
+            ...(w.outcome === 'done' && followUpOf(store, w.id) ? { followUp: { text: firstLine(followUpOf(store, w.id)!.text), at: followUpOf(store, w.id)!.at, outcome: 'failed' as const } } : {}) },
         };
         if (w.state === 'blocked' && w.waiting_for) r.note = w.waiting_for;
         else if (asking(w)) r.note = asks.get(`${ROW_PREFIX}${w.id}`);

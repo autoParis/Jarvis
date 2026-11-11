@@ -812,6 +812,7 @@ a.num:hover { color: var(--ink); }
   .fold-head[aria-expanded="true"] .ago { display: inline; }
 }
 .wrow .note { grid-column: 2 / -1; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.rrow .follow { grid-column: 2 / -1; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .rrow .gone { grid-column: 2 / -1; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .showhidden { margin: 12px 8px 0; font-size: 12px; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
 .done-line { flex: none; padding: 10px 18px 12px; font-size: 12px; color: var(--muted); }

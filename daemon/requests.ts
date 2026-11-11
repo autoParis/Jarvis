@@ -17,7 +17,9 @@ import type { RouteResult, Body } from './route.ts';
 
 export type RequestStatus = 'waiting' | 'working' | 'review' | 'done' | 'failed';
 /** What the app shows for one request. `row` is the work-list row that opens its conversation, if one is listed. */
-export type RequestView = { id: number; title: string; words: string | null; status: RequestStatus; at: string; startedAt: string; pr?: string; url?: string; row?: string; report?: boolean; doc?: RequestDoc };
+export type RequestView = { id: number; title: string; words: string | null; status: RequestStatus; at: string; startedAt: string; pr?: string; url?: string; row?: string; report?: boolean; doc?: RequestDoc;
+  /** The first line of a follow-up turn's FAILED result on a story that stays done (native.ts followUpOf). */
+  followUp?: string };
 /**
  * A document in data/reports the request's worker wrote: from an ask's REPORT line, else a data/reports path in its
  * DONE report. `waits` is true when an open question rests on it, so the owner must read it. `href` opens it in the
@@ -289,12 +291,15 @@ export function makeRequests(opts: {
     return store.requests().map(r => {
       // A native request's dispatch is its work-list row, listed from the moment the worker starts, before the next poll.
       const fresh = r.dispatch_id.startsWith(ROW_PREFIX) && (r.status === 'working' || r.status === 'waiting') ? { id: r.dispatch_id } : undefined;
-      const row = conversation(r, rows) ?? fresh;
+      const listed = conversation(r, rows);
+      const row = listed ?? fresh;
+      const followUp = listed?.native?.followUp;
       const hasReport = reported.has(r.dispatch_id) || !!nativeReport(store, r.dispatch_id)?.body.trim();
       const doc = opts.reportOf ? requestDoc(store, r.dispatch_id, opts.reportOf) : undefined;
       return {
         id: r.id, title: shownTitle(r.title), words: r.words, status: r.status as RequestStatus, at: `${r.status_at.replace(' ', 'T')}Z`, startedAt: `${r.created_at.replace(' ', 'T')}Z`,
         ...(r.pr ? { pr: r.pr } : {}), ...(r.pr_url ? { url: r.pr_url } : {}), ...(row ? { row: row.id } : {}), ...(hasReport ? { report: true } : {}), ...(doc ? { doc } : {}),
+        ...(followUp ? { followUp: followUp.text } : {}),
       };
     });
   }
