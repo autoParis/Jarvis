@@ -1,5 +1,5 @@
 import { OWNER_CAP, OWNER } from './config.ts';
-import { WAITING_LINE, REPORT_NUDGE, STALL_MS, outcomeOf, fields } from './workercontract.ts';
+import { WAITING_LINE, REPORT_NUDGE, STALL_MS, outcomeOf, fields, STORY_ADVISOR, isStoryStart } from './workercontract.ts';
 export { NATIVE_FOOTER, REPORT_NUDGE, WAITING_LINE, STALL_MS } from './workercontract.ts';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
@@ -139,10 +139,15 @@ export const DESKTOP_WAITING = 'Open in the Claude desktop app';
 export const NUDGE = 'Your terminal was restarted by Jarvis. Continue the task from where you stopped. Check the result of your last action before repeating it. Report DONE or FAILED as before.';
 
 
-/** The settings file every background worker starts with: its hooks point at jarvisd. */
-export function workerSettings(jarvisUrl: string): object {
+/**
+ * The settings file every background worker starts with: its hooks point at jarvisd. `advisor` sets Claude Code's
+ * `advisorModel` on top of the owner's own settings: a model name turns the advisor on, '' turns it off, and leaving it
+ * out keeps whatever his settings say.
+ */
+export function workerSettings(jarvisUrl: string, advisor?: string): object {
   const hook = (path: string, timeout: number) => ({ hooks: [{ type: 'http', url: `${jarvisUrl}/api/hooks/${path}`, timeout }] });
   return {
+    ...(advisor === undefined ? {} : { advisorModel: advisor }),
     crossSessionInbound: 'accept',
     dialogExpiry: 'never',
     permissions: { deny: ['AskUserQuestion'] },
@@ -328,8 +333,24 @@ export function makeNative(o: {
   const phoning = new Set<string>();
   const now = o.now ?? Date.now;
   const iso = () => new Date(now()).toISOString();
-  const settingsPath = join(o.dataDir, 'worker-settings.json');
-  writeFileSync(settingsPath, JSON.stringify(workerSettings(o.jarvisUrl), null, 2) + '\n');
+  // Three settings files, the same but for the advisor. A story worker gets STORY_ADVISOR, any other worker Jarvis
+  // started gets the advisor off, and a session Jarvis did not start (continued on the phone) keeps the owner's setting.
+  const writeSettings = (file: string, advisor?: string) => {
+    const path = join(o.dataDir, file);
+    writeFileSync(path, JSON.stringify(workerSettings(o.jarvisUrl, advisor), null, 2) + '\n');
+    return path;
+  };
+  const settingsPath = writeSettings('worker-settings.json');
+  const storySettingsPath = writeSettings('worker-settings-story.json', STORY_ADVISOR);
+  const plainSettingsPath = writeSettings('worker-settings-no-advisor.json', '');
+  /** The settings file for a worker, from the card that started it. A start and every resume pick the same file. */
+  const settingsFor = (approvalId?: number | null): string => {
+    const a = approvalId ? store.approval(approvalId) : undefined;
+    if (!a) return settingsPath;
+    let args: any;
+    try { args = JSON.parse(a.args); } catch {}
+    return isStoryStart(a.action, String(args?.spec ?? '')) ? storySettingsPath : plainSettingsPath;
+  };
   // One named pipe per interactive terminal, `data/pty/<name>-r<resumes>.in`.
   const ptyDir = join(o.dataDir, 'pty');
   mkdirSync(ptyDir, { recursive: true });
@@ -493,7 +514,7 @@ export function makeNative(o: {
       await checkClaude();
       if (a.interactive) return startInteractive(a);
       const args = ['--bg', '--name', a.name, '--permission-mode', a.permissionMode ?? 'auto', '--model', a.model ?? DEFAULT_MODEL,
-        '--settings', settingsPath, ...(a.worktree ? ['-w', a.name] : []), a.brief];
+        '--settings', settingsFor(a.approvalId), ...(a.worktree ? ['-w', a.name] : []), a.brief];
       const r = await claude(args, a.cwd);
       const m = r.out.match(/backgrounded\s*·\s*([\w-]+)\s*·/);
       if (!m) {
@@ -580,7 +601,7 @@ export function makeNative(o: {
         const resumes = w.resumes + 1;
         const fifo = fifoFor(w.name, resumes);
         const pgid = spawnPty(['claude', '--resume', w.session_id, '--name', w.name, ...(w.remote ? [`--remote-control=${w.remote}`] : []), '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
-          '--settings', settingsPath, ...(nudge ? [NUDGE] : [])], w.cwd, fifo);
+          '--settings', settingsFor(w.approval_id), ...(nudge ? [NUDGE] : [])], w.cwd, fifo);
         update(w.id, { pgid, in_fifo: fifo, resumes, last_resume_at: iso(), waiting_for: null });
         const seen = await waitFor(row(w.id)!, a => !!a.pid, RESPAWN_WAIT_MS);
         if (seen) alive.add(w.id);
@@ -666,7 +687,7 @@ export function makeNative(o: {
         const cwd = mine?.cwd ?? a.cwd;
         const resumes = mine ? mine.resumes + 1 : 0;
         const fifo = fifoFor(name, resumes);
-        const pgid = spawnPty(['claude', '--resume', sid, '--name', name, `--remote-control=${remote}`, '--permission-mode', mode, '--model', model, '--settings', settingsPath], cwd, fifo);
+        const pgid = spawnPty(['claude', '--resume', sid, '--name', name, `--remote-control=${remote}`, '--permission-mode', mode, '--model', model, '--settings', mine ? settingsFor(mine.approval_id) : settingsPath], cwd, fifo);
         const t = iso();
         if (mine) update(id, { kind: 'interactive', pgid, in_fifo: fifo, resumes, last_resume_at: t, remote, model, permission_mode: mode, state: 'done', waiting_for: null });
         else {
@@ -1112,7 +1133,7 @@ export function makeNative(o: {
   async function startInteractive(a: { name: string; cwd: string; brief: string; model?: string; permissionMode?: 'auto' | 'default'; approvalId?: number; worktree?: boolean }): Promise<NativeWorker> {
     const model = a.model ?? DEFAULT_MODEL, mode = a.permissionMode ?? 'auto';
     const fifo = fifoFor(a.name, 0);
-    const pgid = spawnPty(['claude', '--name', a.name, '--permission-mode', mode, '--model', model, '--settings', settingsPath, ...(a.worktree ? ['-w', a.name] : []), a.brief], a.cwd, fifo);
+    const pgid = spawnPty(['claude', '--name', a.name, '--permission-mode', mode, '--model', model, '--settings', settingsFor(a.approvalId), ...(a.worktree ? ['-w', a.name] : []), a.brief], a.cwd, fifo);
     const t = iso();
     const probe: NativeWorker = { id: '', session_id: null, name: a.name, cwd: a.cwd, approval_id: a.approvalId ?? null, state: 'starting', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: t, updated_at: t, kind: 'interactive', pgid,
       repo: a.cwd, model, permission_mode: mode, resumes: 0, last_resume_at: null, in_fifo: fifo };
