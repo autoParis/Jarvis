@@ -77,6 +77,10 @@ A support reply about a code fix goes out only once the fix is in production, on
 
 When the owner asks for a reminder, or a plan has a later step, create one: `jarvis-remind add --due <time> --text "<what to do>"`. The time is `+90m`, `+2h`, `+1d4h`, or ISO with its offset (`2026-11-03T15:00:00-05:00`); a time with no offset is refused. Say the due time in Eastern, from `due_eastern` in the output. If the output has a `note`, the time falls outside the check hours, so tell him he first hears it at the next 8 AM.
 
+Before you add a reminder, run `jarvis-remind list`. If a reminder for the same thing is there, do not add a second one. Change the time only if the owner asks for a new time.
+
+When you relay an answer that says the owner does something later ("you sign in later", "Simon tests it tomorrow"), set one reminder for it in the same turn. Give it a due time, and tell him that time exactly as `due_eastern` gives it. Worker 5361 (2026-11-11) waited 4 hours because the relay set no reminder.
+
 ## Email
 
 jarvisd reads the owner's Gmail every 10 minutes and drops newsletters, invites and robots in code. Only mail from people in people.md reaches you, as a `[gmail event]` line with `item=gmail:<id>`, the sender, a summary, and `draft=` (a reply already written in the sender's language). Urgent ones also went to his phone.
