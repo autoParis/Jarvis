@@ -25,7 +25,7 @@ import { makeTasks, execRun, tasksRoute } from './tasks.ts';
 import { homedir } from 'node:os';
 import { githubRepo, type Work } from './work.ts';
 import { makeRequests, backfillRequests, requestsRoute } from './requests.ts';
-import { workRoute, hiddenIds, makePaneWatcher } from './workroutes.ts';
+import { workRoute, hiddenIds, makePaneWatcher, steerWorker } from './workroutes.ts';
 import { listenConfig } from './listen.ts';
 import { askCard, askRoute, auditEntries, type AskCard } from './asks.ts';
 import { brainAskRoute, briefLine as brainAskLine, isBrainAsk, toBrain } from './brainasks.ts';
@@ -402,7 +402,7 @@ const gateCtx = {
   hold: (text: string) => brain.hold(text), wake: (text: string) => brain.send(text),
 };
 const voiceFileCtx = { voice, speaker, jarvisText: (id: number) => store.jarvisText(id), bakeoffDir: join(ROOT, 'data', 'bakeoff') };
-const voiceCtx = { voice, listen, speaker, log, fromOwner, uploads: uploadDir(ROOT), today };
+const voiceCtx = { voice, listen, speaker, log, fromOwner, toWorker: (id: string, text: string) => steerWorker(workCtx, id, text), uploads: uploadDir(ROOT), today };
 const messagesCtx = {
   messages,
   approved: (a: Approval) => { if (!existsSync(KILL_FILE)) gateNotice(a, `[gate] ${OWNER} approved #${a.id} with the button. ${a.result ? `Result: ${a.result}` : ''} Tell him the outcome in one short sentence if it failed or needs follow-up, otherwise SILENT.`); },

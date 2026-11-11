@@ -256,6 +256,8 @@ export type VoiceCtx = {
   log: Log;
   /** The owner's message, as if typed. `replyTo` is the turn he answers. */
   fromOwner: (text: string, replyTo?: number) => void;
+  /** The owner's message to a native worker, by row id, as the pane's box sends it (steerWorker in workroutes.ts). */
+  toWorker: (id: string, text: string) => Promise<RouteResult>;
   /** The folder /api/upload saves pictures in. Only pictures from it go with the words. */
   uploads: string;
   today: { list: () => unknown; add: (b: { words: string; go: boolean }) => RouteResult };
@@ -279,10 +281,18 @@ export async function voiceRoute(o: VoiceCtx, method: string, url: string, raw: 
     const r = await o.voice.stt(audio, hands ? { threshold: listen.vadThreshold, minSpeechMs: listen.vadMinSpeechMs } : undefined);
     if (r.vadError) log(`listen: vad failed, transcribing anyway: ${r.vadError}`);
     if (!hands) {
-      log(`stt ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)}${pics.lines.length ? ` pictures=${pics.lines.length}` : ''}: ${r.text}`);
+      const target = q.get('target');
+      log(`stt ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)}${pics.lines.length ? ` pictures=${pics.lines.length}` : ''}${target ? ` to ${target}` : ''}: ${r.text}`);
       // Text the owner typed before he tapped the mic goes in front of the words, and the pictures after them, as one
       // message (web/dictate.js).
       const message = voiceMessage(q.get('typed'), r.text, pics.lines);
+      // `target` is a worker's row id: the mic in its pane. The message goes to that worker, not to the brain.
+      if (target) {
+        if (!message) return { status: 200, body: { text: r.text, confidence: r.confidence, sent: false } };
+        const s = await o.toWorker(target, message);
+        if (s.status !== 200) return { status: s.status, body: { ...(s.body as object), text: r.text } };
+        return { status: 200, body: { text: r.text, confidence: r.confidence, sent: true, message } };
+      }
       if (message) o.fromOwner(message, replyIdOf(q.get('replyTo')));
       return { status: 200, body: { text: r.text, confidence: r.confidence, sent: !!message } };
     }

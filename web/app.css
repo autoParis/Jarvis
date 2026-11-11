@@ -629,6 +629,7 @@ button.hand:not(:disabled):active { background: var(--raised); transform: none; 
 textarea { flex: 1; min-width: 0; resize: none; font: inherit; font-size: 15px; line-height: 22px; min-height: 46px; max-height: 30vh; padding: 12px 6px; border: 0; background: transparent; }
 textarea:focus { outline: none; }
 #add, #steer-add { margin-bottom: 5px; }
+#steer-mic { margin-bottom: 5px; touch-action: none; user-select: none; -webkit-user-select: none; }
 
 /* The brain's model and effort: quiet text under the chat pill and a bottom sheet (web/modelpicker.js).
    It sits at the left edge, under the attach button, where the owner asked for it.
@@ -669,8 +670,8 @@ textarea:focus { outline: none; }
 #bar #add { margin-bottom: 8px; }
 #bar textarea { min-height: 50px; padding: 14px 6px; }
 #mic { margin-bottom: 8px; touch-action: none; user-select: none; -webkit-user-select: none; }
-#mic.rec { background: var(--bad); color: var(--on-bad); }
-#mic.busy { opacity: .55; }
+:is(#mic, #steer-mic).rec { background: var(--bad); color: var(--on-bad); }
+:is(#mic, #steer-mic).busy { opacity: .55; }
 #wave { flex: none; width: 40px; height: 40px; margin: 0 0 6px 2px; border-radius: 50%; display: grid; place-items: center; background: #FFFFFF; color: #111213; box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(17 18 19 / .08); transition: background-color .15s, color .15s, transform .15s; }
 #wave svg { width: 20px; height: 20px; }
 #wave .send, #wave.send .wave { display: none; }

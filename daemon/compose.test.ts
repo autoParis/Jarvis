@@ -81,7 +81,7 @@ test('the voice query carries one image parameter per picture, and the daemon ac
 test('every chat send in the page goes through sendOut, so no path can skip the pictures', () => {
   const page = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   const CHAT_SEND = /^.*fetch\(.*['`]\/api\/(send|voice)\b.*$/gm;
-  assert.equal(page.match(CHAT_SEND)?.length, 3, 'Send/Enter, the mic dictation and a hands-free clip');
+  assert.equal(page.match(CHAT_SEND)?.length, 4, 'Send/Enter, the chat mic, a hands-free clip and the pane mic');
   // A send in a composer's `send` runs inside the composer's own sendOut post (web/composer.js, checked below).
   const inside = (src: string, at: number, openers: string[]) => {
     const before = src.slice(0, at);

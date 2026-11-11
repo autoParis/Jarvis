@@ -119,7 +119,7 @@
       <div id="steer-cards"></div>
       <div id="steer-hint"></div>
       <div id="steer-pending" class="tray"></div>
-      <div class="composer" id="steer-row"><div class="field"><button id="steer-add" type="button" class="ib" aria-label="Attach a picture" title="Attach a picture"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.2a1.7 1.7 0 0 1-2.4-2.4L15 7"/></svg></button><input id="steer-file" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" hidden><textarea id="steer-text" rows="1" aria-label="Message to this session"></textarea><button type="submit" class="go" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></div></div>
+      <div class="composer" id="steer-row"><div class="field"><button id="steer-add" type="button" class="ib" aria-label="Attach a picture" title="Attach a picture"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.2a1.7 1.7 0 0 1-2.4-2.4L15 7"/></svg></button><input id="steer-file" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" hidden><textarea id="steer-text" rows="1" aria-label="Message to this session"></textarea><button id="steer-mic" type="button" class="ib" aria-label="Dictate: hold to talk, or tap to start and tap again to send" title="Dictate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button><button type="submit" class="go" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></div></div>
     </div></form>
   </section>
   <section id="report" hidden aria-label="Report"></section>
@@ -194,6 +194,7 @@ import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
 import { boxAfterSend } from '/dictate.js';
 import { sendOut, imageParams, withoutReadLine } from '/compose.js';
 import { makeComposer, IMAGE_MAX } from '/composer.js';
+import { makeMic } from '/mic.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
 import { listHtml as tasksHtml, when as taskWhen, countText as taskCount } from '/tasks.js';
@@ -1133,6 +1134,40 @@ const steerBox = makeComposer({
   },
 });
 pickerFor($('steer-add'), $('steer-file'), steerBox);
+// The pane's mic (web/mic.js). The clip goes to /api/voice with the worker as its target, with the typed text in front
+// and the tray's pictures after the words, as the chat's mic sends to the brain. The box and the tray clear only once
+// jarvisd sent it. Leaving the pane drops a clip still recording (closePane).
+let paneStream = null;
+const paneMic = makeMic({
+  button: $('steer-mic'), label: 'Dictate: hold to talk, or tap to start and tap again to send',
+  getStream: async () => (paneStream ??= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })),
+  onStart: () => bargeIn(), // talking over Jarvis stops it
+  onHint: hint => { pane.micHint = hint; paneHead(); },
+  onError: text => { pane.error = text; paneHead(); },
+  onClip: async blob => {
+    const id = pane.id, box = $('steer-text'), typed = box.value;
+    let j = {};
+    try {
+      const went = await sendOut({ tray: steerBox.items(), upload: uploadPicture, post: async lines => {
+        const q = imageParams(new URLSearchParams({ target: id }), lines);
+        if (typed.trim()) q.set('typed', typed);
+        const r = await fetch(`/api/voice?${q}`, { method: 'POST', body: blob });
+        j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || r.status);
+        return !!j.sent;
+      } });
+      went.forEach(steerBox.unattach);
+      if (id !== pane.id) return;
+      if (!j.text) { pane.warning = "Didn't catch that."; return paneHead(); }
+      if (typed.trim()) { box.value = boxAfterSend(box.value, typed); steerFit(); }
+      pane.error = pane.warning = '';
+      paneAppend([{ role: 'user pending', text: j.message }]);
+      paneHead();
+      clearTimeout(pane.timer);
+      pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
+    } catch (err) { if (id === pane.id) { pane.error = 'Voice not sent: ' + err.message; paneHead(); } }
+  },
+});
 function openPane(id) {
   closeTerm();
   closePane();
@@ -1157,6 +1192,8 @@ function closePane() {
   steerDrafts.keep(pane.id, $('steer-text').value);
   $('steer-text').value = '';
   steerBox.switchTo('');
+  paneMic.stop(false);
+  paneStream?.getTracks().forEach(x => x.stop()); paneStream = null; // the Mac's mic light goes off with the pane
   pane.id = null; pane.gen++;
   paneEl.hidden = true;
   document.body.classList.remove('pane-open');
@@ -1191,8 +1228,7 @@ function paneHead() {
   // The message box: straight to the session.
   const steer = r ? r.steer : 'none';
   $('steer-row').hidden = $('steer-pending').hidden = steer === 'none';
-  $('steer-text').placeholder = r?.state === 'waiting' && r.note && !native ? 'Answer it' : native ? 'Message' : 'Steer this session';
-  // A native worker's pending permission card shows inside the pane too, with its Allow and Deny.
+  $('steer-text').placeholder = pane.micHint || (r?.state === 'waiting' && r.note && !native ? 'Answer it' : native ? 'Message' : 'Steer this session');  // A native worker's pending permission card shows inside the pane too, with its Allow and Deny.
   const pc = native && permissionCard(r);
   if (pc?.approval) { paneCards.add(pc.approval.id); paneCard(pc.approval); }
   $('steer-hint').innerHTML = !r ? ''
@@ -1996,7 +2032,7 @@ function feed(h, block) {
   }
 }
 function frame(h, f) {
-  if (holding || latched) { h.seg.reset(); h.utt = null; h.ring.length = 0; return; } // a dictation has the mic
+  if (holding || latched || paneMic.active()) { h.seg.reset(); h.utt = null; h.ring.length = 0; return; } // a dictation has the mic
   const playing = !player.paused;
   const ev = h.seg.push(levelDb(f), { playing });
   if (h.utt) h.utt.push(f);
@@ -2065,7 +2101,7 @@ const reloader = makeReloader({
   reload: () => location.reload(),
   busy: () => busyReason({
     active: document.activeElement, typed,
-    recording: rec?.state === 'recording' || holding || latched || !!hands?.utt || mic.classList.contains('busy'),
+    recording: rec?.state === 'recording' || holding || latched || !!hands?.utt || mic.classList.contains('busy') || paneMic.active(),
     overlay: !!popOpen || overlayOpen(),
     quietFor: Date.now() - lastInput,
   }),
