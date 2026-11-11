@@ -248,6 +248,10 @@ export function openStore(path: string) {
     recentAsks(): Item[] {
       return db.prepare(`SELECT * FROM items WHERE source IN ('native', 'brain') AND kind IN ('question', 'escalation') AND created_at > datetime('now', '-7 days') ORDER BY id DESC LIMIT 100`).all() as Item[];
     },
+    /** A worker's question item with exactly this text, in any status, or undefined. The ask recovery makes a card once. */
+    workerAskWithBody(dispatch: string, body: string): Item | undefined {
+      return db.prepare(`SELECT * FROM items WHERE source = 'native' AND dispatch_id = ? AND kind = 'question' AND body = ? ORDER BY id DESC LIMIT 1`).get(dispatch, body) as Item | undefined;
+    },
     /** What jarvisd did to a native session (kind `event` items, such as a resume), oldest first, for its pane's gap lines. */
     eventsFor(dispatch: string): Item[] {
       return db.prepare(`SELECT * FROM items WHERE source = 'native' AND dispatch_id = ? AND kind = 'event' ORDER BY id`).all(dispatch) as Item[];
