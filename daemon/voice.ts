@@ -49,6 +49,8 @@ const MAX_UNSURE = 0.75;
 export const badRender = (match: number, confidence: number) => match < MIN_MATCH && confidence < MAX_UNSURE;
 /** Renders tried for one sentence before the best one is kept anyway. A bad render is rare and random, a retry is clean. */
 const RENDERS = 3;
+/** Sentences shorter than this many words are not checked. */
+const CHECK_WORDS = 3;
 
 type Log = (msg: string, data?: Record<string, unknown>) => void;
 
@@ -58,17 +60,22 @@ export function makeVoice(root: string, log: Log = () => {}) {
   mkdirSync(dir, { recursive: true });
   const rendering = new Map<string, Promise<string>>();
 
-  /** What the STT model hears in a wav file, or null when the STT fails (then the render is not judged). */
-  async function hear(wav: string): Promise<{ text: string; confidence: number } | null> {
-    const json = `${wav}.json`;
+  /**
+   * What the STT model hears in a rendered clip, or null when the STT fails (then the render is not judged). The
+   * clip gets one second of silence at the end first: without it the model hears nothing in a short clip that ends
+   * on its last word ("Understood." came back empty, padded it came back right).
+   */
+  async function hear(raw: string): Promise<{ text: string; confidence: number } | null> {
+    const wav = `${raw}.check.wav`, json = `${raw}.json`;
     try {
+      await sh('ffmpeg', ['-loglevel', 'error', '-y', '-i', raw, '-af', 'apad=pad_dur=1', '-ar', '16000', '-ac', '1', wav]);
       await sh(CLI, ['transcribe', wav, '--local-model-dir', model, '--output-json', json], 60_000);
       const r = JSON.parse(readFileSync(json, 'utf8'));
       return { text: String(r.text ?? '').trim(), confidence: Number(r.confidence ?? 0) };
     } catch (e) {
       log(`tts: check skipped, stt failed: ${e}`);
       return null;
-    } finally { rmSync(json, { force: true }); }
+    } finally { rmSync(json, { force: true }); rmSync(wav, { force: true }); }
   }
 
   return {
@@ -122,6 +129,8 @@ export function makeVoice(root: string, log: Log = () => {}) {
             raws.push(raw);
             if (engine === 'say') await sh('say', ['-v', voice, '-o', raw, text]);
             else await sh(CLI, ['tts', text, '--backend', engine, ...(voice ? ['--voice', voice] : []), '--lang', lang, '-o', raw], 120_000);
+            // Under 3 words the STT model guesses ("C." heard as "See.", "Queued." as "Cute."), so it cannot judge.
+            if ((text.match(/[\p{L}\p{N}]+/gu) ?? []).length < CHECK_WORDS) { best = { raw, score: 1 }; break; }
             const heard = await hear(raw);
             const score = heard ? speechMatch(text, heard.text) : 1;
             if (score > best.score) best = { raw, score };

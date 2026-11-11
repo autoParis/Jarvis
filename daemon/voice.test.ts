@@ -111,6 +111,13 @@ test('a render that does not match is done again before it is cached', async () 
   assert.deepEqual(logs, ['tts: render does not match its words']);
 });
 
+test('a sentence under three words is not checked, because the STT model only guesses at it', async () => {
+  const { voice, logs, renders } = voiceIn('See.', 9);
+  await voice.tts('Got it.');
+  assert.equal(renders(), 1);
+  assert.deepEqual(logs, []);
+});
+
 test('after three bad renders the best one is kept and the miss is logged', async () => {
   const { voice, logs, renders } = voiceIn('The card is in the app.', 9);
   const name = await voice.tts('The card is in the app.');
