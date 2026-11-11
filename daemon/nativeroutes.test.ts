@@ -341,3 +341,51 @@ test('an ask in the turn text whose SendMessage failed becomes one ask card, and
   assert.ok(routed.item);
   assert.equal(d.store.openItems().filter(i => i.dispatch_id === `n:${w2.id}`).length, 1);
 });
+
+test('at start, an ask a live worker wrote while the brain was unreachable becomes one card, read back from its transcript', async () => {
+  const s = setup();
+  const w = await s.native.start({ name: '5361-empty-listings-capture-583', cwd: '/tmp', brief: 'x' });
+  // The Stop hook never reached jarvisd: the row has no report, only the transcript has the ask.
+  s.store.updateNativeWorker(w.id, { transcript: askTranscript(false) });
+  assert.equal(await s.native.recoverAsks(), 1);
+  const open = s.store.openItems().filter(i => i.dispatch_id === `n:${w.id}`);
+  assert.equal(open.length, 1);
+  assert.equal(open[0].body, TURN_ASK, 'the WAITING line is not on the card');
+  assert.equal(askCard(open[0])!.options.length, 3);
+  assert.deepEqual(s.turnAsks.map(i => i.external_id), [open[0].external_id], 'the brain hears it once');
+  assert.ok(s.logs.some(l => l.startsWith('native worker reported') && l.includes('"pause":"ask in the turn text"')), 'the row is paused on the ask, not nudged');
+  assert.deepEqual(s.notices, []);
+  // A second start, the card still open: nothing new.
+  assert.equal(await s.native.recoverAsks(), 0);
+  // The owner answered, and the worker has written nothing since: still nothing new.
+  answerOpenAsks(s.store, w.id, 'Yes, switch and restore', 'owner');
+  assert.equal(await s.native.recoverAsks(), 0);
+  assert.equal(s.turnAsks.length, 1);
+});
+
+test('the ask recovery skips a delivered ask, a busy worker, a finished worker and a turn that is not an ask', async () => {
+  const delivered = setup();
+  const w1 = await delivered.native.start({ name: 'w-delivered', cwd: '/tmp', brief: 'x' });
+  delivered.store.updateNativeWorker(w1.id, { transcript: askTranscript(true) });
+  assert.equal(await delivered.native.recoverAsks(), 0, 'the brain got the SendMessage; its turn makes the card');
+
+  const busy = setup();
+  const w2 = await busy.native.start({ name: 'w-busy', cwd: '/tmp', brief: 'x' });
+  busy.store.updateNativeWorker(w2.id, { transcript: askTranscript(false) });
+  busy.agent.state = 'working';
+  assert.equal(await busy.native.recoverAsks(), 0, 'a turn under way has not ended on the ask');
+
+  const done = setup();
+  const w3 = await done.native.start({ name: 'w-done', cwd: '/tmp', brief: 'x' });
+  done.store.updateNativeWorker(w3.id, { transcript: askTranscript(false), outcome: 'done', state: 'done' });
+  assert.equal(await done.native.recoverAsks(), 0);
+
+  const prose = setup();
+  const w4 = await prose.native.start({ name: 'w-prose', cwd: '/tmp', brief: 'x' });
+  const f = join(mkdtempSync(join(tmpdir(), 'jarvis-turnask-')), 's.jsonl');
+  writeFileSync(f, [{ type: 'user', message: { role: 'user', content: 'Do it.' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Two options: 1) refactor 2) patch. I chose 2.' }] } }].map(l => JSON.stringify(l)).join('\n') + '\n');
+  prose.store.updateNativeWorker(w4.id, { transcript: f });
+  assert.equal(await prose.native.recoverAsks(), 0);
+  for (const s of [delivered, busy, done, prose]) { assert.deepEqual(s.store.openItems(), []); assert.deepEqual(s.turnAsks, []); }
+});

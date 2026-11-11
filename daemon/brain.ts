@@ -164,6 +164,10 @@ export class Brain extends EventEmitter {
   private inflight: Queued[] = [];
   /** Notices that need no answer of their own (gate buttons, ask cards). They ride as one line on the next real turn. */
   private held: string[] = [];
+  /** The live process is a fresh session that has had no turn yet: the next turn carries the state brief, built then. */
+  private needsBrief = false;
+  /** The held line that tells a resumed saved session about the jarvisd restart. */
+  private restartNote?: string;
 
   private o: BrainOptions;
   constructor(o: BrainOptions) { super(); this.o = o; this.setting = { ...(o.model ?? DEFAULT_BRAIN_MODEL) }; this.saved = o.saved; }
@@ -230,6 +234,20 @@ export class Brain extends EventEmitter {
    */
   get answeringOwnerCard() { return this.cardApproves; }
 
+  /**
+   * Starts the process now, with no turn: nothing goes to its stdin, so it does not speak. A worker's SendMessage to
+   * jarvis-brain needs a live process. Before this, the process started only with the next message, and after the
+   * jarvisd restart of 2026-11-11 14:46:36Z every SendMessage failed with "No agent named jarvis-brain is reachable"
+   * until 14:48:19Z (story 5361's ask). Checked live on 2026-11-11: a `-p` stream-json process with no input, fresh or
+   * `--resume`, is listed by name, and a peer message runs a turn in it.
+   */
+  boot() {
+    if (this.proc || this.switching) return;
+    this.startProcess();
+    this.emit('log', 'brain booted with no turn', { resume: this.sessionId ?? null });
+    this.emit('model', this.status());
+  }
+
   stop() { this.stopping = true; if (this.busy) this.emit('working', false); this.busy = false; this.unrequested = false; clearTimeout(this.hangTimer); this.proc?.kill(); this.proc = undefined; }
 
   /**
@@ -250,7 +268,8 @@ export class Brain extends EventEmitter {
     this.contextTokens = s.tokens;
     this.lastTurnAt = s.at;
     this.resumingSaved = true;
-    this.held.unshift(`jarvisd restarted at ${new Date().toISOString()}. This is the same conversation, but the state may have moved while it was down.`);
+    this.restartNote = `jarvisd restarted at ${new Date().toISOString()}. This is the same conversation, but the state may have moved while it was down.`;
+    this.held.unshift(this.restartNote);
   }
 
   /** A fresh session gets the state brief; a resumed one (model switch, jarvisd restart) already has its history. */
@@ -282,6 +301,8 @@ export class Brain extends EventEmitter {
         this.emit('log', 'brain saved session would not resume, starting fresh');
         this.queue.unshift(...this.inflight);
         this.inflight = [];
+        // After boot() no turn took the restart note yet, and a fresh session is not "the same conversation".
+        this.held = this.held.filter(h => h !== this.restartNote);
         this.handed = []; this.cardApproves = false;
         this.endWork('');
         this.emit('working', false);
@@ -291,9 +312,13 @@ export class Brain extends EventEmitter {
       }
       this.restartWithNotice();
     });
-    // The brief rides in front of whatever is queued.
-    if (!resume) this.queue.unshift({ text: this.o.brief() });
+    // A fresh session's first turn carries the brief in front of whatever is queued. pump() builds it then, so a process
+    // that boot() started long before its first turn still gets the current state.
+    this.needsBrief = !resume;
   }
+
+  /** The first start of this jarvisd tries the saved session; any later one starts fresh. */
+  private startProcess() { if (this.saved) this.startFirst(); else this.start(); }
 
   private restartWithNotice() {
     if (this.handed.length) this.emit('log', 'brain lost a running turn', { turns: this.handed });
@@ -311,15 +336,19 @@ export class Brain extends EventEmitter {
 
   private pump() {
     if (this.busy || this.switching || !this.queue.length) return;
-    const stale = this.proc && (Date.now() - this.lastTurnAt > IDLE_RESET_MS || this.contextTokens > TOKEN_RESET);
+    // A session with no turn yet (lastTurnAt 0, a fresh boot) has no cache to lose, so it is not stale.
+    const stale = this.proc && ((this.lastTurnAt > 0 && Date.now() - this.lastTurnAt > IDLE_RESET_MS) || this.contextTokens > TOKEN_RESET);
     if (stale) { this.emit('log', 'brain reset (idle or token limit)'); this.stop(); }
-    if (!this.proc) { if (this.saved) this.startFirst(); else this.start(); }
+    if (!this.proc) this.startProcess();
     const batch = this.queue.splice(0);
+    // inflight leaves the brief out: a fallback to a fresh session builds its own.
     this.inflight = batch;
+    const brief = this.needsBrief ? this.o.brief() : undefined;
+    this.needsBrief = false;
     // Held notices go in front as one line; a fresh session's brief stays first.
     const notes = this.held.splice(0);
-    const at = batch[0]?.text.startsWith('[session start') ? 1 : 0;
-    const parts = batch.map(m => m.text);
+    const parts = [...(brief ? [brief] : []), ...batch.map(m => m.text)];
+    const at = brief ? 1 : 0;
     if (notes.length) parts.splice(at, 0, `[held notices, no answer needed] ${notes.join(' | ')}`);
     const text = parts.join('\n\n');
     this.handed = batch.flatMap(m => m.turn ?? []);

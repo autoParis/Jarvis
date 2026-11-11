@@ -835,6 +835,41 @@ export function makeNative(o: {
       return true;
     },
 
+    /**
+     * At start, once the brain is up (main.ts): an ask a live worker wrote in its last turn text, in the worker contract
+     * format (QUESTION and OPTIONS), that no SendMessage delivered to jarvis-brain. Its card was never made when the Stop
+     * hook was lost (jarvisd was down) or ran before turn-text asks made cards. The turn goes through stopHook, so the
+     * card, the brain's [native question] note (onTurnAsk) and the row's report and pause are what a hook on time would
+     * have made. Once: an ask item of any status with the same text for that worker (open, answered, closed) makes none.
+     * Only a worker whose turn has ended counts: an interactive one with a pid at idle, a background one listed and not
+     * working. Returns how many cards it made.
+     */
+    async recoverAsks(): Promise<number> {
+      const list = await agents();
+      let made = 0;
+      for (const r of store.nativeWorkers()) {
+        const w = asWorker(r);
+        if (w.state === 'abandoned' || w.outcome || w.remote) continue;
+        const a = listed(list, w);
+        const ended = w.kind === 'interactive' ? !!a?.pid && a.status === 'idle' : !!a && a.state !== 'working' && a.state !== 'blocked';
+        if (!ended) continue;
+        if (w.approval_id && store.approval(w.approval_id)?.action === 'side-chat') continue;
+        const file = api.transcriptFile(w.id); if (!file) continue;
+        let text: string | undefined, asked = false;
+        try {
+          text = lastAssistantText(file);
+          asked = lastTurnMessages(file, 'jarvis-brain').some(m => !/^\s*(notice|done|failed)\s*:/i.test(m));
+        } catch (e) { log('native: transcript unreadable at ask recovery', { worker: w.id, error: (e as Error).message }); continue; }
+        if (!text || asked || !contractAsk(text)) continue;
+        if (store.workerAskWithBody(`${ROW_PREFIX}${w.id}`, turnAskText(text))) continue;
+        log('native ask recovered from its transcript', { worker: w.id, chars: text.length });
+        api.stopHook({ session_id: w.id, last_assistant_message: text, transcript_path: file });
+        made++;
+      }
+      log('native: asks recovered', { made });
+      return made;
+    },
+
     rows(): WorkRow[] {
       const onPhone = (w: NativeWorker) => !!w.remote && alive.has(w.id) && w.state !== 'stopped';
       // An open ask holds the row in view as waiting, whatever its process does (rowState).

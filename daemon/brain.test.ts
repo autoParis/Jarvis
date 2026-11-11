@@ -139,6 +139,12 @@ const argv = process.argv.slice(2);
 const arg = f => { const i = argv.indexOf(f); return i < 0 ? undefined : argv[i + 1]; };
 fs.appendFileSync(log, JSON.stringify({ start: argv }) + '\\n');
 if (arg('--resume') === 'gone') process.exit(1); // a session that no longer exists
+// A worker's SendMessage that arrives before jarvisd sent anything: the lines a real session prints for it (see peerMessage).
+if (process.env.FAKE_PEER_AT_START) setTimeout(() => {
+  console.log(JSON.stringify({ type: 'command_lifecycle', command_uuid: 'c1', state: 'started' }));
+  console.log(JSON.stringify({ type: 'result', result: 'Asked.', origin: { kind: 'peer', name: 'w-5361', body: 'QUESTION: may I?' }, usage: {} }));
+  console.log(JSON.stringify({ type: 'command_lifecycle', command_uuid: 'c1', state: 'completed' }));
+}, 150);
 let first = true;
 require('readline').createInterface({ input: process.stdin }).on('line', line => {
   const text = JSON.parse(line).message.content;
@@ -518,4 +524,94 @@ test('readSavedSession, staleReason and gateFailed', () => {
   assert.equal(staleReason({ id: 'a', tokens: 1, at: now - 56 * 60_000 }, now), 'idle');
   assert.equal(staleReason({ id: 'a', tokens: 151_000, at: now }, now), 'token limit');
   assert.deepEqual(['done', 'rejected', 'failed', 'unknown', 'approved'].map(gateFailed), [false, false, true, true, true]);
+});
+
+const until = async (ok: () => boolean, ms = 3000) => { const end = Date.now() + ms; while (!ok()) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 20)); } };
+
+test('boot starts the process at once with no turn: nothing on stdin, no working, no reply', async () => {
+  const { brain, starts, messages } = recorder();
+  const events: string[] = [];
+  for (const e of ['working', 'reply', 'worker']) brain.on(e, () => events.push(e));
+  try {
+    brain.boot();
+    await until(() => starts().length === 1);
+    assert.ok(brain.status().running, 'the app sees a running process');
+    await new Promise(r => setTimeout(r, 300));
+    assert.deepEqual(messages(), [], 'nothing was sent, so the brain did not speak');
+    assert.deepEqual(events, []);
+    assert.equal(brain.busy, false);
+    brain.boot();
+    assert.equal(starts().length, 1, 'a second boot starts nothing');
+  } finally { brain.stop(); }
+});
+
+test('the first message after boot goes to the booted process with exactly one brief, built at that turn', async () => {
+  let briefs = 0;
+  const { brain, starts, messages } = recorder();
+  (brain as any).o.brief = () => `[session start] brief ${++briefs}`;
+  try {
+    brain.boot();
+    await until(() => starts().length === 1);
+    assert.equal(briefs, 0, 'no brief at boot');
+    brain.hold('[gate] a notice. Reply SILENT.');
+    const r = reply(brain);
+    brain.send('hello', 7);
+    assert.deepEqual((await r).turns, [7]);
+    assert.equal(starts().length, 1, 'the booted process was not reset as stale');
+    const m = messages();
+    assert.equal(m.length, 1);
+    assert.deepEqual(m[0].text.split('\n\n'), ['[session start] brief 1', '[held notices, no answer needed] [gate] a notice.', 'hello']);
+    const r2 = reply(brain);
+    brain.send('again', 8);
+    await r2;
+    assert.equal(messages()[1].text, 'again', 'the brief rides only on the first turn');
+  } finally { brain.stop(); }
+});
+
+test('boot resumes the saved session with no brief; a saved session that will not resume falls back with no turn', async () => {
+  const ok = recorder({}, { saved: { id: 'sess-old', tokens: 1_000, at: Date.now() - 60_000 } });
+  try {
+    ok.brain.boot();
+    await until(() => ok.starts().length === 1);
+    assert.equal(argOf(ok.starts()[0], '--resume'), 'sess-old');
+    const r = reply(ok.brain);
+    ok.brain.send('hello', 1);
+    await r;
+    assert.equal(ok.starts().length, 1);
+    assert.doesNotMatch(ok.messages()[0].text, /\[session start\]/);
+    assert.match(ok.messages()[0].text, /jarvisd restarted at .*\n\nhello$/);
+  } finally { ok.brain.stop(); }
+
+  const gone = recorder({}, { saved: { id: 'gone', tokens: 1_000, at: Date.now() } });
+  const events: string[] = [];
+  for (const e of ['reply', 'notice']) gone.brain.on(e, () => events.push(e));
+  try {
+    gone.brain.boot();
+    await until(() => gone.starts().length === 2);
+    assert.deepEqual(gone.starts().map(a => argOf(a, '--resume')), ['gone', undefined]);
+    await new Promise(r => setTimeout(r, 300));
+    assert.deepEqual(gone.messages(), [], 'the fallback sent no turn');
+    assert.deepEqual(events, []);
+    const r = reply(gone.brain);
+    gone.brain.send('hello', 2);
+    await r;
+    assert.match(gone.messages()[0].text, /^\[session start\] brief\n\nhello$/);
+  } finally { gone.brain.stop(); }
+});
+
+test('a worker message that reaches the booted brain before any turn is a worker turn, and the brief waits for the next jarvisd turn', async () => {
+  const { brain, messages } = recorder({ FAKE_PEER_AT_START: '1' });
+  try {
+    const w = once(brain, 'worker');
+    brain.boot();
+    const [text, , peer] = await w;
+    assert.equal(text, 'Asked.');
+    assert.deepEqual(peer, { from: 'w-5361', text: 'QUESTION: may I?' });
+    await new Promise(r => setTimeout(r, 200));
+    assert.deepEqual(messages(), [], 'the brief is not sent on its own after the worker turn');
+    const r = reply(brain);
+    brain.send('hello', 3);
+    await r;
+    assert.match(messages()[0].text, /^\[session start\] brief\n\nhello$/);
+  } finally { brain.stop(); }
 });
