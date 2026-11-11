@@ -1136,10 +1136,15 @@ test('an open ask, a side chat or a finished task is never stuck', async () => {
   assert.ok(!done.notices.some(n => /is stuck/.test(n)));
 });
 
-test('workerSettings sets the advisor only when asked: a model turns it on, an empty string turns it off', () => {
-  assert.equal('advisorModel' in workerSettings('http://x'), false);
-  assert.equal((workerSettings('http://x', 'fable') as any).advisorModel, 'fable');
-  assert.equal((workerSettings('http://x', '') as any).advisorModel, '');
+test('workerSettings turns the advisor tool off for a non-story worker and leaves it on for a story worker', () => {
+  const off = workerSettings('http://x', '') as any;
+  assert.equal(off.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, '1', 'an empty advisorModel alone falls back to the global model');
+  const story = workerSettings('http://x', STORY_ADVISOR) as any;
+  assert.equal(story.advisorModel, STORY_ADVISOR);
+  assert.equal(story.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, undefined);
+  const inherit = workerSettings('http://x') as any;
+  assert.equal('advisorModel' in inherit, false);
+  assert.equal(inherit.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, undefined);
 });
 
 test('isStoryStart takes a story spec from Today or the brain, and nothing else', () => {
@@ -1153,6 +1158,8 @@ test('isStoryStart takes a story spec from Today or the brain, and nothing else'
 const advisorOf = (args: string[]) => {
   const s = JSON.parse(readFileSync(args[args.indexOf('--settings') + 1], 'utf8'));
   assert.equal(s.hooks.Stop[0].hooks[0].url.endsWith('/api/hooks/stop'), true, 'every variant keeps the hooks');
+  if (s.advisorModel === '') assert.equal(s.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, '1', 'an off worker also gets the env switch');
+  else assert.equal(s.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, undefined, 'an on or inherit worker has no env switch');
   return 'advisorModel' in s ? s.advisorModel : 'inherit';
 };
 

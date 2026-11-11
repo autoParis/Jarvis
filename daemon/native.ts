@@ -144,12 +144,14 @@ export const NUDGE = 'Your terminal was restarted by Jarvis. Continue the task f
 /**
  * The settings file every background worker starts with: its hooks point at jarvisd. `advisor` sets Claude Code's
  * `advisorModel` on top of the owner's own settings: a model name turns the advisor on, '' turns it off, and leaving it
- * out keeps whatever his settings say.
+ * out keeps whatever his settings say. Claude Code reads `advisorModel: ""` as unset and falls back to the owner's global
+ * model, so '' also sets CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1, which removes the tool whatever `advisorModel` says.
  */
 export function workerSettings(jarvisUrl: string, advisor?: string): object {
   const hook = (path: string, timeout: number) => ({ hooks: [{ type: 'http', url: `${jarvisUrl}/api/hooks/${path}`, timeout }] });
   return {
     ...(advisor === undefined ? {} : { advisorModel: advisor }),
+    ...(advisor === '' ? { env: { CLAUDE_CODE_DISABLE_ADVISOR_TOOL: '1' } } : {}),
     crossSessionInbound: 'accept',
     dialogExpiry: 'never',
     permissions: { deny: ['AskUserQuestion'] },
