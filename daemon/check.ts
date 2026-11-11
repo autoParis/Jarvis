@@ -20,6 +20,8 @@ export const REMIND_MS = 60 * 60_000;
 export const ASK_WAIT_MS = 15 * 60_000;
 /** A worker on a WAITING line that only the owner ends, with no open ask, gets this long before it counts as a finding. */
 export const OWNER_WAIT_MS = 30 * 60_000;
+/** That finding comes back this often while the wait lasts, inside the check hours. */
+export const OWNER_WAIT_REPEAT_MS = 2 * 60 * 60_000;
 /** A message from the owner gets this long, with the brain idle, before it counts as lost. */
 export const LOST_MS = 3 * 60_000;
 /** `turn` is the lost message a finding reports. */
@@ -71,10 +73,12 @@ export function findings(s: { asks: Item[]; requests: Request[]; rows: WorkRow[]
     if (since) out.push({ key: `stalled:${r.id}:${since}`, line: `Worker stuck, nothing since ${eastern(sqlTime(Date.parse(since)))} Eastern (${Math.floor((s.now - Date.parse(since)) / 60_000)} min): dispatch=${r.id} title=${JSON.stringify(r.title)}. Nudge it with jarvis-native reply, and tell ${OWNER}.` });
   }
   // A worker that waits on the owner with no open ask (native.ts waitingOn). Worker 5361 (2026-11-11) waited 4 hours and nothing said so.
+  // It is never stuck, so this finding is the only reminder: its key changes every OWNER_WAIT_REPEAT_MS, and the brain hears it again.
   for (const r of s.rows) {
     const wait = r.kind === 'worker' ? r.native?.waitingOn : undefined;
     const waited = wait ? s.now - Date.parse(wait.since) : 0;
-    if (wait && waited >= OWNER_WAIT_MS) out.push({ key: `waiting:${r.id}:${wait.since}`, line: `Worker waits on ${OWNER} with no open ask, for ${Math.floor(waited / 60_000)} min: dispatch=${r.id} title=${JSON.stringify(r.title)} WAITING: ${JSON.stringify(wait.text)}. Tell ${OWNER} what it waits for. If he does it later, check jarvis-remind list and set one reminder.` });
+    const round = Math.floor((waited - OWNER_WAIT_MS) / OWNER_WAIT_REPEAT_MS);
+    if (wait && waited >= OWNER_WAIT_MS) out.push({ key: `waiting:${r.id}:${wait.since}:${round}`, line: `Worker waits on ${OWNER} with no open ask, for ${Math.floor(waited / 60_000)} min: dispatch=${r.id} title=${JSON.stringify(r.title)} WAITING: ${JSON.stringify(wait.text)}. Tell ${OWNER} what it waits for. Do not nudge the worker: only ${OWNER} ends this wait. If he does it later, check jarvis-remind list and set one reminder.` });
   }
   for (const q of s.requests) {
     if (q.status === 'failed') out.push({ key: `failed:${q.id}`, line: `Request failed: ${JSON.stringify(q.title)} dispatch=${q.dispatch_id}` });
