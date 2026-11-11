@@ -129,6 +129,8 @@ const silentText = (w: Pick<NativeWorker, 'name' | 'report'>) => `Worker ${w.nam
 /** Finished workers leave the work list after this. */
 export const ROW_MAX_AGE_MS = 24 * 3_600_000;
 const SESSION_WAIT_MS = 15_000, RESPAWN_WAIT_MS = 60_000, TICK_MS = 500;
+/** Claude Code writes its end-of-turn lines to the transcript just after the Stop hook (about 0.1 s in 609's). */
+const REPORT_WRITE_SLACK_MS = 10_000;
 /** An interactive session that died by accident is resumed at most this many times in this window, then the row fails until a message asks again. */
 export const RESUME_MAX = 3, RESUME_WINDOW_MS = 10 * 60_000;
 /** An interactive session that reported DONE or FAILED, or waits on an ask, and sat idle this long has its process ended; a message resumes it. */
@@ -177,7 +179,7 @@ const ago = (ms: number) => ms < 3_600_000 ? `${Math.max(1, Math.round(ms / 60_0
  * When a finished row finished, in ms: its DONE or FAILED report, else its last change. The report time does not move when
  * the reaper stops the session an hour later, so the row leaves the list a day after the report, no later than its request
  * (requests.ts DONE_KEEP_MS, counted from the request's done time, which follows the report). Counted from the last change,
- * the row outlived its request by that hour and fell into its group's Done fold.
+ * the row outlived its request by that hour.
  */
 export function finishedAt(w: Pick<NativeWorker, 'outcome' | 'report_at' | 'updated_at'>): number {
   return Date.parse(w.outcome && w.report_at ? w.report_at : w.updated_at);
@@ -467,12 +469,24 @@ export function makeNative(o: {
     return mine.find(a => !!a.pid) ?? mine[0];
   };
   /**
+   * True when the session's last report is still its DONE or FAILED and its transcript has not changed since. Claude Code
+   * lists a session as busy while a background command of its runs, with no turn under way: 609 reported DONE at 17:21
+   * with a preview server still running, and its row showed "working" until that server stopped at 17:33 (2026-11-11).
+   * A new turn writes its prompt to the transcript at once. An unreadable transcript counts as a change.
+   */
+  const quietSinceOutcome = (w: NativeWorker): boolean => {
+    if (!w.outcome || !w.report_at || outcomeOf(w.report ?? '') !== w.outcome) return false;
+    const file = api.transcriptFile(w.id);
+    try { return !!file && written(file) <= Date.parse(w.report_at) + REPORT_WRITE_SLACK_MS; } catch { return false; }
+  };
+  /**
    * An interactive session's liveness from `status` (busy, waiting, idle) while its process lives; nothing once it is gone.
+   * Busy after a DONE or FAILED with no new transcript entry (quietSinceOutcome) is that outcome still.
    * Idle after a DONE or FAILED that is still its last report is that outcome again: a busy spell with no new turn (a
    * resume or a compaction) left 5276-keep-the-muse-digest "working" in Stories for good (2026-11-09).
    */
   const interactiveState = (a: Agent | undefined, w: NativeWorker): NativeState | undefined =>
-    !a?.pid ? undefined : a.status === 'busy' ? 'working' : a.status === 'waiting' ? 'blocked' : w.remote && a.status === 'idle' ? 'done'
+    !a?.pid ? undefined : a.status === 'busy' ? (quietSinceOutcome(w) ? w.outcome as NativeState : 'working') : a.status === 'waiting' ? 'blocked' : w.remote && a.status === 'idle' ? 'done'
       : w.outcome ? (a.status === 'idle' && outcomeOf(w.report ?? '') === w.outcome ? w.outcome : w.state) : w.report && !paused(w) ? 'done' : 'working';
 
   /** Polls `claude agents` until `ok(entry)` holds for the worker, or the time is up. */

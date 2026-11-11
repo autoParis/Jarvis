@@ -17,7 +17,7 @@ export type WorkRow = {
   state: 'waiting' | 'working' | 'idle' | 'exited';
   /** Why it waits (the ask's subject), or how long it has been done. */
   note?: string;
-  /** When it finished (done, failed or stopped), as an ISO time. The app folds a row finished over an hour ago. Absent while it runs. */
+  /** When it finished (done, failed or stopped), as an ISO time. A row with no request and a DONE report goes to Completed with this time (web/worklist.js). Absent while it runs. */
   endedAt?: string;
   worktree?: string;
   /** How the message box reaches it. auto: jarvisd types it into the worker's session. none: nothing to type into. */

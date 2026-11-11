@@ -1039,7 +1039,6 @@ const shutGroups = readSet('workGroupsShut');
 // A group closed by hand while something in it waits. Forgotten once nothing waits there.
 const closedWaiting = new Set();
 const reqFolders = { review: false, done: false, prs: new Set() }; // both folders and every PR row start closed on each page load
-const doneOpen = new Set(); // the groups whose Done fold the owner opened; every Done fold starts closed on each page load
 function togglePr(pr) { reqFolders.prs.has(pr) ? reqFolders.prs.delete(pr) : reqFolders.prs.add(pr); renderWork(); }
 function renderWork() {
   const seen = work.rows.filter(r => !hidden.has(r.id));
@@ -1050,7 +1049,7 @@ function renderWork() {
   railbtn.toggleAttribute('data-busy', waiting > 0);
   const merged = mergeWork(work.rows, requests, hidden, showHidden);
   lastMerged = merged;
-  worklist.innerHTML = workListHtml(merged, { hidden, shut: shutGroups, closedWaiting, folders: reqFolders, reading: term ? `t:${term.name}` : pane.id, now: Date.now(), doneOpen })
+  worklist.innerHTML = workListHtml(merged, { hidden, shut: shutGroups, closedWaiting, folders: reqFolders, reading: term ? `t:${term.name}` : pane.id, now: Date.now() })
     + (merged.hiddenCount ? `<button type="button" class="showhidden" data-showhidden>${showHidden ? 'Leave out' : 'Show'} ${merged.hiddenCount} hidden</button>` : '');
   $('doneinfo').textContent = doneLine(requests, Date.now());
   $('tojarvis').classList.toggle('here', !pane.id && !report.id);
@@ -1095,8 +1094,6 @@ worklist.addEventListener('click', async e => {
   if (e.target.closest('a')) return;
   const g = e.target.closest('.group[data-group]');
   if (g) return toggleGroup(g.dataset.group);
-  const d = e.target.closest('.dfold[data-done-fold]');
-  if (d) { const k = d.dataset.doneFold; doneOpen.has(k) ? doneOpen.delete(k) : doneOpen.add(k); return renderWork(); }
   const f = e.target.closest('.folder');
   if (f) { reqFolders[f.dataset.folder] = f.getAttribute('aria-expanded') !== 'true'; return renderWork(); }
   const p = e.target.closest('[data-pr]');
