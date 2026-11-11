@@ -113,7 +113,7 @@ test('the swipe locks on a leftward drag only, and a short drag does not reach t
 test('the hover row under a message never reaches the next message, and sits on the Approve row of a proposal', () => {
   const css = readFileSync(new URL('../web/app.css', import.meta.url), 'utf8');
   const px = (re: RegExp) => { const m = re.exec(css); assert.ok(m, `not in app.css: ${re}`); return Number(m[1]); };
-  const gap = px(/#items, #pane-lines \{[^}]*gap: (\d+)px/);
+  const gap = px(/\.chat-items \{[^}]*gap: (\d+)px/);
   const height = px(/\.msg-foot \{ position: absolute;[^}]*height: (\d+)px/);
   const jarvisUp = px(/\.msg-foot \{ position: absolute; top: calc\(100% - (\d+)px\)/);
   assert.match(css, /\.line-owner > \.msg-foot \{ top: 100%; \}/, "under the owner's bubble the row starts at the bubble's edge");

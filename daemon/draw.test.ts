@@ -75,5 +75,5 @@ test('the page opens composer pictures in the viewer and waits for the marks bef
   assert.equal(page.match(/openViewer: \(src, item\) => openViewer\(src, item\)/g)?.length, 2, 'both boxes open their pictures in the viewer with the pen');
   assert.match(readFileSync(new URL('../web/compose.js', import.meta.url), 'utf8'), /await p\.ready;/);
   assert.match(page, /item\.file = file;\n\s*delete item\.path;/, 'a marked picture drops the path of an earlier upload');
-  assert.match(page, /shotRowHtml\(p\.paths, esc\)/);
+  assert.match(readFileSync(new URL('../web/chatview.js', import.meta.url), 'utf8'), /shotRowHtml\(p\.paths, esc\)/);
 });
