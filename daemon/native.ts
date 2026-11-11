@@ -1,6 +1,6 @@
 import { OWNER_CAP, OWNER } from './config.ts';
-import { WAITING_LINE, REPORT_NUDGE, outcomeOf } from './workercontract.ts';
-export { NATIVE_FOOTER, REPORT_NUDGE, WAITING_LINE } from './workercontract.ts';
+import { WAITING_LINE, REPORT_NUDGE, STALL_MS, outcomeOf } from './workercontract.ts';
+export { NATIVE_FOOTER, REPORT_NUDGE, WAITING_LINE, STALL_MS } from './workercontract.ts';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -103,6 +103,10 @@ export const SILENT_DONE_MS = 2 * 60_000;
 const quietKey = (id: string) => `nativeQuiet:${id}`;
 /** At most this many REPORT_NUDGE blocks per worker in this window, whatever Claude Code says about the chain. */
 const NUDGE_MAX = 3, NUDGE_WINDOW_MS = 10 * 60_000;
+/** The state key that holds the activity time of the last stall told, so a jarvisd restart does not tell the same stall twice. */
+const stallKey = (id: string) => `nativeStall:${id}`;
+/** What the brain hears about a stuck worker (stalledFrom). It names the next step, so a night notice is not answered SILENT. */
+export const stalledText = (w: Pick<NativeWorker, 'name' | 'report'>, idleMs: number) => `Worker ${w.name} is stuck: its task is unfinished and it wrote nothing for ${Math.round(idleMs / 60_000)} min. Its last report: ${JSON.stringify((w.report ?? '(none)').slice(0, 300))}. It may wait on something that never comes, such as a helper session it started. Nudge it now: tell it to stop waiting, check what it waits on, then finish the task or report FAILED. Tell ${OWNER} in one sentence.`;
 /** What the brain hears about a turn that ended with no DONE or FAILED line. vault/CLAUDE.md matches its start. */
 const silentText = (w: Pick<NativeWorker, 'name' | 'report'>) => `Worker ${w.name} ended its turn without a DONE or FAILED line. Its last words: ${(w.report ?? '').slice(0, 300)}`;
 /** Finished workers leave the work list after this. */
@@ -283,6 +287,8 @@ export function makeNative(o: {
   const fifoFor = (name: string, resumes: number) => { const f = join(ptyDir, `${name}-r${resumes}.in`); mkfifo(f); return f; };
   // Permission prompts held open: approval id to the resolver of the hook's http reply.
   const held = new Map<number, { worker: string; resolve: (reply: object) => void }>();
+  // Workers the last poll found stuck (stalledFrom), and the time their last activity was. rows() shows it; the ten-minute check reports it.
+  const stalled = new Map<string, number>();
   // Liveness findings already told, `<id>:<kind>`, cleared when the condition goes away.
   const noticed = new Set<string>();
   // Workers sent back with REPORT_NUDGE in the current chain of their turn, and when, for the cap.
@@ -339,6 +345,24 @@ export function makeNative(o: {
     if (!w.outcome && !asks.length) return undefined;
     const times = [w.report_at, w.last_resume_at, ...asks.map(i => i.created_at.replace(' ', 'T') + (i.created_at.includes('Z') ? '' : 'Z'))].filter((t): t is string => !!t).map(t => Date.parse(t)).filter(t => !Number.isNaN(t));
     return times.length ? Math.max(...times) : undefined;
+  };
+  /**
+   * When a stuck worker last did anything, or undefined when it is not stuck. Stuck: its task is unfinished, it is not a
+   * conversation (a side chat, a phone session), no ask or permission card of its own waits on the owner, and nothing
+   * happened for STALL_MS: no start, report or resume, and no write to its transcript. A worker idle on a WAITING line counts,
+   * and so does a busy one whose tool hangs. With no transcript to read, a busy worker is never called stuck.
+   * Worker 579 (2026-11-11): "working" for 8 hours on a WAITING line, and nothing told anyone.
+   */
+  const stalledFrom = (w: NativeWorker, a: Agent | undefined): number | undefined => {
+    if (!unfinished(w) || w.state === 'blocked' || w.remote || pendingCard(w.id)) return undefined;
+    if (w.approval_id && store.approval(w.approval_id)?.action === 'side-chat') return undefined;
+    if (store.openItems().some(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${w.id}`)) return undefined;
+    let wrote: number | undefined;
+    const file = api.transcriptFile(w.id);
+    try { if (file) wrote = written(file); } catch {}
+    if (wrote === undefined && a?.status === 'busy') return undefined;
+    const last = Math.max(...[w.created_at, w.report_at, w.last_resume_at].filter((t): t is string => !!t).map(t => Date.parse(t)).filter(t => !Number.isNaN(t)), wrote ?? 0);
+    return now() - last >= STALL_MS ? last : undefined;
   };
   /** Closes the permission cards held for a worker whose process is gone: nothing can answer that hook any more. */
   const failHeld = (id: string, reason: string) => {
@@ -737,10 +761,12 @@ export function makeNative(o: {
           worktree: basename(w.cwd),
           // An interactive session takes a message in any state: a stopped or failed one is resumed first.
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
-          native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}) },
+          native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}),
+            ...(stalled.has(w.id) ? { stalledSince: new Date(stalled.get(w.id)!).toISOString() } : {}) },
         };
         if (w.state === 'blocked' && w.waiting_for) r.note = w.waiting_for;
         else if (asking(w)) r.note = asks.get(`${ROW_PREFIX}${w.id}`);
+        else if (stalled.has(w.id)) r.note = `Stuck: nothing for ${ago(now() - stalled.get(w.id)!).replace(' ago', '')}`;
         else if (w.state === 'done' && onPhone(w)) r.note = `In the Claude app as "${w.remote}"`;
         else if (w.state === 'done') r.note = `Done ${ago(now() - Date.parse(w.report_at ?? w.updated_at))}`;
         else if (w.state === 'stopped') r.note = w.waiting_for ?? 'Stopped';
@@ -929,6 +955,18 @@ export function makeNative(o: {
           o.onNotice(next, text());
         };
         notice('failed', next.state === 'failed', () => `Worker ${w.name} failed`);
+        // Stuck: at any hour, once per stall, also across a jarvisd restart (the state key holds the activity time told).
+        // New activity clears it, and a later stall is told again.
+        const since = stalledFrom(next, listed(list, next));
+        if (since === undefined) stalled.delete(w.id);
+        else {
+          stalled.set(w.id, since);
+          if (store.getState(stallKey(w.id)) !== String(since)) {
+            store.setState(stallKey(w.id), String(since));
+            log('native notice', { worker: w.id, kind: 'stalled', idleMin: Math.round((now() - since) / 60_000) });
+            o.onNotice(next, stalledText(next, now() - since));
+          }
+        }
         notice('blocked', next.state === 'blocked' && !!next.waiting_for && !pendingCard(w.id), () => `Worker ${w.name} is blocked: ${next.waiting_for}`);
         // The backstop for a Stop hook that never arrived. A pause, or a turn stopHook already told the brain about, stays quiet,
         // also after a jarvisd restart (the state key holds the report's time).

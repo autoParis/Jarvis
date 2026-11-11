@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, type Approval } from './store.ts';
 import { helpRun, CLAUDE_HELP, AGENTS_HELP } from './fakeclaude.ts';
-import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, IDLE_STOPPED, DESKTOP_WAITING, NUDGE, typedBytes, rowState, finishedAt, missingFeatures, REPORT_NUDGE, type NativeWorker } from './native.ts';
+import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, IDLE_STOPPED, DESKTOP_WAITING, NUDGE, typedBytes, rowState, finishedAt, missingFeatures, REPORT_NUDGE, STALL_MS, type NativeWorker } from './native.ts';
 import { statusOf } from './requests.ts';
 import { lastTurnMessages } from './transcript.ts';
 
@@ -298,7 +298,7 @@ const ISESSION = '00000000-0000-4000-8000-000000000002';
  * A stand-in for the pseudo-terminal path: `spawnPty` records argv, cwd and fifo and adds the session to the listing, in the
  * worktree folder when `-w` was passed, the way `claude agents` reports it live; `killGroup` drops the pid from the listing.
  */
-function setupInteractive(nowMs = 1_800_000_000_000) {
+function setupInteractive(nowMs = 1_800_000_000_000, extra: Partial<Parameters<typeof makeNative>[0]> = {}) {
   const store = openStore(':memory:');
   const listing: any[] = [];
   const spawns: { argv: string[]; cwd: string; fifo?: string }[] = [], killed: number[] = [], fifos: string[] = [];
@@ -329,6 +329,7 @@ function setupInteractive(nowMs = 1_800_000_000_000) {
       return pgid;
     },
     killGroup: pgid => { killed.push(pgid); for (const a of listing) if (a.pgid === pgid) delete a.pid; },
+    ...extra,
   });
   return { store, native, listing, spawns, killed, fifos, calls, changes, notices, logs, reports, cards, tick: (ms: number) => { t += ms; } };
 }
@@ -923,4 +924,97 @@ test('a worker is sent back at most three times in ten minutes, whatever the hoo
   const blocks = [1, 2, 3, 4].map(() => (s.native.stopHook({ session_id: SESSION, stop_hook_active: false, last_assistant_message: 'no line' }) as any).decision);
   assert.deepEqual(blocks, ['block', 'block', 'block', undefined]);
   assert.equal(s.notices.length, 1, 'the fourth is told at once');
+});
+
+// ---- Stuck workers (worker 579, 2026-11-11) ----
+
+test('a worker idle on a WAITING line is told to the brain once after STALL_MS, at any hour, and the row says stuck', async () => {
+  const at = Date.parse('2026-11-11T01:05:33Z'); // 8:05 PM Eastern, outside the check hours
+  const s = setupInteractive(at);
+  const w = await s.native.start({ name: 'worker-pane-579', cwd: '/repo', brief: 'b', interactive: true });
+  s.tick(6 * 60_000);
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the throwaway test session must write its first reply.' });
+  s.listing[0].status = 'idle';
+  await s.native.poll();
+  s.tick(STALL_MS - 1);
+  await s.native.poll();
+  assert.deepEqual(s.notices, [], 'not before STALL_MS');
+  assert.equal(s.native.rows()[0].native?.stalledSince, undefined);
+  s.tick(2);
+  await s.native.poll();
+  assert.equal(s.notices.length, 1);
+  assert.match(s.notices[0], /^Worker worker-pane-579 is stuck: its task is unfinished and it wrote nothing for 75 min/);
+  assert.match(s.notices[0], /WAITING: the throwaway test session/);
+  assert.match(s.notices[0], /Nudge it now/);
+  const r = s.native.rows()[0];
+  assert.equal(r.state, 'working', 'the request stays live');
+  assert.match(r.note ?? '', /^Stuck: nothing for /);
+  assert.equal(r.native?.stalledSince, s.native.get(w.id)!.report_at);
+  s.tick(8 * 3_600_000);
+  await s.native.poll();
+  assert.equal(s.notices.length, 1, 'one notice per stall');
+
+  // A restart on the same database does not tell the same stall again, and still marks the row.
+  const notices: string[] = [];
+  const n2 = makeNative({ store: s.store, log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: (_w, t) => notices.push(t),
+    claude: async (args: string[]) => helpRun(args) ?? (args[0] === 'agents' ? { code: 0, out: JSON.stringify(s.listing), err: '' } : { code: 0, out: '', err: '' }), now: () => at + 9 * 3_600_000 });
+  await n2.poll();
+  assert.deepEqual(notices, []);
+  assert.ok(n2.rows()[0].native?.stalledSince);
+
+  // New activity (a nudge starts a turn that reports) clears it, and a second stall is told again.
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: CI on the new head.' });
+  await s.native.poll();
+  assert.equal(s.native.rows()[0].native?.stalledSince, undefined);
+  s.tick(STALL_MS);
+  await s.native.poll();
+  assert.equal(s.notices.length, 2);
+});
+
+test('a transcript write keeps a worker from being stuck, and a busy one with no transcript is never stuck', async () => {
+  let wrote = 0;
+  const s = setupInteractive(1_800_000_000_000, { written: () => wrote });
+  await s.native.start({ name: 'busy-1', cwd: '/repo', brief: 'b', interactive: true });
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the build', transcript_path: '/t.jsonl' });
+  s.tick(STALL_MS + 1);
+  wrote = 1_800_000_000_000 + STALL_MS; // the transcript moved a moment ago
+  await s.native.poll();
+  assert.deepEqual(s.notices, []);
+  s.tick(STALL_MS);
+  await s.native.poll();
+  assert.equal(s.notices.length, 1, 'a busy worker whose transcript stopped moving is stuck too: its tool hangs');
+
+  const b = setupInteractive();
+  await b.native.start({ name: 'busy-2', cwd: '/repo', brief: 'b', interactive: true });
+  b.tick(STALL_MS * 3);
+  await b.native.poll();
+  assert.deepEqual(b.notices, [], 'busy, no transcript to read');
+});
+
+test('an open ask, a side chat or a finished task is never stuck', async () => {
+  const ask = setupInteractive();
+  const w = await ask.native.start({ name: 'ask-1', cwd: '/repo', brief: 'b', interactive: true });
+  ask.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: an answer from jarvis-brain' });
+  ask.store.insertItem({ source: 'native', external_id: `ask:${w.id}:1`, kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`, body: 'A or B?', status: 'spoken' });
+  ask.listing[0].status = 'idle';
+  ask.tick(STALL_MS + 1);
+  await ask.native.poll();
+  assert.ok(!ask.notices.some(n => /is stuck/.test(n)), 'an ask waits on the owner and has its own pushes');
+
+  const side = setupInteractive();
+  const a = side.store.addApproval({ action: 'side-chat', args: '{}', say: '' });
+  await side.native.start({ name: 'side-1', cwd: '/repo', brief: 'b', interactive: true, approvalId: a.id });
+  side.native.stopHook({ session_id: ISESSION, last_assistant_message: 'Sure, what next?' });
+  side.listing[0].status = 'idle';
+  side.tick(STALL_MS + 1);
+  await side.native.poll();
+  assert.ok(!side.notices.some(n => /is stuck/.test(n)), 'a side chat waits on the owner');
+
+  const done = setupInteractive();
+  await done.native.start({ name: 'done-1', cwd: '/repo', brief: 'b', interactive: true });
+  done.native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: shipped' });
+  done.listing[0].status = 'idle';
+  done.tick(STALL_MS + 1);
+  await done.native.poll();
+  assert.ok(!done.notices.some(n => /is stuck/.test(n)));
 });

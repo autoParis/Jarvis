@@ -62,6 +62,12 @@ export function findings(s: { asks: Item[]; requests: Request[]; rows: WorkRow[]
     const waited = s.now - Date.parse(`${a.created_at.replace(' ', 'T')}Z`);
     if (waited >= ASK_WAIT_MS) out.push({ key: `ask:${a.external_id}`, line: isBrainAsk(a) ? checkLine(a, Math.floor(waited / 60_000)) : `${a.kind} unanswered for ${Math.floor(waited / 60_000)} min: message_id=${a.external_id} dispatch=${a.dispatch_id ?? '?'} subject=${JSON.stringify(a.subject)}` });
   }
+  // A stuck worker (native.ts stalledFrom). native.ts tells the brain at once, at any hour. The check tells it again at the
+  // first tick of the day, so a stall that began at night reaches the owner in the morning.
+  for (const r of s.rows) {
+    const since = r.kind === 'worker' ? r.native?.stalledSince : undefined;
+    if (since) out.push({ key: `stalled:${r.id}:${since}`, line: `Worker stuck, nothing since ${eastern(sqlTime(Date.parse(since)))} Eastern (${Math.floor((s.now - Date.parse(since)) / 60_000)} min): dispatch=${r.id} title=${JSON.stringify(r.title)}. Nudge it with jarvis-native reply, and tell ${OWNER}.` });
+  }
   for (const q of s.requests) {
     if (q.status === 'failed') out.push({ key: `failed:${q.id}`, line: `Request failed: ${JSON.stringify(q.title)} dispatch=${q.dispatch_id}` });
     else if ((q.status === 'working' || q.status === 'waiting') && !live.has(q.dispatch_id) && !s.closing(q.id)) out.push({ key: `request:${q.id}`, line: `Request open (${q.status}) with no live worker: ${JSON.stringify(q.title)} dispatch=${q.dispatch_id}` });

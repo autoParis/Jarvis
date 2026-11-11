@@ -44,6 +44,24 @@ export function fields(body: string): Record<string, string> {
   return out;
 }
 
+/**
+ * A worker with an unfinished task, no open ask and no permission card that wrote nothing to its transcript for this long
+ * is stuck (native.ts). It is longer than the longest ScheduleWakeup (3600 s), so a babysitter on an hourly loop is not
+ * called stuck. Worker 579 (2026-11-11) sat 8 hours on a WAITING line for a helper session that never ran.
+ */
+export const STALL_MS = 75 * 60_000;
+
+/** The brief's rule against a wait that never ends. Worker 579 waited all night on a throwaway session stuck at the folder trust question. */
+export const WAIT_RULE = `
+
+## Waits that end
+Never wait without a time limit on something you started yourself: a helper Claude session, a server, a terminal or a background command.
+- Give every wait loop its own limit, for example \`timeout 300\` in front of the loop, or a count of tries. The Bash timeout does not stop a command that runs in the background.
+- A helper Claude session started in a new folder stops at the folder trust question and does nothing. Start it in your own worktree, or answer that question.
+- When the limit passes, read the helper's output. Fix it, or prove the step another way, and continue with the rest of the task. If you cannot, report FAILED with the reason.
+- A \`WAITING:\` line must name a thing that ends by itself and starts your next turn: a background task with a limit, a scheduled wake-up, or an answer from jarvis-brain.
+Jarvis tells the brain about a worker with an unfinished task that writes nothing for ${STALL_MS / 60_000} minutes.`;
+
 // The rules every worker gets.
 /** What gate.ts appends to every background worker's brief. */
 export const NATIVE_FOOTER = `
@@ -174,5 +192,5 @@ export function readReport(text: string): { label: ReportLabel | null; line: str
 
 /** The rules appended to a worker's task. `issues` adds the create-issue exception, for story workers only. */
 export function workerBrief(o: { issues?: boolean } = {}): string {
-  return (o.issues ? ISSUE_RULE : '') + NATIVE_FOOTER + CARD_RULE;
+  return (o.issues ? ISSUE_RULE : '') + NATIVE_FOOTER + WAIT_RULE + CARD_RULE;
 }

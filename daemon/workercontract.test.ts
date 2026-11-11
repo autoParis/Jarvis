@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ASK_FIELDS, REPORT_LABELS, CARD_RULE, NO_OPTIONS_REFUSAL, REPORT_NUDGE, fields, readReport, workerBrief } from './workercontract.ts';
+import { ASK_FIELDS, REPORT_LABELS, CARD_RULE, NO_OPTIONS_REFUSAL, REPORT_NUDGE, fields, readReport, workerBrief, WAIT_RULE, STALL_MS } from './workercontract.ts';
 import { askCard } from './asks.ts';
 import { workerMessageKind } from './nativeroutes.ts';
 import { parseReport } from './today.ts';
@@ -64,4 +64,16 @@ test('an ask with no options goes back, and the refusal names the two shapes tha
   assert.equal(workerMessageKind('STORY: 498\nQUESTION: Merge now?'), 'no-options');
   assert.match(NO_OPTIONS_REFUSAL, /OPTIONS line/);
   assert.match(NO_OPTIONS_REFUSAL, /`NOTICE:`/);
+});
+
+test('every brief tells the worker to bound its waits on helpers it started, with the stall time jarvisd uses', () => {
+  for (const [name, brief] of BRIEFS) {
+    assert.ok(brief.includes(WAIT_RULE), name);
+    assert.ok(brief.indexOf(WAIT_RULE) < brief.indexOf(CARD_RULE), `${name}: before the card rule`);
+  }
+  assert.match(WAIT_RULE, /The Bash timeout does not stop a command that runs in the background/);
+  assert.match(WAIT_RULE, /folder trust question/);
+  assert.match(WAIT_RULE, /report FAILED/);
+  assert.ok(WAIT_RULE.includes(`${STALL_MS / 60_000} minutes`));
+  assert.doesNotMatch(WAIT_RULE, /;/, 'no semicolons, like the card rule');
 });

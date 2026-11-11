@@ -330,3 +330,21 @@ test('readDelivery counts a branch merged into an archived ref as delivered, and
   assert.deepEqual((await readDelivery(dir, ['archive'])).unmerged, []);
   assert.deepEqual((await readDelivery(dir, ['missing'])).unmerged.map(b => b.branch).sort(), ['archive', 'old', 'old-work']);
 });
+
+test('a worker stuck overnight is reported at the first tick after 8 AM, once per stall', async () => {
+  // Worker 579 (2026-11-11): stuck on a WAITING line from the evening. native.ts marks the row, and the check repeats it in the morning.
+  const since = '2026-11-02T02:11:48.824Z';
+  const rows = [worker('n:53078ac3', { title: 'worker-pane-579', native: { id: '53078ac3', sessionId: null, name: 'worker-pane-579', state: 'working', waitingFor: null, outcome: null, stalledSince: since } }), worker('ctx_9')];
+  const { check, wakes, tick } = setup(rows, at('2026-11-02T12:55:00Z')); // 7:55 AM Eastern
+  await check.tick();
+  assert.deepEqual(wakes, [], 'outside the hours');
+  tick(10 * 60_000);
+  await check.tick();
+  assert.equal(wakes.length, 1);
+  assert.match(wakes[0], /Worker stuck, nothing since Nov 1, 9:11 PM Eastern .*dispatch=n:53078ac3 title="worker-pane-579"/);
+  assert.match(wakes[0], /jarvis-native reply/);
+  assert.doesNotMatch(wakes[0], /ctx_9/, 'a worker that is not stuck is no finding');
+  tick(CHECK_MS);
+  await check.tick();
+  assert.equal(wakes.length, 1, 'the same stall wakes the brain once');
+});
