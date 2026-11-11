@@ -646,6 +646,27 @@ test('a done session that turns busy with no new turn (a resume, a compaction) i
   assert.equal(native.get(w.id)?.state, 'working');
 });
 
+test('a done session listed busy while only a background command runs stays done, and a new turn is working', async () => {
+  // 609 (2026-11-11): DONE at 17:21 with a preview server still running. Claude Code listed the session busy until the
+  // server stopped at 17:33, and the row showed "working" in Other the whole time.
+  const T0 = 1_800_000_000_000;
+  let wrote = T0;
+  const { native, listing, tick } = setupInteractive(T0, { written: () => wrote });
+  const w = await native.start({ name: 'top-bar-609', cwd: '/repo', brief: 'b', interactive: true });
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: the title is gone.', transcript_path: '/t/609.jsonl' });
+  wrote = T0 + 100; // the end-of-turn lines, just after the Stop hook
+  listing[0].status = 'busy';
+  tick(5 * 60_000);
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'done');
+  assert.equal(native.rows()[0].state, 'idle');
+
+  // The owner types a message: the transcript gets the prompt, so busy is a real turn.
+  wrote = T0 + 5 * 60_000;
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'working');
+});
+
 // ---- Stage 3: typing into the session ----
 
 test('typedBytes wraps the text in a bracketed paste and ends with a carriage return; escapes are dropped', () => {

@@ -50,9 +50,9 @@ function numberHtml(r) {
   return text ? numHtml(text, r.url) : '';
 }
 
-/** Hiding also hides the conversation row, or that row would come back in its work group. */
+/** Hiding also hides the conversation row, or that row would come back in its work group. A finished row with no request has no id: its × hides the row only. */
 function rowHtml(r, now) {
-  const hide = `<button type="button" class="hide" data-hide="${r.id}"${r.row ? ` data-hide-row="${esc(r.row)}"` : ''} aria-label="Hide ${esc(r.title)}" title="Hide from this list">×</button>`;
+  const hide = `<button type="button" class="hide"${r.id != null ? ` data-hide="${r.id}"` : ''}${r.row ? ` data-hide-row="${esc(r.row)}"` : ''} aria-label="Hide ${esc(r.title)}" title="Hide from this list">×</button>`;
   return `<div class="rrow ${esc(r.status)}" data-row="${esc(openIdOf(r))}" role="button" tabindex="0" title="${esc(r.title)}">`
     + (numberHtml(r) || requestMark(r.status))
     + `<div class="t">${esc(reportHref(r) ? r.title : r.title.replace(/^\s*#\d+\s*/, '') || r.title)}</div><span class="state">${STATE[r.status] || esc(r.status)}</span>${docLinkHtml(r) ? `<span class="wend">${docLinkHtml(r)}<span class="ago">${ago(r.at, now)}</span></span>` : `<span class="ago">${ago(r.at, now)}</span>`}${hide}`
