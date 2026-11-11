@@ -41,6 +41,16 @@ export function unknownSenderNote(i: Item, peer: PeerMessage | undefined): strin
     + ` and send his answer with jarvis-native reply --worker <name> --item ${i.external_id} --text "<words>". The message:\n${i.body}`;
 }
 
+/**
+ * What the brain hears about an ask a worker wrote in its turn text because its SendMessage did not reach the brain.
+ * jarvisd already made the card, so the brain speaks it and opens no ask of its own.
+ */
+export function turnAskNote(w: { id: string; name: string }, i: Item): string {
+  return `[native question] ${w.name}: Native worker ${w.name} (n:${w.id}) could not reach you with SendMessage, so it wrote this ask in its turn text.`
+    + ` jarvisd made its ask card, message_id=${i.external_id}. Do not open an ask of your own. Speak the question to ${OWNER} as you speak any worker ask.`
+    + ` His tap on the card answers it. If he answers in the chat, send his words with jarvis-native reply --worker ${w.name} --text "<his words>". The ask:\n${i.body}`;
+}
+
 export function wireBrain(brain: Emitter, o: BrainEventCtx) {
   const { store, broadcast, say, chatLinks, native, log } = o;
   // The proposals of a turn get Approve and Reject on the reply that asks for them (chatlink.ts).

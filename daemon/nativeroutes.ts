@@ -1,10 +1,12 @@
 import type { Native, NativeWorker } from './native.ts';
-import { ROW_PREFIX } from './native.ts';
+import { ROW_PREFIX, askId, insertWorkerAsk } from './native.ts';
+export { askId } from './native.ts';
 import type { Store, Item } from './store.ts';
 import type { Log } from './log.ts';
 import type { PeerMessage } from './brain.ts';
-import { askCard } from './asks.ts';
-import { fields, readReport, NO_OPTIONS_REFUSAL, noticeLine } from './workercontract.ts';
+import { workerMessageKind } from './asks.ts';
+export { workerMessageKind, type WorkerMessageKind } from './asks.ts';
+import { fields, NO_OPTIONS_REFUSAL, noticeLine } from './workercontract.ts';
 export { NO_OPTIONS_REFUSAL, noticeLine } from './workercontract.ts';
 import { findSession } from './resume.ts';
 
@@ -22,9 +24,6 @@ export type NativeRouteOptions = {
   /** Test seam: a session's transcript and folder by its id (resume.ts findSession). */
   findSession?: (id: string) => { file: string; cwd: string } | undefined;
 };
-
-/** The external id of a worker's question item: one per message, from the worker id and the time it arrived. */
-export const askId = (worker: string, at: number) => `ask:${worker}:${at}`;
 
 /**
  * `POST /api/hooks/*` from a worker's settings file, and `POST /api/internal/native/*` from bin/jarvis-native.
@@ -84,29 +83,6 @@ export function answerOpenAsks(store: Store, worker: string, text: string, by: '
   for (const i of open) store.markItem(i.external_id, 'answered', text, by === 'jarvis' ? 'jarvis' : undefined);
   return open.map(i => i.external_id);
 }
-
-/** What a worker's SendMessage is: an ask with options, a status notice, or an ask with no options (sent back). */
-export type WorkerMessageKind = 'ask' | 'notice' | 'no-options';
-
-
-const LINK = /\bhttps?:\/\/\S+/g;
-
-/**
- * Sorts a worker's message. A message with options is an ask. A message that asks nothing (a `NOTICE:`, `DONE:` or
- * `FAILED:` first line, or no QUESTION field and no question mark outside a link) is a notice. Anything else is a
- * question with no options. The owner could not answer it with a tap, so it goes back to the worker.
- */
-export function workerMessageKind(text: string): WorkerMessageKind {
-  const body = text.trim();
-  const label = readReport(body).label;
-  if (label === 'NOTICE' || label === 'DONE' || label === 'FAILED') return 'notice';
-  const probe = { id: 0, source: 'native', external_id: 'probe', kind: 'question', dispatch_id: null, subject: '', body, options: null,
-    status: 'new', answer: null, created_at: '', pushes: 0, pushed_at: null, meta: null } as Item;
-  if (askCard(probe)?.options.length) return 'ask';
-  const asks = Boolean(fields(body).QUESTION) || body.replace(LINK, '').includes('?');
-  return asks ? 'no-options' : 'notice';
-}
-
 
 /** The external id of a message jarvisd could not match to a worker. */
 export const unknownId = (at: number) => `unknown:${at}`;
@@ -181,10 +157,7 @@ export function routeWorkerTurn(o: { native: Pick<Native, 'get' | 'list'>; store
     o.log('native ask without options sent back to the worker', { worker: w.id, chars: peer.text.length });
     return { worker: w, refusal: NO_OPTIONS_REFUSAL, speak: false };
   }
-  const item = o.store.insertItem({
-    source: 'native', external_id: askId(w.id, at), kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`,
-    subject: `Question from ${w.name}`, body: peer.text, status: 'spoken',
-  });
+  const item = insertWorkerAsk(o.store, w, peer.text, at);
   o.log('native question from a worker', { worker: w.id, item: item?.external_id, chars: peer.text.length });
   return { worker: w, item, speak: text.trim() !== '' && text.trim() !== 'SILENT' };
 }

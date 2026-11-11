@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, type Item } from './store.ts';
@@ -11,6 +11,7 @@ import { nativeRoute, routeWorkerTurn, answerOpenAsks, askId, workerMessageKind,
 import { answerAsk } from './asks.ts';
 import { buildCommand, nativeName, WORKER_PERMISSION, BUTTON_ONLY } from './gate.ts';
 import { chatLines } from './transcript.ts';
+import { turnAskNote } from './brainevents.ts';
 
 /** A fake `claude`: one background worker that starts, is listed alive, and a relay that always says SENT. */
 function fakeClaude() {
@@ -32,12 +33,12 @@ function setup() {
   const store = openStore(':memory:');
   const logs: string[] = [];
   const log = (m: string, f?: object) => logs.push(`${m} ${JSON.stringify(f ?? {})}`);
-  const cards: any[] = [], reports: any[] = [], notices: string[] = [], changed: string[] = [];
+  const cards: any[] = [], reports: any[] = [], notices: string[] = [], changed: string[] = [], turnAsks: Item[] = [];
   const { claude, calls, agent } = fakeClaude();
   const native = makeNative({ store, log, jarvisUrl: 'http://127.0.0.1:1', dataDir: mkdtempSync(join(tmpdir(), 'jarvis-nr-')), claude,
-    onChange: () => {}, onReport: (w, t, final) => reports.push({ w: w.id, t, final }), onCard: a => cards.push(a), onNotice: (_w, t) => notices.push(t) });
+    onChange: () => {}, onReport: (w, t, final) => reports.push({ w: w.id, t, final }), onCard: a => cards.push(a), onNotice: (_w, t) => notices.push(t), onTurnAsk: (_w, i) => turnAsks.push(i) });
   const o = { native, store, log, askChanged: (i: string) => changed.push(i) };
-  return { store, log, logs, native, o, cards, reports, notices, changed, calls, agent };
+  return { store, log, logs, native, o, cards, reports, notices, changed, calls, agent, turnAsks };
 }
 
 test('the hook routes: a known worker\'s permission prompt becomes a card and resolves on the tap; a stop stores the report; unknown sessions get nothing', async () => {
@@ -269,4 +270,68 @@ test('an interactive worker starts in a pseudo-terminal, is found by name, stops
   assert.ok(spawned[1].includes('--resume') && spawned[1].includes(agent.sessionId));
   await assert.rejects(native.attach('c0ffee00'), /Use Desktop/);
   assert.ok(logs.some(l => l.startsWith('native worker started') && l.includes('"kind":"interactive"')));
+});
+
+// The ask of worker 5361 (2026-11-11), shortened: bulleted OPTIONS with ", because", and a WAITING line at the end.
+const TURN_ASK = `STORY: #5361 capture empty listings page
+WHERE: I saved both French empty pages. The English pages need the account language set to English.
+QUESTION: May I switch the empty account to English, capture, then switch it back to French?
+CONTEXT: I could not reach jarvis-brain, so I'm asking you here.
+OPTIONS:
+- Yes, switch and restore, because it takes you no time
+- I switch it myself, because you keep the settings change
+- Skip English, because the English page stays empty`;
+
+/** A worker transcript whose turn sent the ask with SendMessage, the tool result Claude Code wrote, then the turn text. */
+function askTranscript(delivered: boolean): string {
+  const f = join(mkdtempSync(join(tmpdir(), 'jarvis-turnask-')), 's.jsonl');
+  const result = delivered
+    ? { success: true, message: 'Ask -> jarvis-brain (another Claude session on this machine; in that session\'s inbox)' }
+    : { success: false, message: "No agent named 'jarvis-brain' is reachable.\nUse ListAgents to see everyone you can message." };
+  const lines = [
+    { type: 'user', message: { role: 'user', content: 'Do the task.' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'SendMessage', input: { to: 'jarvis-brain', summary: 'Ask', message: TURN_ASK } }] } },
+    { type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_1', type: 'tool_result', content: [{ type: 'text', text: JSON.stringify(result) }] }] }, toolUseResult: result },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: `${TURN_ASK}\n\nWAITING: your answer on the English language switch.` }] } },
+  ];
+  writeFileSync(f, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+  return f;
+}
+
+test('an ask in the turn text whose SendMessage failed becomes one ask card, and the brain hears it; a delivered one waits for the brain', async () => {
+  const s = setup();
+  const w = await s.native.start({ name: '5361-empty-listings-capture-583', cwd: '/tmp', brief: 'x' });
+  const stop = { session_id: w.session_id, transcript_path: askTranscript(false), last_assistant_message: `${TURN_ASK}\n\nWAITING: your answer on the English language switch.`, stop_hook_active: false };
+  const r = await nativeRoute(s.o, 'POST', '/api/hooks/stop', stop);
+  // A pause, not a nudge: the worker is not sent back to retry SendMessage.
+  assert.deepEqual(r?.body, {});
+  const open = s.store.openItems().filter(i => i.dispatch_id === `n:${w.id}`);
+  assert.equal(open.length, 1);
+  assert.equal(open[0].kind, 'question');
+  assert.equal(open[0].body, TURN_ASK, 'the WAITING line is not on the card');
+  const card = askCard(open[0])!;
+  assert.equal(card.question, 'May I switch the empty account to English, capture, then switch it back to French?');
+  assert.equal(card.options.length, 3);
+  assert.deepEqual(s.turnAsks.map(i => i.external_id), [open[0].external_id]);
+  assert.match(turnAskNote(w, open[0]), new RegExp(`message_id=${open[0].external_id}`));
+  assert.deepEqual(s.notices, []);
+  assert.ok(s.logs.some(l => l.startsWith('native worker reported') && l.includes('"pause":"ask in the turn text"')));
+  // The same stop again (a resumed worker repeats its text): still one card, and the brain is not told twice.
+  await nativeRoute(s.o, 'POST', '/api/hooks/stop', stop);
+  assert.equal(s.store.openItems().filter(i => i.dispatch_id === `n:${w.id}`).length, 1);
+  assert.equal(s.turnAsks.length, 1);
+  // A tap on the card answers it like any worker ask.
+  assert.deepEqual(answerOpenAsks(s.store, w.id, 'Yes, switch and restore', 'owner'), [open[0].external_id]);
+
+  // The SendMessage arrived: no card at the stop. The brain's turn makes the one card.
+  const d = setup();
+  const w2 = await d.native.start({ name: '5361-empty-listings-capture-583', cwd: '/tmp', brief: 'x' });
+  const r2 = await nativeRoute(d.o, 'POST', '/api/hooks/stop', { ...stop, session_id: w2.session_id, transcript_path: askTranscript(true) });
+  assert.deepEqual(r2?.body, {});
+  assert.equal(d.store.openItems().length, 0);
+  assert.deepEqual(d.turnAsks, []);
+  assert.ok(d.logs.some(l => l.startsWith('native worker reported') && l.includes('"pause":"ask to the brain"')));
+  const routed = routeWorkerTurn({ native: d.native, store: d.store, log: d.log, now: () => 5000 }, { from: w2.name, text: TURN_ASK }, 'Story 5361 asks.');
+  assert.ok(routed.item);
+  assert.equal(d.store.openItems().filter(i => i.dispatch_id === `n:${w2.id}`).length, 1);
 });

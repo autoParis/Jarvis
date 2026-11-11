@@ -4,7 +4,7 @@ import type { Log } from './log.ts';
 import { approvalTag, approvalOutcomeText } from '../web/worklist.js';
 import { namedActionIn, namedLabel, refusedByPermissionLayer, type Named } from './namedactions.ts';
 import { brainCard, answerBrainAsk, isBrainAsk, type BrainNote } from './brainasks.ts';
-import { fields, askReportPath, reportPathIn } from './workercontract.ts';
+import { fields, askReportPath, reportPathIn, readReport } from './workercontract.ts';
 import type { ReportSummary } from './reports.ts';
 import { docHref } from '../web/contract.js';
 import type { RouteResult, Body } from './route.ts';
@@ -400,4 +400,26 @@ export async function askRoute(o: AskCtx, method: string, url: string, body: Bod
     return { status: 204 };
   }
   return undefined;
+}
+
+/** What a worker's SendMessage is: an ask with options, a status notice, or an ask with no options (sent back). */
+export type WorkerMessageKind = 'ask' | 'notice' | 'no-options';
+
+
+const LINK = /\bhttps?:\/\/\S+/g;
+
+/**
+ * Sorts a worker's message. A message with options is an ask. A message that asks nothing (a `NOTICE:`, `DONE:` or
+ * `FAILED:` first line, or no QUESTION field and no question mark outside a link) is a notice. Anything else is a
+ * question with no options. The owner could not answer it with a tap, so it goes back to the worker.
+ */
+export function workerMessageKind(text: string): WorkerMessageKind {
+  const body = text.trim();
+  const label = readReport(body).label;
+  if (label === 'NOTICE' || label === 'DONE' || label === 'FAILED') return 'notice';
+  const probe = { id: 0, source: 'native', external_id: 'probe', kind: 'question', dispatch_id: null, subject: '', body, options: null,
+    status: 'new', answer: null, created_at: '', pushes: 0, pushed_at: null, meta: null } as Item;
+  if (askCard(probe)?.options.length) return 'ask';
+  const asks = Boolean(fields(body).QUESTION) || body.replace(LINK, '').includes('?');
+  return asks ? 'no-options' : 'notice';
 }

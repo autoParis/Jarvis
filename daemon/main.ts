@@ -44,7 +44,7 @@ import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
 import { DEALERS_FILE, MIGRATION_SHEET_SYNC } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
-import { wireBrain } from './brainevents.ts';
+import { wireBrain, turnAskNote } from './brainevents.ts';
 import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, startSheetSync } from './timers.ts';
 import { syncDue, runSyncChild } from './sheetsync.ts';
 import { SHEET_ID } from './sheet-edit.ts';
@@ -120,6 +120,13 @@ const native = makeNative({
     broadcast({ type: 'approval', approval: a });
     const args = JSON.parse(a.args);
     if (a.status === 'pending' && !existsSync(KILL_FILE)) brain.send(`[worker permission] Native worker ${args.name} wants to run ${args.tool}: ${JSON.stringify(String(args.summary).slice(0, 300))}. It waits on approval #${a.id}, a card in the app, and nothing else can answer it. Tell ${OWNER} in one sentence to tap Allow or Deny on it.`);
+  },
+  // An ask in the turn text that no SendMessage delivered (the brain was unreachable): the card exists, so show it and tell the brain.
+  onTurnAsk: (w, item) => {
+    const card = cardOf(item);
+    broadcast({ type: 'event', text: `[native question] ${w.name}: ${item.body}`, at: new Date().toISOString(), asks: card ? [card] : [] });
+    publishWork();
+    if (!existsSync(KILL_FILE)) brain.send(turnAskNote(w, item));
   },
   onNotice: (w, text) => {
     // A worker that ended its turn on a question is waiting on its answer, not silent.

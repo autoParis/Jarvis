@@ -6,9 +6,10 @@ import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlink
 import { basename, join } from 'node:path';
 import { cleanEnv } from './config.ts';
 import { classify, type NativeState, type WorkRow } from './work.ts';
-import type { Approval, NativeWorkerRow, Store } from './store.ts';
+import type { Approval, Item, NativeWorkerRow, Store } from './store.ts';
 import type { Log } from './log.ts';
 import { lastAssistantText, lastTurnMessages } from './transcript.ts';
+import { workerMessageKind } from './asks.ts';
 import { FRESH_WRITE_MS, holdersIn, lastModel, processTable, sessionName, tailOf, type Holder } from './resume.ts';
 
 // Claude Code background sessions (`claude --bg`) as Jarvis's own workers (Jarvis 2.0, stage B).
@@ -252,6 +253,24 @@ export function writeFifo(fifo: string, bytes: Buffer): void {
 /** Claude Code's folder under ~/.claude/projects for a cwd: every character outside [A-Za-z0-9] becomes a dash. */
 export const projectDir = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-');
 
+/** The external id of a worker's question item: one per message, from the worker id and the time it arrived. */
+export const askId = (worker: string, at: number) => `ask:${worker}:${at}`;
+
+/**
+ * A worker's ask as a question item: an ask card in the app, `[native question]` in the brief, answered by a tap or
+ * by `jarvis-native reply`. One shape for both ways in: a SendMessage the brain answered (nativeroutes.ts
+ * routeWorkerTurn), and an ask the worker wrote in its turn text when SendMessage failed (stopHook).
+ */
+export function insertWorkerAsk(store: Store, w: Pick<NativeWorker, 'id' | 'name'>, text: string, at: number): Item | undefined {
+  return store.insertItem({
+    source: 'native', external_id: askId(w.id, at), kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`,
+    subject: `Question from ${w.name}`, body: text, status: 'spoken',
+  });
+}
+
+/** An ask written in the turn text, without its closing `WAITING:` paragraph: that line is for jarvisd, not for the card. */
+const turnAskText = (text: string) => text.trim().replace(/\n\s*\n\s*WAITING\s*:[^\n]*$/i, '').trim();
+
 type Agent = { id?: string; kind?: string; sessionId?: string; name?: string; pid?: number; status?: string; state?: string; waitingFor?: string; cwd?: string };
 
 export function makeNative(o: {
@@ -265,6 +284,11 @@ export function makeNative(o: {
   onCard: (a: Approval) => void;
   /** A liveness finding for the brain: failed, blocked with no card, done without a DONE line. */
   onNotice: (w: NativeWorker, text: string) => void;
+  /**
+   * The worker ended its turn on an ask in the worker contract format that no SendMessage delivered (the brain was
+   * unreachable). jarvisd made the ask card `item`; the brain must hear it. Absent in tests that do not care.
+   */
+  onTurnAsk?: (w: NativeWorker, item: Item) => void;
   claude?: Claude; now?: () => number;
   /** Test seams for interactive sessions: start the detached pseudo-terminal (returns its pgid), end a process group, make the stdin pipe. */
   spawnPty?: (argv: string[], cwd: string, fifo?: string) => number;
@@ -713,6 +737,7 @@ export function makeNative(o: {
       if (!body.stop_hook_active) nudgedChain.delete(w.id);
       let pause: string | undefined;
       let ownerWait = false;
+      let turnAsk = false;
       if (!outcome) {
         const action = w.approval_id ? store.approval(w.approval_id)?.action : undefined;
         const tasks = Array.isArray(body.background_tasks) ? body.background_tasks.filter((t: any) => !t?.status || t.status === 'running' || t.status === 'pending') : [];
@@ -720,13 +745,17 @@ export function makeNative(o: {
         let asked = false;
         try { asked = !!transcript && lastTurnMessages(transcript, 'jarvis-brain').some(m => !/^\s*(notice|done|failed)\s*:/i.test(m)); }
         catch (e) { log('native: transcript unreadable at stop', { worker: w.id, error: (e as Error).message }); }
+        // The ask is in the turn text and no SendMessage delivered it: jarvisd makes the card itself. Worker 5361
+        // (2026-11-11 14:47Z) asked this way when jarvis-brain was unreachable after a restart, and nobody saw it.
+        turnAsk = !w.remote && action !== 'side-chat' && !asked && workerMessageKind(text) === 'ask';
         pause = w.remote || action === 'side-chat' ? 'conversation'
           : WAITING_LINE.test(text) ? 'waiting line'
           : asked ? 'ask to the brain'
+          : turnAsk ? 'ask in the turn text'
           : tasks.length ? `background task${tasks.length > 1 ? 's' : ''}: ${tasks.map((t: any) => t?.description ?? t?.command ?? t?.id).join('; ').slice(0, 160)}`
           : crons.length ? 'scheduled wake-up' : undefined;
         // A WAITING line with nothing that ends by itself (a task, a wake-up, an ask) waits on the owner. rows() shows it.
-        ownerWait = pause === 'waiting line' && !tasks.length && !crons.length && !asked;
+        ownerWait = pause === 'waiting line' && !tasks.length && !crons.length && !asked && !turnAsk;
       }
       const t = iso();
       const nudges = (nudgeTimes.get(w.id) ?? []).filter(x => now() - x < NUDGE_WINDOW_MS);
@@ -736,6 +765,14 @@ export function makeNative(o: {
       store.setState(ownerWaitKey(w.id), ownerWait ? t : '');
       log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length, ...(pause ? { pause } : {}), ...(nudge ? { sentBack: true } : {}) });
       o.onReport(next, text, !!outcome);
+      if (turnAsk) {
+        const body = turnAskText(text);
+        // A repeat of the same text (a resumed worker, a Stop hook fired twice) keeps the one open card.
+        const open = store.openItems().find(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${w.id}` && i.body === body);
+        const item = open ? undefined : insertWorkerAsk(store, w, body, now());
+        log(open ? 'native ask in the turn text already has a card' : 'native ask in the turn text made a card', { worker: w.id, item: (open ?? item)?.external_id ?? null, chars: body.length });
+        if (item) o.onTurnAsk?.(next, item);
+      }
       if (nudge) {
         nudgedChain.add(w.id);
         nudgeTimes.set(w.id, [...nudges, now()]);
