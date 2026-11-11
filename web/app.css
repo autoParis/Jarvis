@@ -706,6 +706,8 @@ textarea:focus { outline: none; }
 .pl { overflow-wrap: anywhere; font-size: 16px; line-height: 1.5; }
 .pl.user { align-self: flex-end; max-width: 80%; background: var(--raised); border-radius: var(--r); padding: 8px 12px; font-size: 15px; white-space: pre-wrap; }
 .pl.user.pending { opacity: .6; }
+.line-owner > .pl.user { max-width: 100%; }
+.line-owner > .pl.user + .msg-foot { top: 100%; }
 .pl.tool { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font); }
 .pl.terminal { font: 12px/1.45 var(--mono); white-space: pre-wrap; background: var(--raised); border-radius: var(--r-s); padding: 8px 10px; }
 .pl .clipped { display: inline-block; margin-left: 6px; font-size: 11px; color: var(--bad); white-space: nowrap; }

@@ -183,7 +183,8 @@
 <script type="module">
 import { DEFAULTS, makeSegmenter, levelDb, encodeWav } from '/listen.js';
 import { STATE as REQ_STATE, ago, requestMark, openIdOf } from '/requestlist.js';
-import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, messageFootHtml, toolRunHtml, toolRunSummary, paneTag, COPY_ICON, COPIED_ICON, SPEAK, REPLY_ICON, quoteHtml, quoteSnippet, quoteWho } from '/workfold.js';
+import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, toolRunHtml, toolRunSummary, paneTag, SPEAK, REPLY_ICON, quoteHtml, quoteSnippet, quoteWho } from '/workfold.js';
+import { messageRow, rowText, copyMessage, tapLine } from '/messagerow.js';
 import { makeSpeech } from '/speech.js';
 import { enterSends } from '/enterkey.js';
 import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
@@ -241,39 +242,26 @@ function links(text) {
   return esc(text).replace(/https?:\/\/[^\s)]+/g, u =>
     /\.(png|jpe?g|gif|webp)(\?|$)/i.test(u) ? `<a href="${u}" target="_blank"><img src="${u}" alt=""></a>` : `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 }
-const lineText = new WeakMap(); // what the copy button under each message copies: the text as written, markdown included
 // `quote` is the message the owner answered, on a message he sent as a reply. It sits on top of his words.
 function add(cls, text, at, speak, quote) {
   if (cls === 'event') return addEvent(text, at);
-  const d = document.createElement('div');
-  d.className = 'msg ' + cls;
   // Jarvis writes markdown; everything else (The owner, events) shows as typed.
-  if (cls === 'jarvis') { d.classList.add('md'); d.innerHTML = markdown(text, shot); titleCards(d); }
+  let bodyHtml;
+  if (cls === 'jarvis') bodyHtml = markdown(text, shot);
   else if (cls === 'owner') {
     // His pictures go in one row of small squares above his words. A tap opens one big.
     const p = splitPictures(text);
-    d.innerHTML = quoteHtml(quote) + shotRowHtml(p.paths, esc) + (p.text ? `<div class="msg-text">${render(p.text)}</div>` : '');
+    bodyHtml = quoteHtml(quote) + shotRowHtml(p.paths, esc) + (p.text ? `<div class="msg-text">${render(p.text)}</div>` : '');
   }
-  else d.innerHTML = render(text);
-  const line = document.createElement('div');
-  line.className = 'line line-' + cls;
+  else bodyHtml = render(text);
   const turn = (cls === 'owner' || cls === 'jarvis') && Number.isInteger(speak?.id) ? speak.id : 0;
-  if (turn) { line.dataset.turn = turn; line.dataset.at = at; }
-  line.append(d);
   // A message that asked for a proposal carries its Approve and Reject, under its last line and above the time row.
-  if (cls === 'jarvis' && turn) { const c = document.createElement('div'); c.className = 'chat-decide'; c.innerHTML = chatDecisionHtml(approvals.values(), turn, tapped); line.append(c); }
-  line.insertAdjacentHTML('beforeend', messageFootHtml(at, cls === 'jarvis' && speak?.clips ? speak : null, turn));
-  lineText.set(line, text);
+  let between;
+  if (cls === 'jarvis' && turn) { between = document.createElement('div'); between.className = 'chat-decide'; between.innerHTML = chatDecisionHtml(approvals.values(), turn, tapped); }
+  const line = messageRow({ lineClass: `line line-${cls}`, bodyClass: `msg ${cls}${cls === 'jarvis' ? ' md' : ''}`, bodyHtml, text, at, speak: cls === 'jarvis' && speak?.clips ? speak : null, turn, between });
+  if (cls === 'jarvis') titleCards(line.firstElementChild);
+  if (turn) { line.dataset.turn = turn; line.dataset.at = at; }
   append(line, cls === 'owner');
-}
-async function copyMessage(b) {
-  let done = true;
-  try { await navigator.clipboard.writeText(lineText.get(b.closest('.line'))); } catch { done = false; }
-  b.innerHTML = done ? COPIED_ICON : COPY_ICON;
-  b.title = done ? 'Copied' : 'Could not copy';
-  b.setAttribute('aria-label', b.title);
-  clearTimeout(b.resetTimer);
-  b.resetTimer = setTimeout(() => { b.innerHTML = COPY_ICON; b.title = 'Copy'; b.setAttribute('aria-label', 'Copy message'); }, 1500);
 }
 // A new line rises into place. Lines drawn from the history do not.
 let drawingHistory = false;
@@ -361,20 +349,12 @@ items.addEventListener('click', e => {
   const speaker = e.target.closest('.msg-speak');
   if (speaker) return speech.toggle(Number(speaker.dataset.turn), Number(speaker.dataset.clips));
   const b = e.target.closest('.hand');
-  if (!b) return tapLine(e);
+  if (!b) return tapLine(e, items, noHover.matches);
   if (b.disabled) return;
   const r = requests.find(x => handed.get(x.id) === b);
   if (r) openPane(openIdOf(r));
 });
-// A touch screen has no hover: a tap on a message shows its row, and a tap anywhere else in the chat hides it.
 const noHover = matchMedia('(hover: none)');
-function tapLine(e) {
-  if (!noHover.matches || e.target.closest('a, button') || !getSelection().isCollapsed) return;
-  const line = e.target.closest('.line');
-  const was = line?.classList.contains('shown');
-  items.querySelectorAll('.line.shown').forEach(x => x.classList.remove('shown'));
-  if (line && !was) line.classList.add('shown');
-}
 
 // ---- a reply to one message: the reply button under it, or a swipe to the left on a phone ----
 // The strip above the box names the message. Sending (typed or dictated) carries its turn id and clears the strip.
@@ -384,7 +364,7 @@ function startReply(line) {
   if (!id) return;
   replyTo = { id, role: line.classList.contains('line-owner') ? 'owner' : 'jarvis' };
   $('reply-who').textContent = quoteWho(replyTo.role);
-  $('reply-line').textContent = quoteSnippet(lineText.get(line)) || 'Message';
+  $('reply-line').textContent = quoteSnippet(rowText(line)) || 'Message';
   $('reply-strip').hidden = false;
   if (bar.dataset.mode === 'voice') $('keys').click(); else t.focus();
 }
@@ -1325,20 +1305,22 @@ function paneAppend(lines) {
   paneLines.querySelector('.empty')?.remove();
   const atBottom = paneLog.scrollHeight - paneLog.scrollTop - paneLog.clientHeight < 120;
   for (const l of lines) {
-    if (l.role === 'user') for (const p of paneLines.querySelectorAll('.pending')) if (p.textContent === l.text) p.remove();
+    if (l.role === 'user') for (const p of paneLines.querySelectorAll('.pending')) if (p.textContent === l.text) p.closest('.line').remove();
     if (l.role === 'tool') { addToolRow(l.text); continue; }
-    const d = document.createElement('div');
-    d.className = 'pl ' + l.role;
-    if (l.kind === 'event') { d.className = 'pl wake'; d.textContent = l.text; } // what jarvisd did to the session, such as a resume
-    else if (l.role === 'agent') { d.classList.add('md'); d.innerHTML = markdown(l.text, shot); }
-    else d.textContent = l.text;
-    const tag = paneTag(l);
-    if (tag) { d.classList.add('said'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
-    if (l.clipped) d.insertAdjacentHTML('beforeend', '<span class="clipped" title="Jarvis shortened this text">clipped</span>');
-    paneLines.appendChild(d);
+    paneLines.appendChild(paneRow(l));
   }
   while (paneLines.children.length > PANE_MAX) (paneLines.firstChild.matches('.rdetail') ? paneLines.children[1] : paneLines.firstChild).remove();
   if (atBottom) paneLog.scrollTop = paneLog.scrollHeight;
+}
+// One pane line. A message from the owner or the worker is a shared message row, with the copy button under it.
+function paneRow(l) {
+  if (l.kind === 'event') { const d = document.createElement('div'); d.className = 'pl wake'; d.textContent = l.text; return d; } // what jarvisd did to the session, such as a resume
+  const agent = l.role === 'agent', own = l.role.startsWith('user');
+  const line = messageRow({ lineClass: `line${own ? ' line-owner' : ''}`, bodyClass: `pl ${l.role}${agent ? ' md' : ''}`, bodyHtml: agent ? markdown(l.text, shot) : esc(l.text), text: l.text });
+  const d = line.firstElementChild, tag = paneTag(l);
+  if (tag) { d.classList.add('said'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
+  if (l.clipped) d.insertAdjacentHTML('beforeend', '<span class="clipped" title="Jarvis shortened this text">clipped</span>');
+  return line;
 }
 // Tool rows between two messages share one fold, which keeps growing while the worker keeps working.
 function addToolRow(text) {
@@ -1355,8 +1337,10 @@ function addToolRow(text) {
   run.querySelector('.t').textContent = toolRunSummary([...calls.children].map(c => c.textContent));
 }
 paneLines.addEventListener('click', e => {
+  const copy = e.target.closest('.msg-copy');
+  if (copy) return copyMessage(copy);
   const b = e.target.closest('.fold-toggle');
-  if (!b) return;
+  if (!b) return tapLine(e, paneLines, noHover.matches);
   const open = b.getAttribute('aria-expanded') !== 'true';
   b.setAttribute('aria-expanded', String(open));
   b.nextElementSibling.hidden = !open;
