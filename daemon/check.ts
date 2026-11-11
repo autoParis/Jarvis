@@ -4,10 +4,11 @@ import { execFile } from 'node:child_process';
 import { basename } from 'node:path';
 import type { Store, Item, Request, OwnerTurn } from './store.ts';
 import type { Requests } from './requests.ts';
-import { AT_PROMPT, type Work, type WorkRow } from './work.ts';
+import type { Work, WorkRow } from './work.ts';
 import { isQuietHours, QUIET_HOURS, sqlTime } from './push.ts';
 import { eastern } from './reminders.ts';
 import type { Log } from './log.ts';
+import { isBrainAsk, checkLine } from './brainasks.ts';
 
 // The ten-minute check: during the day jarvisd reads open asks, workers, requests and reminders in code, and wakes the
 // brain only when a new finding or a due reminder needs it. Otherwise there is no model call and nothing said. Gmail has its own watcher.
@@ -17,6 +18,10 @@ export const CHECK_MS = 10 * 60_000;
 export const REMIND_MS = 60 * 60_000;
 /** An ask gets this long, past its two pushes (push.ts), before it counts as unanswered. */
 export const ASK_WAIT_MS = 15 * 60_000;
+/** A worker on a WAITING line that only the owner ends, with no open ask, gets this long before it counts as a finding. */
+export const OWNER_WAIT_MS = 30 * 60_000;
+/** That finding comes back this often while the wait lasts, inside the check hours. */
+export const OWNER_WAIT_REPEAT_MS = 2 * 60 * 60_000;
 /** A message from the owner gets this long, with the brain idle, before it counts as lost. */
 export const LOST_MS = 3 * 60_000;
 /** `turn` is the lost message a finding reports. */
@@ -48,25 +53,32 @@ function lostFindings(turns: OwnerTurn[], now: number, wait: number): Finding[] 
 }
 
 /**
- * What needs judgment right now. Only Jarvis's own workers count: another Run's workers belong to its coordinator.
- * An ask from a worker that is no longer live waits for nobody. A closed request is never open here: `done` and
+ * What needs judgment right now. An ask from a worker that is no longer live waits for nobody. A closed request is never open here: `done` and
  * `review` are skipped, and a hidden or removed one is not in `requests`.
  * A branch counts as finished work only when nothing is active in its worktree: no worker of any state, and no
- * session except one Orca shows as Done. `running` is the commit the daemon started from.
+ * session except one listed as Done. `running` is the commit the daemon started from.
  */
-export function findings(s: { asks: Item[]; requests: Request[]; rows: WorkRow[]; jarvisRun: string; closing: (id: number) => boolean; now: number; delivery: Delivery; running?: string; lost: OwnerTurn[] }): Finding[] {
+export function findings(s: { asks: Item[]; requests: Request[]; rows: WorkRow[]; closing: (id: number) => boolean; now: number; delivery: Delivery; running?: string; lost: OwnerTurn[] }): Finding[] {
   const live = new Set(s.rows.filter(r => r.kind === 'worker').map(r => r.id));
-  const asking = new Set(s.asks.map(a => a.dispatch_id));
   const out: Finding[] = [];
   for (const a of s.asks) {
     if (a.dispatch_id && !live.has(a.dispatch_id)) continue;
     const waited = s.now - Date.parse(`${a.created_at.replace(' ', 'T')}Z`);
-    if (waited >= ASK_WAIT_MS) out.push({ key: `ask:${a.external_id}`, line: `${a.kind} unanswered for ${Math.floor(waited / 60_000)} min: message_id=${a.external_id} dispatch=${a.dispatch_id ?? '?'} subject=${JSON.stringify(a.subject)}` });
+    if (waited >= ASK_WAIT_MS) out.push({ key: `ask:${a.external_id}`, line: isBrainAsk(a) ? checkLine(a, Math.floor(waited / 60_000)) : `${a.kind} unanswered for ${Math.floor(waited / 60_000)} min: message_id=${a.external_id} dispatch=${a.dispatch_id ?? '?'} subject=${JSON.stringify(a.subject)}` });
   }
+  // A stuck worker (native.ts stalledFrom). native.ts tells the brain at once, at any hour. The check tells it again at the
+  // first tick of the day, so a stall that began at night reaches the owner in the morning.
   for (const r of s.rows) {
-    if (r.kind !== 'worker' || r.sideChat || r.run !== s.jarvisRun) continue;
-    const what = r.state === 'exited' ? 'exited without reporting' : r.state === 'idle' ? `stuck: ${r.note}` : r.state === 'waiting' && r.note === AT_PROMPT && !asking.has(r.id) ? 'stuck at a prompt in Orca' : undefined;
-    if (what) out.push({ key: `worker:${r.id}:${r.state}`, line: `Worker ${what}: dispatch=${r.id} title=${JSON.stringify(r.title)}` });
+    const since = r.kind === 'worker' ? r.native?.stalledSince : undefined;
+    if (since) out.push({ key: `stalled:${r.id}:${since}`, line: `Worker stuck, nothing since ${eastern(sqlTime(Date.parse(since)))} Eastern (${Math.floor((s.now - Date.parse(since)) / 60_000)} min): dispatch=${r.id} title=${JSON.stringify(r.title)}. Nudge it with jarvis-native reply, and tell ${OWNER}.` });
+  }
+  // A worker that waits on the owner with no open ask (native.ts waitingOn). Worker 5361 (2026-11-11) waited 4 hours and nothing said so.
+  // It is never stuck, so this finding is the only reminder: its key changes every OWNER_WAIT_REPEAT_MS, and the brain hears it again.
+  for (const r of s.rows) {
+    const wait = r.kind === 'worker' ? r.native?.waitingOn : undefined;
+    const waited = wait ? s.now - Date.parse(wait.since) : 0;
+    const round = Math.floor((waited - OWNER_WAIT_MS) / OWNER_WAIT_REPEAT_MS);
+    if (wait && waited >= OWNER_WAIT_MS) out.push({ key: `waiting:${r.id}:${wait.since}:${round}`, line: `Worker waits on ${OWNER} with no open ask, for ${Math.floor(waited / 60_000)} min: dispatch=${r.id} title=${JSON.stringify(r.title)} WAITING: ${JSON.stringify(wait.text)}. Tell ${OWNER} what it waits for. Do not nudge the worker: only ${OWNER} ends this wait. If he does it later, check jarvis-remind list and set one reminder.` });
   }
   for (const q of s.requests) {
     if (q.status === 'failed') out.push({ key: `failed:${q.id}`, line: `Request failed: ${JSON.stringify(q.title)} dispatch=${q.dispatch_id}` });
@@ -83,11 +95,11 @@ export function findings(s: { asks: Item[]; requests: Request[]; rows: WorkRow[]
 }
 
 export function makeCheck(o: {
-  store: Store; jarvisRun: string; log: Log;
-  /** A fresh work poll, so the check never judges an old list. */
+  store: Store; log: Log;
+  /** The work list as it is now, so the check never judges an old list. */
   poll: () => Promise<Work>;
   requests: Pick<Requests, 'synced' | 'closing'>;
-  /** Reads git. A failure skips the tick, like Orca not answering. */
+  /** Reads git. A failure fails the tick. */
   delivery: () => Promise<Delivery>;
   running?: string;
   /** A message waiting behind a running turn is not lost: the brain's hang timer ends a turn that stopped. */
@@ -95,7 +107,7 @@ export function makeCheck(o: {
   /** Sends text to the brain. This is the only model call the check can make. */
   wake: (text: string) => void;
   paused: () => boolean;
-  /** Pending support replies (replies.ts). It needs neither Orca nor git, so it runs before them. */
+  /** Pending support replies (replies.ts). It needs no git, so it runs before the work list. */
   replies?: () => Promise<void>;
   now?: () => number;
 }) {
@@ -105,7 +117,7 @@ export function makeCheck(o: {
     o.log('check woke the brain', { findings: fresh.map(f => f.key) });
     o.wake(`[check] Found by jarvisd's ten-minute check. Speak only what needs ${OWNER}; otherwise reply SILENT.\n${fresh.map(f => `- ${f.line}`).join('\n')}`);
   };
-  /** Plain SQL, so a tick with nothing due costs no tokens. It needs neither Orca nor git, so it runs before them. */
+  /** Plain SQL, so a tick with nothing due costs no tokens. It needs no git, so it runs first. */
   const remind = () => {
     const t = sqlTime(now());
     const due = o.store.dueReminders(t, sqlTime(now() - REMIND_MS));
@@ -127,18 +139,20 @@ export function makeCheck(o: {
       wake(lost);
       o.store.settleTurns(lost.flatMap(f => f.turn ?? []));
     },
-    /** One tick. Outside the hours it reads and writes nothing. When Orca does not answer it changes nothing, so the next tick decides. */
-    async tick() {
-      if (running || !inCheckHours(now()) || o.paused()) return;
+    /**
+     * One tick. Outside the hours it reads and writes nothing.
+     * Returns 'ran' for the Scheduled tasks strip, and undefined when no tick ran.
+     */
+    async tick(): Promise<'ran' | undefined> {
+      if (running || !inCheckHours(now()) || o.paused()) return undefined;
       running = true;
       try {
         remind();
         await o.replies?.().catch(e => o.log('check: support replies failed', { error: String(e) }));
         const work = await o.poll();
-        if (work.error) return o.log('check: skipped, Orca did not answer', { error: work.error });
         await o.requests.synced();
         const delivery = await o.delivery();
-        const found = findings({ asks: o.store.openItems(), requests: o.store.requests(), rows: work.rows, jarvisRun: o.jarvisRun, closing: o.requests.closing, now: now(), delivery, running: o.running, lost: o.brainBusy() ? [] : o.store.unsettledTurns() });
+        const found = findings({ asks: o.store.openItems(), requests: o.store.requests(), rows: work.rows, closing: o.requests.closing, now: now(), delivery, running: o.running, lost: o.brainBusy() ? [] : o.store.unsettledTurns() });
         // Each finding wakes the brain once, across restarts. One that clears can come back and wake it again.
         const seen = new Set(JSON.parse(o.store.getState('checkSeen') ?? '[]') as string[]);
         const fresh = found.filter(f => !seen.has(f.key));
@@ -147,6 +161,7 @@ export function makeCheck(o: {
         if (fresh.length) wake(fresh);
         // A lost message is reported once. It stays out of later ticks, even ones where the brain is busy.
         o.store.settleTurns(found.flatMap(f => f.turn ?? []));
+        return 'ran';
       } finally { running = false; }
     },
   };

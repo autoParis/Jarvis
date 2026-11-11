@@ -1,0 +1,11 @@
+#!/bin/bash
+# Restarts jarvisd under launchd. The label comes from JARVIS_SERVICE_LABEL in .env, read through daemon/config.ts
+# (default local.jarvis), the same setting bin/install-service installs the job under. A restart ends the brain's session.
+#   jarvis-restart          restart now
+#   jarvis-restart --label  print the label and do nothing
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LABEL="$(cd "$ROOT" && node --env-file-if-exists=.env --disable-warning=ExperimentalWarning \
+  --input-type=module -e "import { SERVICE_LABEL } from './daemon/config.ts'; console.log(SERVICE_LABEL);")"
+if [ "${1:-}" = "--label" ]; then echo "$LABEL"; exit 0; fi
+exec launchctl kickstart -k "gui/$(id -u)/$LABEL"

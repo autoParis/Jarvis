@@ -9,7 +9,6 @@ import { makeProdMcp, REFUSED_TOOL_WORDS } from './prodmcp.ts';
 import { approvalDetail, approvalOutcomeText, approvalTag } from '../web/worklist.js';
 import { PROD_MCP_URL, STAGING_MCP_URL } from './config.ts';
 
-const id = { run: 'run_x', handle: 'term_x' };
 const TOKEN = 'fake-test-token-1234';
 const REPLY = { reference: 'TICKET-1039', content: "Bonjour,\nC'est réglé.\nstatus: ferme", status: 'resolu' };
 const OK = { content: [{ type: 'text', text: '{"ok":true,"reference":"TICKET-1039","message_id":"m1"}' }] };
@@ -48,7 +47,7 @@ async function fakeServer(answer: Handler | { result: any } | { error: any } = {
 function setup(url: string, token = () => TOKEN) {
   const store = openStore(':memory:');
   const lines: { msg: string; fields?: any }[] = [];
-  const gate = makeGate(store, id, () => {}, (msg, fields) => lines.push({ msg, fields }), makeProdMcp({ url, token }));
+  const gate = makeGate(store, () => {}, (msg, fields) => lines.push({ msg, fields }), makeProdMcp({ url, token }));
   return { store, gate, lines };
 }
 const call = (tool = 'support_ticket_reply', args: object = REPLY) => ({ tool, arguments: args });

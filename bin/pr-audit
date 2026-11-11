@@ -806,7 +806,7 @@ def run_session(prompt: str, schema: Dict[str, Any], cwd: Path) -> Dict[str, Any
     """A fresh Claude Code session: no settings, no memory, no MCP, no GitHub credentials."""
     NOAUTH.mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items()
-           if k not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN") and not k.startswith("ORCA")}
+           if k not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")}
     env.update({"GH_CONFIG_DIR": str(NOAUTH), "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "PR_AUDIT_SESSION": "1"})
     # Read, Grep and Glob stay unlisted on purpose: dontAsk then limits them to the working
     # directories, so transcripts, .env.local and the rest of the machine stay out of reach.

@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
-import { Brain, brainArgs, peerMessage } from './brain.ts';
+import { Brain, brainArgs, peerMessage, readSavedSession, staleReason, gateFailed, type SavedSession } from './brain.ts';
 import { readFileSync } from 'node:fs';
 
 // A stand-in for `claude`: one result per line, exit on "die", SILENT on "quiet", an error on "fail".
@@ -55,7 +55,7 @@ test('events carry no turn, and a failed turn reports its error', async () => {
   const { brain } = setup();
   try {
     let r = reply(brain);
-    brain.send('[orca event] New');
+    brain.send('[worker event] New');
     assert.deepEqual((await r).turns, []);
     r = reply(brain);
     brain.send('fail', 7);
@@ -119,7 +119,7 @@ test('the brain knows when its running turn holds a message from the owner', asy
   try {
     assert.equal(brain.answeringOwner, false);
     let r = once(brain, 'reply');
-    brain.send('[orca event] a worker stopped');
+    brain.send('[worker event] a worker stopped');
     assert.equal(brain.answeringOwner, false, 'an event turn is the brain on its own');
     await r;
     r = once(brain, 'reply');
@@ -138,6 +138,7 @@ const log = process.env.FAKE_LOG;
 const argv = process.argv.slice(2);
 const arg = f => { const i = argv.indexOf(f); return i < 0 ? undefined : argv[i + 1]; };
 fs.appendFileSync(log, JSON.stringify({ start: argv }) + '\\n');
+if (arg('--resume') === 'gone') process.exit(1); // a session that no longer exists
 let first = true;
 require('readline').createInterface({ input: process.stdin }).on('line', line => {
   const text = JSON.parse(line).message.content;
@@ -148,13 +149,13 @@ require('readline').createInterface({ input: process.stdin }).on('line', line =>
 });
 `;
 
-function recorder(env: Record<string, string> = {}) {
+function recorder(env: Record<string, string> = {}, opts: { saved?: SavedSession; save?: (s: SavedSession | null) => void } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-brain-sw-'));
   writeFileSync(join(dir, 'claude'), RECORDER);
   chmodSync(join(dir, 'claude'), 0o755);
   const logFile = join(dir, 'log.jsonl');
   writeFileSync(logFile, '');
-  const brain = new Brain({ cwd: dir, env: { ...process.env, ...env, FAKE_LOG: logFile, PATH: `${dir}:${process.env.PATH}` }, systemPrompt: () => '', brief: () => '[session start] brief' });
+  const brain = new Brain({ cwd: dir, env: { ...process.env, ...env, FAKE_LOG: logFile, PATH: `${dir}:${process.env.PATH}` }, systemPrompt: () => '', brief: () => '[session start] brief', ...opts });
   brain.on('log', () => {});
   brain.on('notice', () => {});
   const entries = () => readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
@@ -247,6 +248,91 @@ test("The owner's message queued during an unrequested turn goes out after it, a
     assert.deepEqual(order, ['reply:ok:1', 'worker', 'reply:ok:2'], 'never WRONG: nothing was handed into the worker turn');
     assert.deepEqual(x.turns, [2]);
     assert.deepEqual(logs.filter(l => l.msg === 'brain handed').map(l => l.fields.turns), [[1], [2]]);
+  } finally { brain.stop(); }
+});
+
+// The 2026-11-09 21:25:13 order: jarvisd writes a turn, and a worker's message that arrives 170 ms later runs first.
+// Claude Code prints the peer turn's result (with `origin`) before the result of jarvisd's turn.
+const AHEAD = `#!/usr/bin/env node
+const out = o => console.log(JSON.stringify(o));
+const origin = { kind: 'peer', from: 'uds:/tmp/cc-socks/34422.sock', verifiedPeerPid: 34422, msg_id: 'f9af417d', name: '4390-sup-1025-page-address-problem-483', fromMode: 'prompting', body: 'QUESTION: ship or wait?' };
+require('readline').createInterface({ input: process.stdin }).on('line', line => {
+  const text = JSON.parse(line).message.content;
+  if (!text.includes('race')) { out({ type: 'result', result: 'ok', usage: {} }); return; }
+  out({ type: 'command_lifecycle', command_uuid: 'c1', state: 'started' });
+  out({ type: 'result', result: 'Story 4390 asks: ship or wait?', origin, usage: {} });
+  out({ type: 'command_lifecycle', command_uuid: 'c1', state: 'completed' });
+  setTimeout(() => out({ type: 'result', result: 'PR 5321 is ready.', usage: {} }), 100);
+});
+`;
+
+test('a worker message that runs ahead of a jarvisd turn is a worker event, and the next result still answers jarvisd', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jarvis-brain-ahead-'));
+  writeFileSync(join(dir, 'claude'), AHEAD);
+  chmodSync(join(dir, 'claude'), 0o755);
+  const brain = new Brain({ cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, systemPrompt: () => '', brief: () => '[session start] brief' });
+  const logs: string[] = [];
+  brain.on('log', (m: string) => logs.push(m));
+  brain.on('notice', () => {});
+  const order: string[] = [];
+  brain.on('worker', (t: string, _u: unknown, peer: any) => order.push(`worker:${peer?.from}:${t}`));
+  brain.on('reply', (t: string, _u: unknown, turns: number[]) => order.push(`reply:${t}:${turns.join(',')}`));
+  try {
+    const first = reply(brain);
+    brain.send('hello', 1);
+    await first;
+    const mine = new Promise<void>(res => brain.on('reply', (_t: string, _u: unknown, turns: number[]) => { if (turns.includes(2)) res(); }));
+    brain.send('[worker event] race', 2);
+    await mine;
+    assert.deepEqual(order, [
+      'reply:ok:1',
+      'worker:4390-sup-1025-page-address-problem-483:Story 4390 asks: ship or wait?',
+      'reply:PR 5321 is ready.:2',
+    ]);
+    assert.ok(logs.includes('brain answered a worker message that ran ahead of a jarvisd turn'));
+    assert.ok(!logs.includes('brain started a turn on its own'), 'jarvisd\'s own result is not taken for an unrequested turn');
+    assert.equal(brain.busy, false);
+  } finally { brain.stop(); }
+});
+
+// The 2026-11-11 13:51Z order after a resume: a stale background-task notice is answered first, which closes jarvisd's
+// turn. The real reply comes next, opening with a tool_result line while jarvisd thinks the brain is idle, and no origin.
+const LATE = `#!/usr/bin/env node
+const out = o => console.log(JSON.stringify(o));
+require('readline').createInterface({ input: process.stdin }).on('line', line => {
+  const text = JSON.parse(line).message.content;
+  out({ type: 'result', result: text.includes('late') ? 'The background task finished.' : 'ok', usage: {} });
+  if (!text.includes('late')) return;
+  setTimeout(() => {
+    out({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 't1', type: 'tool_result', content: 'pick-and-ship' }] } });
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: 'You are right, ask me only when it is unclear.' }] } });
+    out({ type: 'result', result: 'You are right, ask me only when it is unclear.', usage: {} });
+  }, 100);
+});
+`;
+
+test('a turn with no peer message after a stale answer is the brain\'s own late reply: a reply, never a worker event', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jarvis-brain-late-'));
+  writeFileSync(join(dir, 'claude'), LATE);
+  chmodSync(join(dir, 'claude'), 0o755);
+  const brain = new Brain({ cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, systemPrompt: () => '', brief: () => '[session start] brief' });
+  const logs: string[] = [];
+  brain.on('log', (m: string) => logs.push(m));
+  brain.on('notice', () => {});
+  const order: string[] = [];
+  brain.on('worker', (t: string) => order.push(`worker:${t}`));
+  brain.on('reply', (t: string, _u: unknown, turns: number[]) => order.push(`reply:${t}:${turns.join(',')}`));
+  try {
+    const first = reply(brain);
+    brain.send('hello', 1);
+    await first;
+    const real = new Promise<void>(res => brain.on('reply', (t: string) => { if (t.startsWith('You are right')) res(); }));
+    brain.send('[Simon, in English] late plan cards', 5973);
+    await real;
+    assert.deepEqual(order, ['reply:ok:1', 'reply:The background task finished.:5973', 'reply:You are right, ask me only when it is unclear.:']);
+    assert.ok(logs.includes('brain started a turn on its own'));
+    assert.ok(logs.includes('brain answered a turn it started with no peer message, delivered as a reply'));
+    assert.equal(brain.busy, false);
   } finally { brain.stop(); }
 });
 
@@ -344,4 +430,92 @@ test('the status reports the model the process says it runs, not only what was a
     assert.deepEqual(brain.status().running, { model: 'claude-opus-5-5', effort: 'low' });
     assert.deepEqual(brain.status().setting, { model: 'claude-haiku-5-5', effort: 'low' });
   } finally { brain.stop(); }
+});
+
+test('a jarvisd restart resumes the saved session with no brief, tells it about the restart, and keeps saving it', async () => {
+  const saves: (SavedSession | null)[] = [];
+  const { brain, starts, messages } = recorder({}, { saved: { id: 'sess-old', tokens: 40_000, at: Date.now() - 60_000 }, save: s => saves.push(s) });
+  try {
+    const r = reply(brain);
+    brain.send('hello', 1);
+    assert.deepEqual((await r).turns, [1]);
+    assert.equal(argOf(starts()[0], '--resume'), 'sess-old');
+    const m = messages();
+    assert.equal(m.length, 1);
+    assert.doesNotMatch(m[0].text, /\[session start\]/, 'a resumed session gets no brief');
+    assert.match(m[0].text, /^\[held notices, no answer needed\] jarvisd restarted at .*same conversation/);
+    assert.match(m[0].text, /hello$/);
+    assert.ok(saves.length >= 1 && saves.every(s => s?.id === 'sess-old'), 'nothing reset the saved row');
+    assert.equal(saves[saves.length - 1]!.tokens, 0, 'the turn result updates the saved token count');
+  } finally { brain.stop(); }
+});
+
+test('a saved session past the idle or token limit is not resumed: the brain starts fresh with the brief and clears the row', async () => {
+  for (const saved of [{ id: 'sess-old', tokens: 1_000, at: Date.now() - 56 * 60_000 }, { id: 'sess-old', tokens: 151_000, at: Date.now() }]) {
+    const saves: (SavedSession | null)[] = [];
+    const { brain, starts, messages } = recorder({}, { saved, save: s => saves.push(s) });
+    try {
+      const r = reply(brain);
+      brain.send('hello', 1);
+      await r;
+      assert.equal(argOf(starts()[0], '--resume'), undefined);
+      assert.match(messages()[0].text, /^\[session start\] brief/);
+      assert.equal(saves[0], null, 'the stale row is cleared at the fresh start');
+      assert.equal(saves[saves.length - 1]!.id, 'sess-1', 'the new session is saved');
+    } finally { brain.stop(); }
+  }
+});
+
+test('a saved session that will not resume falls back to a fresh one with the same batch and no restart notice', async () => {
+  const notices: string[] = [];
+  const { brain, starts, messages } = recorder({}, { saved: { id: 'gone', tokens: 1_000, at: Date.now() } });
+  brain.on('notice', (s: string) => notices.push(s));
+  try {
+    const r = reply(brain);
+    brain.send('hello', 3);
+    assert.deepEqual((await r).turns, [3], 'the turn is answered, not lost');
+    const s = starts();
+    assert.deepEqual(s.map(a => argOf(a, '--resume')), ['gone', undefined]);
+    const m = messages();
+    assert.equal(m.length, 1);
+    assert.match(m[0].text, /^\[session start\] brief/);
+    assert.match(m[0].text, /hello$/);
+    assert.deepEqual(notices, []);
+  } finally { brain.stop(); }
+});
+
+test('a held notice starts no turn and rides as one line, after the brief, on the next real turn', async () => {
+  const { brain, starts, messages } = recorder();
+  try {
+    brain.hold('[gate] The owner approved #4 with the button. Reply SILENT.');
+    brain.hold('[ask card] The owner tapped "yes"\non ask message_id=m1 in the app. Reply SILENT.');
+    assert.equal(brain.busy, false);
+    assert.equal(brain.heldCount, 2);
+    await new Promise(res => setTimeout(res, 100));
+    assert.equal(starts().length, 0, 'no process started for the notices');
+    const r = reply(brain);
+    brain.send('[worker event] New', undefined);
+    await r;
+    const m = messages();
+    assert.equal(m.length, 1);
+    const parts = m[0].text.split('\n\n');
+    assert.equal(parts[0], '[session start] brief');
+    assert.equal(parts[1], '[held notices, no answer needed] [gate] The owner approved #4 with the button. | [ask card] The owner tapped "yes" on ask message_id=m1 in the app.');
+    assert.equal(parts[2], '[worker event] New');
+    assert.equal(brain.heldCount, 0);
+  } finally { brain.stop(); }
+});
+
+test('readSavedSession, staleReason and gateFailed', () => {
+  const row = (v?: string) => (k: string) => (k === 'brain_session' ? v : undefined);
+  assert.equal(readSavedSession(row(undefined)), undefined);
+  assert.equal(readSavedSession(row('')), undefined);
+  assert.equal(readSavedSession(row('{bad')), undefined);
+  assert.equal(readSavedSession(row('{"id":"","tokens":1,"at":1}')), undefined);
+  assert.deepEqual(readSavedSession(row('{"id":"a","tokens":1,"at":2}')), { id: 'a', tokens: 1, at: 2 });
+  const now = 10_000_000;
+  assert.equal(staleReason({ id: 'a', tokens: 149_000, at: now - 54 * 60_000 }, now), undefined);
+  assert.equal(staleReason({ id: 'a', tokens: 1, at: now - 56 * 60_000 }, now), 'idle');
+  assert.equal(staleReason({ id: 'a', tokens: 151_000, at: now }, now), 'token limit');
+  assert.deepEqual(['done', 'rejected', 'failed', 'unknown', 'approved'].map(gateFailed), [false, false, true, true, true]);
 });

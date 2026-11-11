@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from './store.ts';
@@ -16,9 +16,29 @@ test('the brain line names who wrote the quoted message and when, in Eastern tim
   assert.equal(own, `[replying to his own message, 11-07 8:05 a.m. Eastern: "Say 'yes' to it"]`, 'inner double quotes cannot end the quote');
 });
 
-test('the brain line keeps the first 200 characters of a long message', () => {
-  const line = quoteLine({ id: 4, role: 'jarvis', text: 'a'.repeat(500), at: '2026-11-07T20:18:00Z' });
-  assert.ok(line.includes(`"${'a'.repeat(QUOTE_CHARS)}…"`));
+test('the brain line keeps the ask of a two-part message, past the first 200 characters', () => {
+  const text = `I merged the prompt cleanup, and all 908 tests pass. ${'The changes are small. '.repeat(20)}\n\n`
+    + 'Story 4060. Which design should the worker build?\n\n2A. Option A, access in the key\n\n2B. Option B, one set of checkboxes';
+  const line = quoteLine({ id: 5304, role: 'jarvis', text, at: '2026-11-07T20:18:00Z' });
+  assert.ok(line.includes('I merged the prompt cleanup'));
+  assert.ok(line.includes('Which design should the worker build? 2A. Option A, access in the key 2B. Option B, one set of checkboxes"]'));
+  assert.ok(!line.includes('…'), 'a message under the cap is not cut');
+});
+
+test('the brain line drops image and report marker lines and links', () => {
+  const text = 'Done.\n\n[report: /a/claude-md-audit.md]\n\nSee https://claude.ai/artifact/6vpU\n\n2B. Option B\n[image: /a/2b.png]\n\nWhich one?';
+  const line = quoteLine({ id: 4, role: 'jarvis', text, at: '2026-11-07T20:18:00Z' });
+  assert.equal(line, '[replying to jarvis, 11-07 3:18 p.m. Eastern: "Done. See 2B. Option B Which one?"]');
+});
+
+test('past the cap the brain line keeps the start and the end of the message', () => {
+  const text = `START ${'a'.repeat(9000)} ASK AT THE END?`;
+  const line = quoteLine({ id: 4, role: 'jarvis', text, at: '2026-11-07T20:18:00Z' });
+  const words = line.slice(line.indexOf('"') + 1, -2);
+  assert.ok(words.startsWith('START a'));
+  assert.ok(words.endsWith('a ASK AT THE END?'));
+  assert.ok(words.includes(' … '));
+  assert.ok(words.length <= QUOTE_CHARS + 3, `${words.length} characters`);
 });
 
 test('only a message from the owner or Jarvis can be quoted', () => {
@@ -86,4 +106,25 @@ test('the swipe locks on a leftward drag only, and a short drag does not reach t
   assert.equal(replyOffset(20), 0, 'never to the right');
   assert.ok(replyOffset(-400) >= -REPLY_SWIPE.max, 'never past max');
   assert.ok(replyOffset(-REPLY_SWIPE.threshold - 40) > -REPLY_SWIPE.threshold - 40, 'slower past the threshold');
+});
+
+// The row under a message (time, Copy, Reply, speaker) hangs in the gap below it on a screen with a mouse. These numbers
+// come from web/app.css, so a change to the gap, the row height or its offset that makes the row touch the next message fails here.
+test('the hover row under a message never reaches the next message, and sits on the Approve row of a proposal', () => {
+  const css = readFileSync(new URL('../web/app.css', import.meta.url), 'utf8');
+  const px = (re: RegExp) => { const m = re.exec(css); assert.ok(m, `not in app.css: ${re}`); return Number(m[1]); };
+  const gap = px(/#items, #pane-lines \{[^}]*gap: (\d+)px/);
+  const height = px(/\.msg-foot \{ position: absolute;[^}]*height: (\d+)px/);
+  const jarvisUp = px(/\.msg-foot \{ position: absolute; top: calc\(100% - (\d+)px\)/);
+  assert.match(css, /\.line-owner > \.msg-foot \{ top: 100%; \}/, "under the owner's bubble the row starts at the bubble's edge");
+  const lineMargin = px(/@media \(hover: hover\) \{\s*\.line:not\(:last-child\) \{ margin-bottom: (\d+)px/);
+  const ownerMargin = px(/@media \(hover: hover\) \{[^@]*?\.line-owner:not\(:last-child\) \{ margin-bottom: (\d+)px/);
+  const clearJarvis = gap + lineMargin - (height - jarvisUp), clearOwner = gap + ownerMargin - height;
+  assert.ok(jarvisUp > 0, 'the row moves up toward its own Jarvis message');
+  assert.ok(clearJarvis >= 8, `a Jarvis message's row keeps 8px clear of the next message, has ${clearJarvis}`);
+  assert.ok(clearOwner >= 4, `an owner message's row keeps 4px clear of the next message, has ${clearOwner}`);
+  // A proposal: the row is in the flow next to Reject and Approve and wraps under them, never absolute below them.
+  assert.match(css, /\.line:has\(> \.chat-decide:not\(:empty\)\) \{ display: flex; flex-wrap: wrap; align-items: flex-end;[^}]*margin-bottom: 0;/);
+  assert.match(css, /\.line:has\(> \.chat-decide:not\(:empty\)\) > \.msg \{ flex: 0 0 100%;/);
+  assert.match(css, /\.line:has\(> \.chat-decide:not\(:empty\)\) > \.msg-foot \{ position: static; margin: \d+px 0 \d+px auto; \}/);
 });

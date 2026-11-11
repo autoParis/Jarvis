@@ -82,12 +82,39 @@ export function peerMessage(e: any): PeerMessage | undefined {
   return { from: name || undefined, text: m[2] };
 }
 
+/** The brain session jarvisd keeps in the `state` table, so a jarvisd restart resumes the same conversation. */
+export type SavedSession = { id: string; tokens: number; at: number };
+export const SESSION_KEY = 'brain_session';
+/** The saved session, or undefined when none is saved or the row does not parse. */
+export function readSavedSession(get: (key: string) => string | undefined): SavedSession | undefined {
+  try {
+    const s = JSON.parse(get(SESSION_KEY) || 'null');
+    if (s && typeof s.id === 'string' && s.id && Number.isFinite(s.tokens) && Number.isFinite(s.at)) return s;
+  } catch { /* a bad row starts fresh */ }
+  return undefined;
+}
+/** Why a saved session must start fresh (the reset rule, spec section 8), or undefined when it can resume. */
+export function staleReason(s: SavedSession, now = Date.now()): string | undefined {
+  if (now - s.at > IDLE_RESET_MS) return 'idle';
+  if (s.tokens > TOKEN_RESET) return 'token limit';
+  return undefined;
+}
+/**
+ * A gate button's outcome that must wake the brain at once: anything but a clean finish ('done') or a rejection.
+ * 'failed' and 'unknown' are failures; any other status is unexpected after a button, so it wakes the brain too.
+ */
+export function gateFailed(status: string): boolean { return status !== 'done' && status !== 'rejected'; }
+/** At most this many held notices ride on the next turn; older ones drop first. */
+const HELD_MAX = 20;
+
 export type BrainOptions = {
   cwd: string;
   env: NodeJS.ProcessEnv;
   systemPrompt: () => string; // stable across sessions so it stays cached
   brief: () => string;        // built in code from the store, sent as the first message
   model?: BrainModel;         // the saved setting; Opus 5.5 at medium when absent
+  saved?: SavedSession;       // the session the last jarvisd ran; resumed at the first start when the reset rule allows
+  save?: (s: SavedSession | null) => void; // keeps the live session in the state table; null after a real reset
 };
 
 /** What the app shows: the saved setting, and what the live process runs (null when no process is up). */
@@ -101,11 +128,16 @@ export type BrainStatus = { setting: BrainModel; running: BrainModel | null; swi
  * instead of 'reply'; The owner's messages queue until it ends, as for any busy turn.
  * Every hand-over and every turn's end goes to the log, so a message that got no answer shows as a gap.
  */
+/** One message for the next turn. `turn` is the owner's stored message. `cardApproves` marks his non-refusal answer on a brain ask card. */
+type Queued = { text: string; turn?: number; cardApproves?: boolean };
+
 export class Brain extends EventEmitter {
   private proc?: ChildProcess;
-  private queue: { text: string; turn?: number }[] = [];
+  private queue: Queued[] = [];
   /** the owner's messages in the running turn. */
   private handed: number[] = [];
+  /** The running turn holds the owner's answer on one of the brain's own ask cards, and that answer is not a refusal. */
+  private cardApproves = false;
   busy = false;
   /** The running turn was started by a cross-session message, not by jarvisd. */
   private unrequested = false;
@@ -125,8 +157,16 @@ export class Brain extends EventEmitter {
   /** What the live process was started with; the model is confirmed by its init event. */
   private running?: BrainModel;
 
+  /** The session the last jarvisd ran, tried once at the first start. */
+  private saved?: SavedSession;
+  /** The process resumed the saved session and has not finished a turn yet: if it exits now, the batch goes to a fresh one. */
+  private resumingSaved = false;
+  private inflight: Queued[] = [];
+  /** Notices that need no answer of their own (gate buttons, ask cards). They ride as one line on the next real turn. */
+  private held: string[] = [];
+
   private o: BrainOptions;
-  constructor(o: BrainOptions) { super(); this.o = o; this.setting = { ...(o.model ?? DEFAULT_BRAIN_MODEL) }; }
+  constructor(o: BrainOptions) { super(); this.o = o; this.setting = { ...(o.model ?? DEFAULT_BRAIN_MODEL) }; this.saved = o.saved; }
 
   status(): BrainStatus {
     return { setting: { ...this.setting }, running: this.proc && this.running ? { ...this.running } : null, switching: this.switching, sessionId: this.sessionId };
@@ -161,15 +201,61 @@ export class Brain extends EventEmitter {
     this.pump();
   }
 
-  /** `turn` is the stored turn id of a message from the owner. */
-  send(text: string, turn?: number) { this.queue.push({ text, turn }); this.pump(); }
+  /**
+   * `turn` is the stored turn id of a message from the owner. `card.approves` is set only by brainasks.ts, for the
+   * owner's own answer on one of the brain's ask cards that is not a refusal (answeringOwnerCard).
+   */
+  send(text: string, turn?: number, card?: { approves: boolean }) { this.queue.push({ text, turn, cardApproves: card?.approves === true }); this.pump(); }
+  /**
+   * A notice the brain needs to know but not answer: it does not start a turn. It rides as one context line in front
+   * of the next turn that something else starts. A failure must use send(), so it wakes the brain at once.
+   */
+  hold(text: string) {
+    this.held.push(text.replace(/\s+/g, ' ').replace(/\s*Reply SILENT\.?\s*$/i, '').trim());
+    if (this.held.length > HELD_MAX) this.held.splice(0, this.held.length - HELD_MAX);
+    this.emit('log', 'brain holds a notice for the next turn', { held: this.held.length, notice: text.slice(0, 18) });
+  }
+  /** How many notices wait for the next turn. */
+  get heldCount() { return this.held.length; }
+
+  private persist() {
+    if (!this.sessionId) return;
+    this.o.save?.({ id: this.sessionId, tokens: this.contextTokens, at: this.lastTurnAt || Date.now() });
+  }
   /** The running turn holds a message from the owner. Event, check and gate messages carry no turn id. */
   get answeringOwner() { return this.handed.length > 0; }
+  /**
+   * The running turn holds the owner's tap or typed answer on one of the brain's own ask cards, not a refusal.
+   * Only reply-add reads it. A worker ask tap, a held notice, a [check] or a [work list] line never sets it.
+   */
+  get answeringOwnerCard() { return this.cardApproves; }
 
   stop() { this.stopping = true; if (this.busy) this.emit('working', false); this.busy = false; this.unrequested = false; clearTimeout(this.hangTimer); this.proc?.kill(); this.proc = undefined; }
 
-  /** A fresh session gets the state brief; a resumed one (model switch) already has its history. */
+  /**
+   * The first start of this jarvisd resumes the session the last one ran, when the reset rule allows it. It keeps that
+   * session's token count and last turn time, so the normal reset rule goes on from there.
+   */
+  private startFirst() {
+    const s = this.saved;
+    this.saved = undefined;
+    const why = s && staleReason(s);
+    if (!s || why) {
+      if (s) this.emit('log', 'brain saved session not resumed', { session: s.id, why });
+      this.start();
+      return;
+    }
+    this.emit('log', 'brain resumes the saved session', { session: s.id, tokens: s.tokens });
+    this.start(s.id);
+    this.contextTokens = s.tokens;
+    this.lastTurnAt = s.at;
+    this.resumingSaved = true;
+    this.held.unshift(`jarvisd restarted at ${new Date().toISOString()}. This is the same conversation, but the state may have moved while it was down.`);
+  }
+
+  /** A fresh session gets the state brief; a resumed one (model switch, jarvisd restart) already has its history. */
   private start(resume?: string) {
+    this.resumingSaved = false;
     this.stopping = false;
     const model = { ...this.setting };
     const p = spawn('claude', brainArgs({ model, systemPrompt: this.o.systemPrompt(), resume, home: process.env.HOME }),
@@ -178,7 +264,9 @@ export class Brain extends EventEmitter {
     this.running = model;
     p.on('error', err => this.emit('log', `brain failed to start: ${err.message}`));
     if (resume) this.sessionId = resume;
-    else { this.contextTokens = 0; this.sessionId = undefined; }
+    else { this.contextTokens = 0; this.lastTurnAt = 0; this.sessionId = undefined; this.o.save?.(null); }
+    // A process that exits at once (a session that will not resume) closes stdin under a pending write.
+    p.stdin!.on('error', err => this.emit('log', `brain stdin: ${err.message}`));
     p.stderr!.on('data', d => this.emit('log', `brain stderr: ${String(d).trim()}`));
     readline.createInterface({ input: p.stdout! }).on('line', line => this.onLine(line));
     p.on('exit', code => {
@@ -187,10 +275,21 @@ export class Brain extends EventEmitter {
       this.busy = false;
       this.unrequested = false;
       clearTimeout(this.hangTimer);
-      if (!this.stopping) {
-        this.emit('log', `brain exited with ${code}`);
-        this.restartWithNotice();
+      if (this.stopping) return;
+      this.emit('log', `brain exited with ${code}`);
+      if (this.resumingSaved) {
+        // The saved session would not resume (gone, or refused): start fresh and hand it the same batch, with no notice.
+        this.emit('log', 'brain saved session would not resume, starting fresh');
+        this.queue.unshift(...this.inflight);
+        this.inflight = [];
+        this.handed = []; this.cardApproves = false;
+        this.endWork('');
+        this.emit('working', false);
+        this.start();
+        this.pump();
+        return;
       }
+      this.restartWithNotice();
     });
     // The brief rides in front of whatever is queued.
     if (!resume) this.queue.unshift({ text: this.o.brief() });
@@ -198,7 +297,7 @@ export class Brain extends EventEmitter {
 
   private restartWithNotice() {
     if (this.handed.length) this.emit('log', 'brain lost a running turn', { turns: this.handed });
-    this.handed = [];
+    this.handed = []; this.cardApproves = false;
     // What the lost turn did stays readable.
     this.endWork('');
     this.emit('working', false);
@@ -214,12 +313,19 @@ export class Brain extends EventEmitter {
     if (this.busy || this.switching || !this.queue.length) return;
     const stale = this.proc && (Date.now() - this.lastTurnAt > IDLE_RESET_MS || this.contextTokens > TOKEN_RESET);
     if (stale) { this.emit('log', 'brain reset (idle or token limit)'); this.stop(); }
-    if (!this.proc) this.start();
+    if (!this.proc) { if (this.saved) this.startFirst(); else this.start(); }
     const batch = this.queue.splice(0);
-    const text = batch.map(m => m.text).join('\n\n');
+    this.inflight = batch;
+    // Held notices go in front as one line; a fresh session's brief stays first.
+    const notes = this.held.splice(0);
+    const at = batch[0]?.text.startsWith('[session start') ? 1 : 0;
+    const parts = batch.map(m => m.text);
+    if (notes.length) parts.splice(at, 0, `[held notices, no answer needed] ${notes.join(' | ')}`);
+    const text = parts.join('\n\n');
     this.handed = batch.flatMap(m => m.turn ?? []);
-    // The start of each message names its kind ("[orca event]", "[The owner, in English"), and stops before the owner's words.
-    this.emit('log', 'brain handed', { turns: this.handed, messages: batch.map(m => m.text.slice(0, 18)), chars: text.length });
+    this.cardApproves = batch.some(m => m.cardApproves);
+    // The start of each message names its kind ("[worker event]", "[The owner, in English"), and stops before the owner's words.
+    this.emit('log', 'brain handed', { turns: this.handed, messages: batch.map(m => m.text.slice(0, 18)), held: notes.length, chars: text.length });
     this.busy = true;
     this.unrequested = false;
     this.sentAt = Date.now();
@@ -237,7 +343,7 @@ export class Brain extends EventEmitter {
     this.unrequested = true;
     this.sentAt = Date.now();
     this.steps = [];
-    this.handed = [];
+    this.handed = []; this.cardApproves = false;
     this.emit('working', true);
     this.armHang();
   }
@@ -267,6 +373,7 @@ export class Brain extends EventEmitter {
     if (e.type === 'system' && e.subtype === 'init') {
       if (this.sessionId && e.session_id && e.session_id !== this.sessionId) this.emit('log', 'brain resumed under a new session id', { was: this.sessionId, now: e.session_id });
       this.sessionId = e.session_id;
+      this.persist();
       if (typeof e.model === 'string' && this.running && e.model !== this.running.model) {
         this.emit('log', 'brain reports a different model than it was started with', { asked: this.running.model, got: e.model });
         this.running = { ...this.running, model: e.model };
@@ -275,31 +382,52 @@ export class Brain extends EventEmitter {
     }
     if (this.busy) addSteps(this.steps, e);
     if (e.type === 'result') {
+      const peer = peerMessage(e);
+      // A worker's message can run ahead of the turn jarvisd just wrote to stdin: Claude Code queued jarvisd's message,
+      // ran the peer message first, and prints its result (with `origin`) before jarvisd's. Worker be3fe01a, 2026-11-09
+      // 21:25:13: the peer arrived 170 ms after jarvisd's "[worker event]". That result answers the worker, not jarvisd,
+      // and jarvisd's turn is still running: its own result comes next.
+      const jumpedAhead = !!peer && !this.unrequested && this.busy;
       clearTimeout(this.hangTimer);
-      this.busy = false;
+      this.busy = jumpedAhead;
       this.lastTurnAt = Date.now();
       this.endWork(String(e.result ?? ''));
-      this.emit('working', false);
+      if (jumpedAhead) this.armHang(); else this.emit('working', false);
       const u = e.usage ?? {};
       // Turn usage sums every model call in the turn; the context size is the last call's input.
       const last = Array.isArray(u.iterations) && u.iterations.length ? u.iterations[u.iterations.length - 1] : u;
       this.contextTokens = (last.input_tokens ?? 0) + (last.cache_read_input_tokens ?? 0) + (last.cache_creation_input_tokens ?? 0);
+      if (e.session_id && !this.sessionId) this.sessionId = e.session_id;
+      this.resumingSaved = false;
+      if (!jumpedAhead) this.inflight = [];
+      this.persist();
       const text = String(e.result ?? '').trim();
       const usage = {
         session_id: e.session_id, input_tokens: u.input_tokens, cache_read: u.cache_read_input_tokens,
         cache_write: u.cache_creation_input_tokens, output_tokens: u.output_tokens, latency_ms: Date.now() - this.sentAt,
         is_error: Boolean(e.is_error),
       };
-      if (this.unrequested) {
+      if (jumpedAhead) {
+        this.emit('worker', text, usage, peer);
+        this.emit('log', 'brain answered a worker message that ran ahead of a jarvisd turn', { chars: text.length, from: peer?.from, turns: this.handed, error: Boolean(e.is_error) });
+        return;
+      }
+      if (this.unrequested && !peer) {
+        // No peer message at all: this is the brain's own reply that came one result late. 2026-11-11 13:51Z: after a
+        // resume, a stale background-task notice answered first and closed the owner's turn 5973. His real reply then
+        // came as this turn and went to an unknown-sender card, unspoken. It is a reply: said and stored like any other.
         this.unrequested = false;
-        const peer = peerMessage(e);
+        this.emit('reply', text, usage, []);
+        this.emit('log', 'brain answered a turn it started with no peer message, delivered as a reply', { chars: text.length, error: Boolean(e.is_error), silent: text === 'SILENT' });
+      } else if (this.unrequested) {
+        this.unrequested = false;
         this.emit('worker', text, usage, peer);
         this.emit('log', 'brain answered a worker message', { chars: text.length, from: peer?.from, error: Boolean(e.is_error) });
       } else {
         this.emit('reply', text, usage, this.handed);
         this.emit('log', 'brain answered', { turns: this.handed, error: Boolean(e.is_error), silent: text === 'SILENT' });
       }
-      this.handed = [];
+      this.handed = []; this.cardApproves = false;
       this.pump();
     }
   }

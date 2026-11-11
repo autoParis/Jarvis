@@ -10,8 +10,9 @@
 // - A row with no request is a plain row.
 // - A row finished (done, failed or stopped) over an hour ago goes under its group's closed Done fold. It stays in view
 //   while its request is open (working, waiting, failed), or while it has no finish time. The fold only hides; it deletes nothing.
-import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, STATE } from './requestlist.js';
+import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, docLinkHtml, STATE } from './requestlist.js';
 import { formatStamp } from './workfold.js';
+import { actionsWith } from './contract.js';
 
 export const GROUPS = [['story', 'Stories'], ['babysit', 'Babysitting'], ['side', 'Side chats'], ['terminal', 'Terminals'], ['other', 'Other']];
 // A project terminal's mark: a small screen with a prompt (daemon/termrows.ts).
@@ -81,14 +82,11 @@ function itemHtml(i, ctx) {
   const note = !req && idleNote && idleNote.length > 14 ? idleNote : !row && !req.row ? closedNote(req) : '';
   const isHidden = row && ctx.hidden.has(row.id);
   const openId = row?.id ?? openIdOf(req);
-  // On an idle side chat the × closes the chat. On every other row it only hides the row.
-  const closes = row?.sideChat && row.state === 'idle' && !isHidden;
-  const hide = closes
-    ? `<button type="button" class="hide" data-close="${esc(row.dispatch)}" aria-label="Close ${esc(title)}" title="Close this side chat. Its worker stops.">×</button>`
-    : `<button type="button" class="hide"${row ? ` data-hide-row="${esc(row.id)}"` : ''}${req ? ` data-hide="${req.id}"` : ''}${isHidden ? ' data-unhide' : ''} aria-label="${isHidden ? 'Show' : 'Hide'} ${esc(title)} in this list" title="${isHidden ? 'Show in the list again' : 'Hide from this list. Nothing in Orca stops.'}">${isHidden ? '↺' : '×'}</button>`;
+  // The × only hides the row.
+  const hide = `<button type="button" class="hide"${row ? ` data-hide-row="${esc(row.id)}"` : ''}${req ? ` data-hide="${req.id}"` : ''}${isHidden ? ' data-unhide' : ''} aria-label="${isHidden ? 'Show' : 'Hide'} ${esc(title)} in this list" title="${isHidden ? 'Show in the list again' : 'Hide from this list. Nothing stops.'}">${isHidden ? '↺' : '×'}</button>`;
   const state = failed ? 'failed' : row?.state ?? req.status;
   return `<div class="wrow s-${esc(state)}${openId && ctx.reading === openId ? ' reading' : ''}${isHidden ? ' hidden-row' : ''}"${openId ? ` data-id="${esc(openId)}" role="button" tabindex="0"` : ''} title="${esc(status)}${row?.note && row.state !== 'idle' ? `: ${esc(row.note)}` : ''}">`
-    + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
+    + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? docLinkHtml(req) + reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
     + (note ? `<div class="note">${esc(note)}</div>` : '') + '</div>';
 }
 
@@ -144,7 +142,6 @@ export function approvalTag(action, args) {
   if (action === 'gmail-send') return args?.to ? `Email to ${args.to}${args.cc ? `, cc ${args.cc}` : ''}` : 'Send an email';
   if (action === 'worker-start') return story ? `Story ${story}` : 'Start a worker';
   if (action === 'terminal-send') return 'Send into a session';
-  if (action === 'worker-send') return 'Message a worker';
   if (action === 'worker-stop') return 'Stop a worker';
   if (action === 'gh-pr-close') return `Close PR ${args?.number ?? ''}`.trim();
   if (action === 'fbm-client-pause') return `Pause ${args?.client ?? 'a client'}`;
@@ -155,7 +152,7 @@ export function approvalTag(action, args) {
 }
 
 /** These read back what they did, so their result is worth showing. Other results are ids and raw output. */
-const READS_BACK = new Set(['gh-pr-close', 'fbm-client-pause', 'prod-mcp-call']);
+const READS_BACK = actionsWith('readsBack');
 
 /** The button labels of a pending card. A worker's permission prompt is allowed or denied, not approved. */
 export function approvalButtons(action) {
@@ -209,8 +206,51 @@ export function approvalPairHtml(id, action) {
   return `<div class="pair" data-approval="${Number(id)}"><button type="button" class="no">${esc(no)}</button><button type="button" class="yes">${esc(yes)}</button></div>`;
 }
 
+/**
+ * Approve and Reject under the Jarvis message that asked for a proposal (approvals.chat_turn, set by daemon/chatlink.ts).
+ * Only pending proposals not yet tapped get buttons, so a decision anywhere (here, the Requests card, a spoken yes) removes them.
+ * With more than one proposal on the message, each pair names its proposal.
+ */
+export function chatDecisionHtml(approvals, turn, tapped = new Set()) {
+  const open = [...approvals].filter(a => a.chat_turn === turn && a.status === 'pending' && !tapped.has(a.id));
+  return open.map(a => {
+    const [yes, no] = approvalButtons(a.action);
+    return `<div class="chat-pair" data-approval="${Number(a.id)}">${open.length > 1 ? `<span class="chat-say">${esc(a.say)}</span>` : ''}`
+      // Approve is on the right, where the thumb reaches on a phone.
+      + `<button type="button" class="chat-no">${esc(no)}</button><button type="button" class="chat-yes">${esc(yes)}</button></div>`;
+  }).join('');
+}
+
 /** What the approval will do, in its own stored words. A named action stores the exact command, which says it all. */
 export function approvalDetail(args) {
   if (args.runs) return args.runs;
   return [toolLine(args), args.repo, args.dispatch, args.terminal, args.to && 'To: ' + args.to, args.subject && 'Subject: ' + args.subject, args.title, args.text, args.spec && args.spec.slice(0, 300)].filter(Boolean).join('\n');
+}
+
+/** How long Stop on a started notice works after the start ended. The same number as UNDO_MS in daemon/gate.ts. */
+export const UNDO_MS = 60_000;
+const dbMs = t => Date.parse(`${String(t).replace(' ', 'T')}Z`);
+
+/**
+ * When Stop on a worker Jarvis started at once stops working, in ms since 1970. Infinity while the start still runs:
+ * a press then stops the worker as soon as the start ends. 0 when there is nothing to stop.
+ */
+export function undoDeadline(a) {
+  if (a?.decided_by !== 'owner-asked') return 0;
+  if (a.status === 'approved') return Infinity;
+  if (a.status !== 'done' && a.status !== 'unknown') return 0;
+  return dbMs(a.finished_at ?? a.decided_at) + UNDO_MS;
+}
+
+/**
+ * The chat line for a worker Jarvis started at once because the owner asked for it: Starting or Started, the title,
+ * and Stop while it works. `stopped` is what Stop led to ('Stopping', 'Stopped', or an error), once pressed.
+ */
+export function startedNoticeHtml(a, args, now, stopped) {
+  const title = args?.taskTitle || a.say;
+  const state = a.status === 'approved' ? 'Starting' : a.status === 'failed' ? 'Did not start' : 'Started';
+  const failed = a.status === 'failed' ? `<div class="started-why">${esc(a.result ?? 'no reason given')}</div>` : '';
+  const stop = !stopped && now < undoDeadline(a) ? `<button type="button" class="undo" data-undo="${Number(a.id)}">Stop</button>` : '';
+  return `<span class="pill${a.status === 'failed' ? ' failed' : ''}">${esc(state)}</span><span class="started-t">${esc(title)}</span>`
+    + (stopped ? `<span class="started-stop">${esc(stopped)}</span>` : stop) + failed;
 }

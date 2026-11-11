@@ -31,10 +31,21 @@ export const OWNER = env.JARVIS_OWNER_CALLED?.trim() || 'the owner';
 export const OWNER_CAP = OWNER.charAt(0).toUpperCase() + OWNER.slice(1);
 /** The dealer list the migration list seeds from once, on the first start. A local file keeps a real list out of the repo. */
 export const DEALERS_FILE = env.JARVIS_DEALERS_FILE?.trim() || '';
+/** The 7:30 AM Eastern sync of the migration list to the sheet (sheetsync.ts): off, dry-run (plans and reports only) or write. */
+const sync = env.JARVIS_MIGRATION_SHEET_SYNC?.trim().toLowerCase();
+export const MIGRATION_SHEET_SYNC: 'off' | 'dry-run' | 'write' = sync === 'off' || sync === 'write' ? sync : 'dry-run';
 /** Words of the email triage prompt: "<owner name>, <role> <company>", the team's first names, and what the clients are called. */
 export const OWNER_ROLE = env.JARVIS_OWNER_ROLE?.trim() || 'who runs';
 export const TEAM = list(env.JARVIS_TEAM);
 export const CLIENT_WORD = env.JARVIS_CLIENT_WORD?.trim() || 'client';
 export const CLIENTS_WORD = env.JARVIS_CLIENTS_WORD?.trim() || 'clients';
 /** Refs whose merged branches count as delivered, besides master, such as an archived history kept only on this Mac. */
+/** The launchd label jarvisd runs under. bin/install-service installs it, bin/jarvis-restart restarts it, and the Scheduled tasks
+ * screen never lets the owner disable it. */
+const label = env.JARVIS_SERVICE_LABEL?.trim() || '';
+export const SERVICE_LABEL = /^[\w.-]{1,100}$/.test(label) ? label : 'local.jarvis';
+/** The launchd label prefixes the Scheduled tasks screen lists. The default is the service label's own prefix. */
+export const LAUNCHD_PREFIXES = list(env.JARVIS_LAUNCHD_PREFIXES).length ? list(env.JARVIS_LAUNCHD_PREFIXES) : [SERVICE_LABEL.replace(/[^.]*$/, '')];
 export const DONE_REFS = list(env.JARVIS_DONE_REFS).filter(r => /^[\w./-]+$/.test(r) && !r.startsWith('-'));
+/** The environment for every command jarvisd runs: its own, a copy taken at start. */
+export const cleanEnv: NodeJS.ProcessEnv = { ...env };

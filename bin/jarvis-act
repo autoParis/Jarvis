@@ -2,6 +2,10 @@
 // The approval gate CLI the brain calls. jarvisd holds the rules; this only relays.
 //   jarvis-act propose --action worker-start --args '{"repo":"/abs/path","spec":"..."}' --say "Start 4412 on Opus?"
 //                      [--approves "<what happens if the owner approves>"] [--rests-on "<the fact the proposal rests on>"]
+//                      [--owner-asked]   the owner's own message in this turn asks for the work. On the Jarvis repo a
+//                                        worker-start then starts at once, with a Stop notice instead of a card.
+//   jarvis-act revise <id> --args '<the whole new json>' [--say ...] [--approves ...] [--rests-on ...]
+//                              the owner answered the open card with a change: the card shows the new content in place
 //   jarvis-act confirm <id>    after the owner says yes (refused unless he spoke after the proposal)
 //   jarvis-act reject <id>     after the owner says no
 //   jarvis-act list            pending proposals
@@ -13,6 +17,10 @@
 //   jarvis-act reply-list      replies not closed yet
 //   jarvis-act reply-resume <id>   the owner says the manual steps are done, or to try a failed send again
 //   jarvis-act reply-drop <id>     the owner says not to send it
+//   jarvis-act ask --question "<text>" --option "<label>" --option "<label>" [--recommended 0] [--about "<story or topic>"]
+//                              your own question as an ask card in the app, options as buttons. A tap or a typed answer
+//                              comes back as an [ask card answer] line. Prints the card's id (brain:<n>).
+//   jarvis-act ask-done <id> --answer "<his answer>"   the owner answered that ask in the chat; its card closes
 const [cmd, ...rest] = process.argv.slice(2);
 const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
 const url = process.env.JARVIS_URL ?? 'http://127.0.0.1:7717';
@@ -21,6 +29,20 @@ if (cmd === 'email-done') {
   if (!/^gmail:\w+$/.test(rest[0] ?? '')) { console.error('usage: jarvis-act email-done gmail:<id>'); process.exit(2); }
   const res = await fetch(`${url}/api/internal/answered`, { method: 'POST', body: JSON.stringify({ id: rest[0], answer: `left to ${process.env.JARVIS_OWNER_CALLED?.trim() || 'the owner'}` }) });
   console.log(res.ok ? 'ok' : await res.text());
+  process.exit(res.ok ? 0 : 1);
+}
+if (cmd === 'ask' || cmd === 'ask-done') {
+  const options = rest.flatMap((a, i) => a === '--option' && rest[i + 1] !== undefined ? [rest[i + 1]] : []);
+  const req = cmd === 'ask'
+    ? ['ask', { question: flag('question'), options, recommended: flag('recommended'), about: flag('about') }]
+    : ['ask-done', { id: rest[0]?.startsWith('--') ? undefined : rest[0], answer: flag('answer') }];
+  if (cmd === 'ask' && !flag('question')) { console.error('usage: jarvis-act ask --question "<text>" --option "<label>" --option "<label>" [--recommended 0] [--about "<topic>"]'); process.exit(2); }
+  if (cmd === 'ask-done' && (!/^brain:\d+$/.test(rest[0] ?? '') || !flag('answer'))) { console.error('usage: jarvis-act ask-done brain:<n> --answer "<his answer>"'); process.exit(2); }
+  const res = await fetch(`${url}/api/internal/${req[0]}`, { method: 'POST', body: JSON.stringify(req[1]) });
+  const text = await res.text();
+  let out = text;
+  try { const j = JSON.parse(text); out = j.error ?? (cmd === 'ask' ? `ok ${j.id}` : `ok ${j.id} closed`); } catch {}
+  if (res.ok) console.log(out); else console.error(out);
   process.exit(res.ok ? 0 : 1);
 }
 if (cmd === 'message-add') {
@@ -44,11 +66,17 @@ if (cmd === 'propose') {
   let args;
   try { args = JSON.parse(flag('args') ?? '{}'); } catch { console.error('--args must be JSON'); process.exit(2); }
   const card = flag('approves') || flag('rests-on') ? { approves: flag('approves'), restsOn: flag('rests-on') } : undefined;
-  body = { action: flag('action'), args, say: flag('say'), card };
+  body = { action: flag('action'), args, say: flag('say'), card, ownerAsked: rest.includes('--owner-asked') };
+} else if (cmd === 'revise') {
+  let args;
+  try { args = JSON.parse(flag('args') ?? ''); } catch { console.error('--args must be the whole new JSON'); process.exit(2); }
+  if (!/^\d+$/.test(rest[0] ?? '')) { console.error('usage: jarvis-act revise <id> --args <json> [--say <q>] [--approves <t>] [--rests-on <t>]'); process.exit(2); }
+  const card = flag('approves') || flag('rests-on') ? { approves: flag('approves'), restsOn: flag('rests-on') } : undefined;
+  body = { id: Number(rest[0]), args, say: flag('say'), card };
 } else if (cmd === 'confirm' || cmd === 'reject') {
   body = { id: Number(rest[0]) };
 } else if (cmd !== 'list') {
-  console.error('usage: jarvis-act propose|confirm|reject|list|email-done|message-add|reply-add|reply-list|reply-resume|reply-drop'); process.exit(2);
+  console.error('usage: jarvis-act propose|revise|confirm|reject|list|ask|ask-done|email-done|message-add|reply-add|reply-list|reply-resume|reply-drop'); process.exit(2);
 }
 const res = await fetch(`${url}/api/internal/gate/${cmd}`, { method: body ? 'POST' : 'GET', body: body && JSON.stringify(body) });
 const text = await res.text();

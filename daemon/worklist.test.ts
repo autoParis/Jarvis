@@ -6,13 +6,12 @@ import { join } from 'node:path';
 import { openStore } from './store.ts';
 import { auditEntries, askCard } from './asks.ts';
 import { makeRequests, requestDetail } from './requests.ts';
-import { findWorkerSession } from './transcript.ts';
 import { mergeWork, workListHtml, folded, DONE_FOLD_MS, requestDetailHtml, groupOf, groupOpen, doneLine, approvalTag, approvalDetail, approvalButtons, approvalOutcomeText } from '../web/worklist.js';
 import { requestListHtml } from '../web/requestlist.js';
 
 const NOW = Date.parse('2026-11-02T15:00:00Z');
 const at = (min = 5) => new Date(NOW - min * 60_000).toISOString();
-const row = (id: string, extra: object = {}) => ({ id, kind: 'worker', dispatch: id, title: `Row ${id}`, group: 'other', state: 'working', sideChat: false, steer: 'auto', ...extra });
+const row = (id: string, extra: object = {}) => ({ id, kind: 'worker', dispatch: id, title: `Row ${id}`, group: 'other', state: 'working', steer: 'auto', ...extra });
 const req = (id: number, status: string, extra: object = {}) => ({ id, title: `Req ${id}`, words: null, status, at: at(), startedAt: at(60), ...extra });
 const none = new Set<string>();
 const itemsOf = (m: any, g: string) => m.groups.find((x: any) => x.key === g).items;
@@ -25,22 +24,6 @@ test('a request and its row are one item, with the request\'s title, status and 
   assert.match(html, /#1 The ask/);
   assert.doesNotMatch(html, /Row a/);
   assert.match(html, /data-hide-row="a" data-hide="1"/, 'Hide takes both off');
-});
-
-test('the × closes an idle side chat and only hides every other row', () => {
-  const html = (r: object, hidden = none) => workListHtml(mergeWork([row('a', r)], [], hidden), { ...ctx, hidden });
-  const idle = html({ sideChat: true, state: 'idle' });
-  assert.match(idle, /class="hide" data-close="a"/);
-  assert.doesNotMatch(idle, /data-hide-row|close-offer|Close it\?/);
-  assert.doesNotMatch(html({ sideChat: true, state: 'working' }), /data-close/);
-  assert.doesNotMatch(html({ state: 'idle' }), /data-close/);
-});
-
-test('a hidden idle side chat keeps ↺, so bringing it back never closes it', () => {
-  const hidden = new Set(['a']);
-  const out = workListHtml(mergeWork([row('a', { sideChat: true, state: 'idle' })], [], hidden, true), { ...ctx, hidden });
-  assert.doesNotMatch(out, /data-close/);
-  assert.match(out, /data-unhide/);
 });
 
 test('a working, waiting or failed request with no row still shows, in the group its title implies, with status and Hide', () => {
@@ -185,7 +168,7 @@ test('a native row renders like any other: a short Done note in the age column, 
 
 test('the audit log has answered asks and decided approvals, newest first, and nothing else', () => {
   const store = openStore(':memory:');
-  const add = (id: string, status: string, answer?: string) => { store.insertItem({ source: 'orca', external_id: id, kind: 'question', subject: 'Q', body: `STORY: 1 x\nQUESTION: ${id}?`, options: JSON.stringify(['Yes']) }); store.markItem(id, status, answer); };
+  const add = (id: string, status: string, answer?: string) => { store.insertItem({ source: 'native', external_id: id, kind: 'question', subject: 'Q', body: `STORY: 1 x\nQUESTION: ${id}?`, options: JSON.stringify(['Yes']) }); store.markItem(id, status, answer); };
   add('answered', 'answered', 'Yes');
   add('closed', 'done');
   add('open', 'spoken');
@@ -222,120 +205,24 @@ test('a folder row with no conversation opens its record, and its × still hides
   assert.match(requestListHtml([req(2, 'done', { row: 'a' })], { done: true }, NOW), /data-row="a"/);
 });
 
-// ---- a worker stopped before Jarvis recorded its session ----
+// ---- a request whose worker left the list ----
 const DISPATCH = 'ctx_stopped';
-const line = (type: string, text: string) => JSON.stringify({ type, timestamp: '2026-11-02T20:08:05Z', message: { content: [{ type: 'text', text }] } });
-function closedRig(hits: (dir: string) => object[], show: object = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'jarvis-closed-'));
+
+test('a stopped worker Jarvis knows nothing more about still opens, with the record and no transcript', async () => {
   const store = openStore(':memory:');
-  const calls: string[][] = [];
-  const orca = async (args: string[]): Promise<any> => {
-    calls.push(args);
-    if (args[0] === 'search') return { ok: true, result: { hits: hits(dir) } };
-    if (args[1] === 'worker-show') return { ok: true, result: show };
-    return { ok: true, result: { runs: [] } };
-  };
-  const reqs = makeRequests({ store, log: () => {}, orca, transcriptDirs: [dir], repoOf: async () => undefined, onChange: () => {} });
+  const reqs = makeRequests({ store, log: () => {}, repoOf: async () => undefined, onChange: () => {} });
   const a = store.addApproval({ action: 'worker-start', args: JSON.stringify({ taskTitle: 'Stopped one' }), say: 'Start?' });
   store.decide(a.id, 'approved', 'button');
   store.finishApproval(a.id, 'done', JSON.stringify({ dispatchId: DISPATCH }));
   store.addRequest({ dispatch_id: DISPATCH, approval_id: a.id, action: 'worker-start', title: 'Stopped one', words: 'Fix the link' });
   const id = store.requests()[0].id;
-  return { dir, store, reqs, calls, id, done: () => rmSync(dir, { recursive: true, force: true }) };
-}
-const stoppedWork = { at: '', rows: [], done: [] };
-const hitIn = (dir: string, name: string, cwd = '/w/cockle') => ({ sessionId: name, cwd, source: { filePath: join(dir, `${name}.jsonl`) } });
-
-test('a worker stopped before its session was captured: the poll finds the session, and the row opens with the transcript', async () => {
-  const r = closedRig(dir => [hitIn(dir, 'sess-1')]);
-  writeFileSync(join(r.dir, 'sess-1.jsonl'), [line('user', `You are a worker. --dispatch-id ${DISPATCH} --outcome x`), line('assistant', 'Found the cause.')].join('\n') + '\n');
-  // A terminal worker: Orca lists its path and a failed outcome, and names no session.
-  await r.reqs.sync(stoppedWork, [{ dispatch: DISPATCH, outcome: 'failed', path: '/w/cockle', running: false } as any], true);
-  const stored = r.store.request(r.id)!;
-  assert.equal(stored.status, 'failed');
-  assert.equal(stored.session, 'sess-1');
-  assert.equal(stored.worktree, 'cockle');
-  const view = r.reqs.list();
-  assert.equal(view[0].row, undefined, 'no listed row');
-  assert.match(workListHtml(mergeWork([], view, none), ctx), new RegExp(`data-id="req:${r.id}"`));
-  const read = (await r.reqs.read(r.id, undefined, new Map()))!;
-  assert.equal(read.detail!.transcript, true);
-  assert.deepEqual(read.lines.map(l => l.text).slice(-1), ['Found the cause.']);
-  r.done();
-});
-
-test('a stopped worker Orca knows nothing more about still opens, with the record and no transcript', async () => {
-  const r = closedRig(() => []);
-  await r.reqs.sync(stoppedWork, [], true);
-  const read = (await r.reqs.read(r.id, undefined, new Map()))!;
+  await reqs.sync({ at: '', rows: [] });
+  const read = (await reqs.read(id, undefined, new Map()))!;
   assert.equal(read.lines.length, 0);
   assert.equal(read.detail!.title, 'Stopped one');
   assert.equal(read.detail!.transcript, false);
   assert.match(requestDetailHtml(read.detail), /Its transcript was not found/);
-  assert.equal(await r.reqs.read(9999, undefined, new Map()), undefined);
-  r.done();
-});
-
-test('capture at the stop records the worktree and session from worker-show, and never overwrites', async () => {
-  const r = closedRig(dir => [hitIn(dir, 'sess-1')], { worker: { worktreeId: 'x::/w/cockle' }, terminalResource: { endpointIncarnation: 'x::/w/cockle@@1:2' } });
-  writeFileSync(join(r.dir, 'sess-1.jsonl'), line('user', `--dispatch-id ${DISPATCH}`) + '\n');
-  await r.reqs.capture(DISPATCH);
-  assert.equal(r.store.request(r.id)!.worktree, 'cockle');
-  assert.equal(r.store.request(r.id)!.session, 'sess-1');
-  r.store.updateRequest(r.id, { worktree: 'mine', session: '' });
-  await r.reqs.capture(DISPATCH);
-  assert.equal(r.store.request(r.id)!.worktree, 'mine');
-  r.done();
-});
-
-test('a chat-tab worker keeps the session Orca names, with no search', async () => {
-  const r = closedRig(() => [], { worker: { worktreeId: 'x::/w/dab' }, terminalResource: { endpointIncarnation: 'structured:abc' } });
-  await r.reqs.capture(DISPATCH);
-  assert.equal(r.store.request(r.id)!.session, 'abc');
-  assert.equal(r.calls.filter(c => c[0] === 'search').length, 0);
-  r.done();
-});
-
-test('the backfill runs once, fills hidden requests too, and never overwrites a value', async () => {
-  const r = closedRig(dir => [hitIn(dir, 'sess-1')], { worker: { worktreeId: 'x::/w/cockle' } });
-  writeFileSync(join(r.dir, 'sess-1.jsonl'), line('user', `--dispatch-id ${DISPATCH}`) + '\n');
-  r.store.addRequest({ dispatch_id: 'ctx_kept', action: 'worker-start', title: 'Kept' });
-  const kept = r.store.requests()[1].id;
-  r.store.updateRequest(kept, { session: 'old', worktree: 'old-tree' });
-  r.store.hideRequest(r.id);
-  assert.equal(await r.reqs.backfill(), 1);
-  assert.equal(r.store.request(r.id)!.session, 'sess-1');
-  assert.equal(r.store.request(kept)!.session, 'old');
-  assert.equal(r.store.request(kept)!.worktree, 'old-tree');
-  const asked = r.calls.length;
-  assert.equal(await r.reqs.backfill(), 0);
-  assert.equal(r.calls.length, asked, 'second start does nothing');
-  r.done();
-});
-
-test('the backfill waits for the next start when Orca does not answer', async () => {
-  const store = openStore(':memory:');
-  const reqs = makeRequests({ store, log: () => {}, orca: async () => ({ ok: false, error: { code: 'down' } }) as any, repoOf: async () => undefined, onChange: () => {} });
-  assert.equal(await reqs.backfill(), 0);
-  assert.equal(store.getState('requestsSessionBackfill'), undefined);
-});
-
-test('a session counts as the worker\'s only when its first message carries the dispatch flag, in the worker\'s folder', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'jarvis-find-'));
-  writeFileSync(join(dir, 'quoting.jsonl'), line('user', `Fix the dead row. Real example: dispatch ${DISPATCH}.`) + '\n');
-  writeFileSync(join(dir, 'later.jsonl'), [line('user', 'Hello'), line('user', `--dispatch-id ${DISPATCH}`)].join('\n') + '\n');
-  writeFileSync(join(dir, 'other.jsonl'), line('user', `--dispatch-id ${DISPATCH}`) + '\n');
-  writeFileSync(join(dir, 'real.jsonl'), line('user', `preamble --dispatch-id ${DISPATCH} --outcome`) + '\n');
-  const hits = [hitIn(dir, 'quoting'), hitIn(dir, 'later'), hitIn(dir, 'other', '/w/else'), { sessionId: 'out', cwd: '/w/cockle', source: { filePath: '/etc/out.jsonl' } }, hitIn(dir, 'real')];
-  const orca = async () => ({ ok: true, result: { hits } }) as any;
-  assert.equal((await findWorkerSession(orca, DISPATCH, { cwd: '/w/cockle', dirs: [dir] }))?.session, 'real');
-  assert.equal((await findWorkerSession(orca, DISPATCH, { known: 'other', dirs: [dir] }))?.session, 'other');
-  assert.equal(await findWorkerSession(async () => ({ ok: false }) as any, DISPATCH, { dirs: [dir] }), undefined);
-  // A chat tab's recorded id is Orca's key. The file has another name, and its first message holds the key.
-  writeFileSync(join(dir, 'file-name.jsonl'), line('user', 'orca_session_id:tab-key\nThe coordinator') + '\n');
-  const tab = async (args: string[]) => ({ ok: true, result: { hits: args[2] === 'tab-key' ? [hitIn(dir, 'quoting'), hitIn(dir, 'file-name')] : [] } }) as any;
-  assert.deepEqual(await findWorkerSession(tab, DISPATCH, { known: 'tab-key', dirs: [dir] }), { session: 'tab-key', file: join(dir, 'file-name.jsonl') });
-  rmSync(dir, { recursive: true, force: true });
+  assert.equal(await reqs.read(9999, undefined, new Map()), undefined);
 });
 
 test('the record holds the request, its messages with answers, and stop events in Eastern time', () => {
@@ -352,10 +239,10 @@ test('the record holds the request, its messages with answers, and stop events i
   store.finishApproval(quote.id, 'done', JSON.stringify({ dispatchId: 'ctx_other' }));
   store.addRequest({ dispatch_id: DISPATCH, approval_id: a.id, action: 'worker-start', title: 'Request: T', words: 'Fix it' });
   const id = store.requests()[0].id;
-  const put = (external_id: string, kind: string, f: object) => store.insertItem({ source: 'orca', external_id, kind, dispatch_id: DISPATCH, ...f } as any);
+  const put = (external_id: string, kind: string, f: object) => store.insertItem({ source: 'native', external_id, kind, dispatch_id: DISPATCH, ...f } as any);
   put('msg_q', 'question', { subject: 'Question', body: 'STORY: 1 x\nQUESTION: Read prod?\nCONTEXT: Needed.', options: '["Yes"]' });
   store.markItem('msg_q', 'answered', 'Yes');
-  put('msg_stop_1', 'escalation', { subject: 'Worker stopped without reporting', body: `Worker term_1 ended its turn without sending worker_done for task "T" (task_1).\nThe Dispatch is still open.\nLast output:\nDraft PR at https://github.com/o/r/pull/4667 is up.` });
+  put('msg_e1', 'escalation', { subject: 'Blocked', body: 'Draft PR at https://github.com/o/r/pull/4667 is up.' });
   put('msg_done', 'worker_done', { subject: 'Finished', body: 'All done', meta: JSON.stringify({ outcome: 'failed' }) });
   store.db.prepare(`UPDATE requests SET status = 'failed', status_at = '2026-11-02 20:48:26', worktree = 'cockle' WHERE id = ?`).run(id);
   store.db.prepare(`UPDATE approvals SET decided_at = '2026-11-02 20:48:08' WHERE id = ?`).run(stop.id);
@@ -368,7 +255,7 @@ test('the record holds the request, its messages with answers, and stop events i
   assert.ok(!d.history.some(h => h.text === 'Other worker'));
   assert.equal(d.history.find(h => h.kind === 'question')!.answer, 'Yes');
   assert.match(d.history.find(h => h.kind === 'question')!.text!, /Read prod\?\n\nNeeded\./);
-  assert.match(d.history.find(h => h.title === 'Stopped without reporting')!.text!, /Draft PR/);
+  assert.match(d.history.find(h => h.title === 'Blocked')!.text!, /Draft PR/);
   assert.equal(d.history.find(h => h.kind === 'worker_done')!.failed, true);
   const html = requestDetailHtml({ ...d, transcript: true });
   assert.match(html, /Failed, 11-02 3:48 p\.m\./, 'Eastern time');
@@ -380,7 +267,7 @@ test('the record holds the request, its messages with answers, and stop events i
 });
 
 test('every web file is in the STATIC map, since the daemon serves nothing else', () => {
-  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('./webfiles.ts', import.meta.url), 'utf8');
   const map = /const STATIC[^=]*= (\{[^}]*\})/.exec(main)![1];
   for (const f of readdirSync(new URL('../web/', import.meta.url))) assert.ok(map.includes(`'${f}'`), `${f} is not in STATIC`);
 });

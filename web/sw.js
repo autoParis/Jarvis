@@ -11,15 +11,17 @@ self.addEventListener('push', e => {
 });
 
 // Tapping opens the app on the ask: an open window is focused and told which ask, otherwise a new one opens at the URL.
+// An ask with a report has the report's address after the `#` (/?item=<id>#reports/<path>): the report opens first.
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   const url = e.notification.data?.url || '/';
-  const id = new URL(url, self.location.origin).searchParams.get('item');
+  const at = new URL(url, self.location.origin);
+  const id = at.searchParams.get('item'), hash = at.hash;
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const win = wins.find(w => new URL(w.url).origin === self.location.origin);
     if (!win) return self.clients.openWindow(url);
     await win.focus();
-    if (id) win.postMessage({ type: 'item', id });
+    if (id) win.postMessage({ type: 'item', id, ...(hash ? { hash } : {}) });
   })());
 });
