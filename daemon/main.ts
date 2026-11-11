@@ -257,10 +257,6 @@ const chatLinks = makeChatLinks(store);
 // The brain's replies, worker turns and state, into the store, the chat and every open page (brainevents.ts).
 wireBrain(brain, { store, log, broadcast, say, notify, chatLinks, native, cardOf, publish: publishWork, info: () => brainInfo(),
   tell: text => { if (!existsSync(KILL_FILE)) brain.send(text); } });
-// The brain process starts now, with no turn, so a worker's SendMessage to jarvis-brain reaches it right after a restart.
-if (!existsSync(KILL_FILE)) brain.boot();
-// Then the asks a worker wrote while the brain was unreachable, read back from the live workers' transcripts (onTurnAsk).
-native.recoverAsks().catch(e => log(`native ask recovery failed: ${e}`));
 /** A gate button's outcome: a failure or an unknown result wakes the brain at once, anything else waits for the next turn. */
 function gateNotice(a: Approval, text: string) {
   if (gateFailed(a.status)) brain.send(text); else brain.hold(text);
@@ -523,4 +519,13 @@ http.createServer(async (req, res) => {
     log(`http error ${url}: ${e}`);
     send(res, 500, { error: String(e) });
   }
-}).listen(PORT, '127.0.0.1', () => log(`jarvisd on http://127.0.0.1:${PORT}`));
+}).listen(PORT, '127.0.0.1', () => {
+  log(`jarvisd on http://127.0.0.1:${PORT}`);
+  // The brain process starts now, with no turn, so a worker's SendMessage to jarvis-brain reaches it right after a restart.
+  // It runs here, once the whole module is evaluated: boot() emits brain events at once, and their listeners read
+  // constants declared further down this file (brainInfo). Called at the wireBrain line, it threw before initialization
+  // and jarvisd crashed at every start (2026-11-11).
+  if (!existsSync(KILL_FILE)) brain.boot();
+  // Then the asks a worker wrote while the brain was unreachable, read back from the live workers' transcripts (onTurnAsk).
+  native.recoverAsks().catch(e => log(`native ask recovery failed: ${e}`));
+});
