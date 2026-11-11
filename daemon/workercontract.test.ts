@@ -44,6 +44,14 @@ test('an ask written in the shape of each brief reads back as a card with every 
   }
 });
 
+test('every brief says a decision found after coding starts is an ask, after the ask shape', () => {
+  const rule = 'On a story, a decision you find after coding starts is an ask: send it and end your turn.';
+  for (const [name, brief] of BRIEFS) {
+    assert.ok(brief.includes(rule), name);
+    assert.ok(brief.indexOf(rule) > brief.indexOf('OPTIONS: recommended first'), `${name}: after the ask shape`);
+  }
+});
+
 test('every report line a brief asks for reads back with its label', () => {
   const native = workerBrief();
   const asked = new Set([...`${native}\n${CARD_RULE}\n${REPORT_NUDGE}`.matchAll(/`([A-Z]+): <[^>]+>`|`([A-Z]+):`/g)].map(m => m[1] ?? m[2]));
