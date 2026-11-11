@@ -55,7 +55,7 @@ const PORT = Number(process.env.JARVIS_PORT ?? 7717);
 const KILL_FILE = join(ROOT, 'data', 'KILL');
 
 const store = openStore(join(ROOT, 'data', 'jarvis.db'));
-const voice = makeVoice(ROOT);
+const voice = makeVoice(ROOT, (msg, data) => log(msg, data));
 const listen = listenConfig();
 const log = makeLog();
 // The commit this daemon runs. Master moving past it means a restart is pending (check.ts).
@@ -483,6 +483,13 @@ http.createServer(async (req, res) => {
       const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); ui.close(secret); termGate.dropPage(secret); });
       return;
+    }
+    // The page's record of each speech clip it played: play, wait (a stall), end, error, stop. See web/speech.js.
+    if (req.method === 'POST' && url === '/api/speech/log') {
+      const { events } = await json(req);
+      if (!Array.isArray(events)) return send(res, 400);
+      for (const e of events.slice(0, 100)) log('speech play', { ev: String(e?.ev).slice(0, 8), key: String(e?.turn).slice(0, 80), i: Number(e?.i), t: Number(e?.t), dur: e?.dur, code: e?.code, at: new Date(Number(e?.at) || 0).toISOString() });
+      return send(res, 204);
     }
     if (req.method === 'POST' && url === '/api/send') {
       const { text, replyTo } = await json(req);

@@ -919,11 +919,21 @@ $('auditbtn').onclick = async () => {
 let soundOn = localStorage.getItem('sound') !== 'off';
 const player = new Audio();
 // The speaker buttons and voice mode play through this one controller (web/speech.js).
+// Each clip's play, stall, end and error goes to the jarvisd log in small batches, so a glitch has a record.
+const playLog = [];
+let playLogTimer = 0;
+function reportPlay(e) {
+  playLog.push({ ...e, at: Date.now() });
+  if (!playLogTimer) playLogTimer = setTimeout(() => {
+    playLogTimer = 0;
+    fetch('/api/speech/log', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ events: playLog.splice(0) }) }).catch(() => {});
+  }, 2000);
+}
 // A brain message is keyed by its turn number. A worker's message in its pane has no turn: its key is the row id and
 // the line id, each URL-encoded ("n%3Aab12/f%3A4096"), which /api/speech/worker reads (daemon/voice.ts).
 const speakKey = v => /^\d+$/.test(v) ? Number(v) : v;
 const clipUrl = (key, i) => typeof key === 'number' ? `/api/speech/${key}/${i}` : `/api/speech/worker/${key}/${i}`;
-const speech = makeSpeech({ audio: player, clipUrl, warm: url => rawFetch(url).catch(() => {}), onChange: paintSpeakers });
+const speech = makeSpeech({ audio: player, clipUrl, warm: url => rawFetch(url).catch(() => {}), onChange: paintSpeakers, report: reportPlay });
 function paintSpeakers() {
   for (const b of [...items.querySelectorAll('.msg-speak'), ...$('pane-lines').querySelectorAll('.msg-speak')]) {
     const state = speech.state(speakKey(b.dataset.turn));
