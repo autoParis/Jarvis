@@ -628,7 +628,7 @@ button.hand:not(:disabled):active { background: var(--raised); transform: none; 
 .field:focus-within { border-color: var(--control); }
 textarea { flex: 1; min-width: 0; resize: none; font: inherit; font-size: 15px; line-height: 22px; min-height: 46px; max-height: 30vh; padding: 12px 6px; border: 0; background: transparent; }
 textarea:focus { outline: none; }
-#add { margin-bottom: 5px; }
+#add, #steer-add { margin-bottom: 5px; }
 
 /* The brain's model and effort: quiet text under the chat pill and a bottom sheet (web/modelpicker.js).
    It sits at the left edge, under the attach button, where the owner asked for it.
@@ -693,14 +693,14 @@ textarea:focus { outline: none; }
 #voice-state[data-state="heard"] .vdot { background: var(--bad); opacity: 1; box-shadow: 0 0 0 3px rgb(255 255 255 / .6); }
 #hands-end { flex: none; height: 40px; padding: 0 16px; border-radius: 999px; background: var(--on-need); color: var(--need); font-size: 14px; font-weight: 600; }
 @media (hover: hover) { #hands-end:hover { opacity: .9; } }
-#pending { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-#pending:empty { display: none; }
-#pending .thumb { position: relative; }
-#pending img { display: block; width: 64px; height: 64px; object-fit: cover; border-radius: var(--r-s); border: 1px solid var(--line); }
-#pending .thumb-open { display: block; border-radius: var(--r-s); cursor: zoom-in; }
-#pending .thumb-open:hover img { border-color: var(--need-ink); }
-#pending .thumb-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px; background: var(--ink); color: var(--on-ink); }
-#pending .thumb-remove svg { width: 10px; height: 10px; }
+:is(#pending, #steer-pending) { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+:is(#pending, #steer-pending):empty { display: none; }
+:is(#pending, #steer-pending) .thumb { position: relative; }
+:is(#pending, #steer-pending) img { display: block; width: 64px; height: 64px; object-fit: cover; border-radius: var(--r-s); border: 1px solid var(--line); }
+:is(#pending, #steer-pending) .thumb-open { display: block; border-radius: var(--r-s); cursor: zoom-in; }
+:is(#pending, #steer-pending) .thumb-open:hover img { border-color: var(--need-ink); }
+:is(#pending, #steer-pending) .thumb-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px; background: var(--ink); color: var(--on-ink); }
+:is(#pending, #steer-pending) .thumb-remove svg { width: 10px; height: 10px; }
 
 /* An open worker */
 .pl { overflow-wrap: anywhere; font-size: 16px; line-height: 1.5; }

@@ -27,6 +27,19 @@ export async function sendOut({ tray, upload, post }) {
   }
 }
 
+// A worker gets a picture as an `[image: path]` line, and this fixed line under it tells the worker to read the
+// file. jarvisd adds it to each message with a picture that goes to a worker (daemon/workroutes.ts steerWorker), so a
+// worker that started before this line existed reads the picture too. The pane hides it (withoutReadLine).
+export const READ_PICTURES = 'Each [image: /path] line above is a picture the owner attached. Read that file with the Read tool to see it.';
+const HAS_PICTURE = /\[image:\s*[^\]\n]+\]/;
+export function withReadLine(text) {
+  if (!HAS_PICTURE.test(text) || text.split('\n').some(l => l.trim() === READ_PICTURES)) return text;
+  return `${text}\n${READ_PICTURES}`;
+}
+export function withoutReadLine(text) {
+  return String(text ?? '').split('\n').filter(l => l.trim() !== READ_PICTURES).join('\n').trim();
+}
+
 // The query a voice clip posts: one `image` parameter per picture path. The daemon makes the lines (voiceMessage).
 export function imageParams(q, lines) {
   for (const l of lines) q.append('image', l.slice('[image: '.length, -1));

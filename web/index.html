@@ -118,7 +118,8 @@
       <div id="phone-box" hidden><span id="phone-what"></span><button type="button" id="phone-stop">Stop it and continue</button></div>
       <div id="steer-cards"></div>
       <div id="steer-hint"></div>
-      <div class="composer" id="steer-row"><div class="field"><textarea id="steer-text" rows="1" aria-label="Message to this session"></textarea><button type="submit" class="go" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></div></div>
+      <div id="steer-pending" class="tray"></div>
+      <div class="composer" id="steer-row"><div class="field"><button id="steer-add" type="button" class="ib" aria-label="Attach a picture" title="Attach a picture"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.2a1.7 1.7 0 0 1-2.4-2.4L15 7"/></svg></button><input id="steer-file" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" hidden><textarea id="steer-text" rows="1" aria-label="Message to this session"></textarea><button type="submit" class="go" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></div></div>
     </div></form>
   </section>
   <section id="report" hidden aria-label="Report"></section>
@@ -190,8 +191,9 @@ import { enterSends } from '/enterkey.js';
 import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
 import { todayButton, makeTodayPop } from '/today.js';
 import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
-import { boxAfterSend, settleBox, withPictures } from '/dictate.js';
-import { sendOut, imageParams } from '/compose.js';
+import { boxAfterSend } from '/dictate.js';
+import { sendOut, imageParams, withoutReadLine } from '/compose.js';
+import { makeComposer, IMAGE_MAX } from '/composer.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
 import { listHtml as tasksHtml, when as taskWhen, countText as taskCount } from '/tasks.js';
@@ -1109,6 +1111,28 @@ const report = { id: null, gen: 0, fromApp: false, drawer: false }; // the repor
 let askAfterReport = null;
 const pane = { id: null, cursor: null, timer: 0, gen: 0, error: '', warning: '', busy: false, phone: null };
 const PANE_MAX = 400;
+// The pane's box (web/composer.js), the same module as the chat's box further down. A message goes straight to the
+// open worker. It shows as a faded bubble until the transcript has it, and the box clears only once jarvisd took it.
+// The tray is kept per worker (switchTo in openPane and closePane), as the typed drafts are.
+const steerBox = makeComposer({
+  box: $('steer-text'), trayEl: $('steer-pending'), upload: uploadPicture, pasteText, openViewer: (src, item) => openViewer(src, item),
+  notify: text => { pane.warning = text; paneHead(); }, onChange: () => steerFit(),
+  send: async (message, { key, clear }) => {
+    const { ok, j } = await workPost('/api/work/steer', { id: key, text: message });
+    if (!ok) { pane.error = j.error || 'Not sent'; paneHead(); return false; }
+    clear();
+    if (key !== pane.id) return true;
+    pane.error = '';
+    pane.warning = '';
+    // Shown until the same words come back from the session, which takes a few seconds.
+    if (!j.approval) paneAppend([{ role: 'user pending', text: message }]);
+    paneHead();
+    clearTimeout(pane.timer);
+    pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
+    return true;
+  },
+});
+pickerFor($('steer-add'), $('steer-file'), steerBox);
 function openPane(id) {
   closeTerm();
   closePane();
@@ -1116,10 +1140,9 @@ function openPane(id) {
   paneLines.innerHTML = '<div class="empty">Reading…</div>';
   paneEl.hidden = false;
   document.body.classList.add('pane-open');
-  const box = $('steer-text');
-  box.value = steerDrafts.take(id);
-  box.style.height = '';
-  if (box.value) box.style.height = Math.min(box.scrollHeight, innerHeight * 0.3) + 'px';
+  $('steer-text').value = steerDrafts.take(id);
+  steerBox.switchTo(id); // this worker's pictures, kept while another worker was open
+  steerFit();
   backNav.opened();
   paneHead();
   renderWork();
@@ -1133,6 +1156,7 @@ function closePane() {
   // An unsent message waits for the owner's return to this pane (Back, Escape or the mouse's back button).
   steerDrafts.keep(pane.id, $('steer-text').value);
   $('steer-text').value = '';
+  steerBox.switchTo('');
   pane.id = null; pane.gen++;
   paneEl.hidden = true;
   document.body.classList.remove('pane-open');
@@ -1166,7 +1190,7 @@ function paneHead() {
   if (hold) $('phone-what').textContent = hold.holders.length === 1 ? `Another process has this session open: ${hold.holders[0].what} (pid ${hold.holders[0].pid}).` : `${hold.holders.length} other processes have this session open: ${hold.holders.map(h => `pid ${h.pid}`).join(', ')}.`;
   // The message box: straight to the session.
   const steer = r ? r.steer : 'none';
-  $('steer-row').hidden = steer === 'none';
+  $('steer-row').hidden = $('steer-pending').hidden = steer === 'none';
   $('steer-text').placeholder = r?.state === 'waiting' && r.note && !native ? 'Answer it' : native ? 'Message' : 'Steer this session';
   // A native worker's pending permission card shows inside the pane too, with its Allow and Deny.
   const pc = native && permissionCard(r);
@@ -1245,27 +1269,19 @@ async function continueOnPhone(stop) {
 }
 $('pane-phone').onclick = () => continueOnPhone();
 $('phone-stop').onclick = () => { if (pane.phone) continueOnPhone(pane.phone.holders.map(h => h.pid)); };
-$('steer').onsubmit = async e => {
-  e.preventDefault();
-  const box = $('steer-text'), go = $('steer').querySelector('.go'), text = box.value.trim();
-  if (!text || !pane.id) return box.focus();
+// Send waits for the phone's dictation to settle (steerBox.send(true)). Enter sends at once, as the chat's box does.
+async function steerSend(settle) {
+  const box = $('steer-text'), go = $('steer').querySelector('.go');
+  if (!pane.id || (!box.value.trim() && !steerBox.items().length)) return box.focus();
   go.disabled = true;
-  try {
-    const { ok, j } = await workPost('/api/work/steer', { id: pane.id, text });
-    if (!ok) { pane.error = j.error || 'Not sent'; return paneHead(); }
-    box.value = ''; box.style.height = '';
-    pane.error = '';
-    pane.warning = '';
-    // Shown until the same words come back from the session, which takes a few seconds.
-    if (!j.approval) paneAppend([{ role: 'user pending', text }]);
-    paneHead();
-    clearTimeout(pane.timer);
-    pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
-  } catch (err) { pane.error = 'Not sent: ' + err.message; paneHead(); }
-  finally { go.disabled = false; }
-};
-$('steer-text').addEventListener('keydown', e => { if (enterSends(e)) { e.preventDefault(); $('steer').requestSubmit(); } });
-$('steer-text').addEventListener('input', e => { const b = e.target; b.style.height = 'auto'; b.style.height = Math.min(b.scrollHeight, innerHeight * 0.3) + 'px'; });
+  try { await steerBox.send(settle); }
+  catch (err) { pane.error = 'Not sent: ' + err.message; paneHead(); }
+  finally { go.disabled = false; steerFit(); }
+}
+$('steer').onsubmit = e => { e.preventDefault(); steerSend(e.submitter?.classList.contains('go')); };
+$('steer-text').addEventListener('keydown', e => { if (enterSends(e)) { e.preventDefault(); steerSend(false); } });
+function steerFit() { const b = $('steer-text'); b.style.height = 'auto'; if (b.value) b.style.height = Math.min(b.scrollHeight, innerHeight * 0.3) + 'px'; }
+$('steer-text').addEventListener('input', steerFit);
 $('pane-stop').onclick = async () => {
   const r = work.rows.find(x => x.id === pane.id);
   if (!r) return;
@@ -1305,7 +1321,9 @@ function paneAppend(lines) {
   paneLines.querySelector('.empty')?.remove();
   const atBottom = paneLog.scrollHeight - paneLog.scrollTop - paneLog.clientHeight < 120;
   for (const l of lines) {
-    if (l.role === 'user') for (const p of paneLines.querySelectorAll('.pending')) if (p.textContent === l.text) p.closest('.line').remove();
+    // The faded bubble goes when the transcript has the same message. It is compared as sent, not as drawn, because a
+    // picture draws as a thumbnail and jarvisd adds the read line (withReadLine in web/compose.js).
+    if (l.role === 'user') for (const p of paneLines.querySelectorAll('.line[data-sent]')) if (p.dataset.sent === withoutReadLine(l.text)) p.remove();
     if (l.role === 'tool') { addToolRow(l.text); continue; }
     paneLines.appendChild(paneRow(l));
   }
@@ -1313,10 +1331,14 @@ function paneAppend(lines) {
   if (atBottom) paneLog.scrollTop = paneLog.scrollHeight;
 }
 // One pane line. A message from the owner or the worker is a shared message row, with the copy button under it.
+// The owner's pictures show as the row of squares above his words, as in the chat. The read line stays hidden.
 function paneRow(l) {
   if (l.kind === 'event') { const d = document.createElement('div'); d.className = 'pl wake'; d.textContent = l.text; return d; } // what jarvisd did to the session, such as a resume
   const agent = l.role === 'agent', own = l.role.startsWith('user');
-  const line = messageRow({ lineClass: `line${own ? ' line-owner' : ''}`, bodyClass: `pl ${l.role}${agent ? ' md' : ''}`, bodyHtml: agent ? markdown(l.text, shot) : esc(l.text), text: l.text });
+  const text = own ? withoutReadLine(l.text) : l.text, p = own && splitPictures(text);
+  const bodyHtml = agent ? markdown(l.text, shot) : own ? shotRowHtml(p.paths, esc) + (p.text ? `<div class="msg-text">${esc(p.text)}</div>` : '') : esc(l.text);
+  const line = messageRow({ lineClass: `line${own ? ' line-owner' : ''}`, bodyClass: `pl ${l.role}${agent ? ' md' : ''}`, bodyHtml, text });
+  if (l.role === 'user pending') line.dataset.sent = text;
   const d = line.firstElementChild, tag = paneTag(l);
   if (tag) { d.classList.add('said'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
   if (l.clipped) d.insertAdjacentHTML('beforeend', '<span class="clipped" title="Jarvis shortened this text">clipped</span>');
@@ -1669,55 +1691,30 @@ np.onsubmit = async e => {
     if (row) openRow(row);
   } finally { npBusy = false; if (!np.hidden) npRender(); }
 };
-// ---- attached pictures: uploaded on send, then passed to Jarvis as one [image: path] line each ----
-const IMAGE_OK = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], IMAGE_MAX = 10 * 1024 * 1024;
-const fileIn = $('file'), pending = $('pending');
-let attached = []; // { file, el, path? } in the order the owner added them. Every send takes them (sendOut, web/compose.js).
-// The plus button. Today it only opens the photo picker; later this becomes the popover with more actions.
-function openAddMenu() { fileIn.click(); }
-$('add').onclick = openAddMenu;
-fileIn.onchange = () => {
-  const files = [...fileIn.files];
-  fileIn.value = '';
-  files.forEach(attach);
-};
-// A picture pasted into the box takes the same path as the picker. Text on the clipboard wins,
-// so a copy that carries both (a spreadsheet range, a rich-text snippet) still pastes as text.
-t.addEventListener('paste', e => {
-  if (pasteText(e, t)) return;
-  const cb = e.clipboardData;
-  if (!cb) return;
-  // items rather than files: some phone browsers expose a pasted photo only as a file item
-  const files = [...cb.items].filter(i => i.kind === 'file' && i.type.startsWith('image/')).map(i => i.getAsFile()).filter(Boolean);
-  if (!files.length) return;
-  e.preventDefault();
-  files.forEach(attach);
+// ---- attached pictures: uploaded on send, then passed on as one [image: path] line each ----
+// Two boxes, one module (web/composer.js): the chat's, and the pane's, which keeps a tray per worker.
+// The plus button opens the photo picker. A picture pasted into the box goes in the tray too.
+function pickerFor(button, input, composer) {
+  button.onclick = () => input.click();
+  input.onchange = () => {
+    const files = [...input.files];
+    input.value = '';
+    files.forEach(composer.attach);
+  };
+}
+// The chat's box. Its send clears the box at once, then posts to the brain, with the message it answers.
+const chatBox = makeComposer({
+  box: t, trayEl: $('pending'), upload: uploadPicture, pasteText, openViewer: (src, item) => openViewer(src, item),
+  notify: text => add('event', text), onChange: () => idleLabel(),
+  send: async (message, { clear }) => {
+    clear();
+    const reply = replyTo?.id;
+    cancelReply();
+    await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: message, replyTo: reply }) });
+    return true;
+  },
 });
-for (const box of [$('steer-text')]) box.addEventListener('paste', e => pasteText(e, box));
-function attach(f) {
-  const name = f.name || 'the pasted picture';
-  if (!IMAGE_OK.includes(f.type)) return add('event', `Can't attach ${name}: only png, jpg, webp and gif.`);
-  if (f.size > IMAGE_MAX) return add('event', `Can't attach ${name}: larger than 10 MB.`);
-  const el = document.createElement('div');
-  el.className = 'thumb';
-  el.innerHTML = '<button type="button" class="thumb-open" aria-label="Open the picture to see it big or draw on it" title="Open, or draw on it"><img alt=""></button><button type="button" class="thumb-remove" aria-label="Remove picture"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>';
-  // `base` is the picture as attached and `strokes` the pen marks on it. `file` is what the send uploads:
-  // the base, or the base with the marks drawn in once the viewer closes.
-  const item = { file: f, base: f, baseUrl: URL.createObjectURL(f), strokes: [], el, ready: Promise.resolve() };
-  el.querySelector('img').src = item.baseUrl;
-  el.querySelector('.thumb-open').onclick = () => openViewer(item.baseUrl, item);
-  el.querySelector('.thumb-remove').onclick = () => unattach(item);
-  attached.push(item);
-  pending.append(el);
-  idleLabel();
-}
-function unattach(item) {
-  URL.revokeObjectURL(item.baseUrl);
-  if (item.markedUrl) URL.revokeObjectURL(item.markedUrl);
-  item.el.remove();
-  attached = attached.filter(a => a !== item);
-  idleLabel();
-}
+pickerFor($('add'), $('file'), chatBox);
 
 // ---- the big viewer. For a picture in the box it also has a pen: the marks go into the picture that is sent ----
 const vImg = viewer.querySelector('img'), vCanvas = viewer.querySelector('canvas'), inkBar = viewer.querySelector('.ink-bar');
@@ -1801,9 +1798,6 @@ vCanvas.addEventListener('pointerup', endStroke);
 vCanvas.addEventListener('pointercancel', endStroke);
 
 // ---- text ----
-let sending = false, composing = false;
-t.addEventListener('compositionstart', () => { composing = true; });
-t.addEventListener('compositionend', () => { composing = false; });
 // One attached picture to the daemon. The path it returns goes in the message as an `[image: path]` line.
 async function uploadPicture(file) {
   const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type }, body: file });
@@ -1811,29 +1805,12 @@ async function uploadPicture(file) {
   if (!r.ok) throw new Error(`picture not uploaded (${j.error || r.status})`);
   return j.path;
 }
-// Every send takes the attached pictures through sendOut (web/compose.js): this one, the mic dictation (upload) and
-// a hands-free clip (sendClip). The pictures upload before anything goes out, so a failed upload keeps the text and
-// every picture in the box.
-// `settle` is for a tap on Send: the phone's dictation can commit its words a moment after the tap, so the send
-// waits for the box to go quiet (settleBox in web/dictate.js). The box is read again after the uploads, and only
-// the text that went out leaves it, so a picture send never wipes dictated words.
+// Every send takes the attached pictures through sendOut (web/compose.js): this one (chatBox.send, web/composer.js),
+// the mic dictation (upload) and a hands-free clip (sendClip). `settle` is for a tap on Send (settleBox).
 async function sendText(settle = false) {
-  if ((!t.value.trim() && !attached.length) || sending) return;
-  sending = true;
-  try {
-    if (settle) await settleBox(t, { composing: () => composing });
-    const went = await sendOut({ tray: attached, upload: uploadPicture, post: async lines => {
-      const sent = t.value, message = withPictures(sent, lines);
-      if (!message) return false;
-      t.value = boxAfterSend(t.value, sent);
-      const reply = replyTo?.id;
-      cancelReply();
-      await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: message, replyTo: reply }) });
-      return true;
-    } });
-    went.forEach(unattach);
-  } catch (err) { add('event', 'Send failed: ' + err.message); }
-  finally { sending = false; idleLabel(); fit(); }
+  try { await chatBox.send(settle); }
+  catch (err) { add('event', 'Send failed: ' + err.message); }
+  finally { idleLabel(); fit(); }
 }
 $('f').onsubmit = e => { e.preventDefault(); sendText(true); };
 t.onkeydown = e => { if (enterSends(e)) { e.preventDefault(); sendText().then(idleLabel); } };
@@ -1844,7 +1821,7 @@ const MIC = { audio: { echoCancellation: true, noiseSuppression: true } };
 const bar = $('bar'), wave = $('wave');
 const DICTATE = 'Dictate: hold to talk, or tap to start and tap again to send';
 let rec, chunks = [], stream, pressedAt = 0, holding = false, latched = false;
-const hasSend = () => !!(t.value.trim() || attached.length || hands?.utt); // while hands-free hears the owner, a tap sends what it heard
+const hasSend = () => !!(t.value.trim() || chatBox.items().length || hands?.utt); // while hands-free hears the owner, a tap sends what it heard
 const idleLabel = () => {
   const send = hasSend();
   wave.classList.toggle('send', send);
@@ -1904,7 +1881,7 @@ async function upload() {
     // daemon has sent the message.
     const reply = replyTo?.id, typed = t.value;
     let j = {};
-    const went = await sendOut({ tray: attached, upload: uploadPicture, post: async lines => {
+    const went = await sendOut({ tray: chatBox.items(), upload: uploadPicture, post: async lines => {
       const q = imageParams(new URLSearchParams(), lines);
       if (reply) q.set('replyTo', reply);
       if (typed.trim()) q.set('typed', typed);
@@ -1913,7 +1890,7 @@ async function upload() {
       if (!r.ok) throw new Error(j.error || r.status);
       return !!j.sent;
     } });
-    went.forEach(unattach);
+    went.forEach(chatBox.unattach);
     if (!j.text) add('event', "Didn't catch that.");
     else {
       if (typed.trim()) { t.value = boxAfterSend(t.value, typed); idleLabel(); fit(); }
@@ -2046,14 +2023,14 @@ async function sendClip(frames, rate, barge) {
   try {
     // A clip Jarvis keeps takes the attached pictures. A clip it drops (no wake word) leaves them in the tray.
     let j = {};
-    const went = await sendOut({ tray: attached, upload: uploadPicture, post: async lines => {
+    const went = await sendOut({ tray: chatBox.items(), upload: uploadPicture, post: async lines => {
       const q = imageParams(new URLSearchParams({ mode: 'listen', barge: barge ? '1' : '0' }), lines);
       const r = await fetch(`/api/voice?${q}`, { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: encodeWav(all, rate) });
       j = await r.json();
       if (!r.ok) throw new Error(j.error || r.status);
       return !!j.kept;
     } });
-    went.forEach(unattach);
+    went.forEach(chatBox.unattach);
     // Clips not meant for Jarvis leave no trace in the chat; the placeholder says why for a moment.
     if (!j.kept && hands && j.why === 'no wake word') { voiceNote = 'Not for Jarvis (no wake word)'; showHands(); clearTimeout(voiceNoteTimer); voiceNoteTimer = setTimeout(() => { voiceNote = ''; showHands(); }, 2000); }
   } catch (err) { add('event', 'Voice upload failed: ' + err.message); }

@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openStore } from './store.ts';
 import { workRoute, hiddenIds, type WorkCtx } from './workroutes.ts';
+import { READ_PICTURES } from '../web/compose.js';
 
 const body = (v: unknown) => async () => v;
 const none = () => { throw new Error('the route read a body it does not need'); };
@@ -113,6 +114,16 @@ test('work list: the steer box types into a native worker, answers its open ask,
   assert.deepEqual(killed.seen.woke, [], 'the kill switch keeps the brain asleep');
   const down = setup({ native: { ...setup().o.native, reply: async () => ({ ok: false, error: 'gone' }) } as any });
   assert.deepEqual(await workRoute(down.o, 'POST', '/api/work/steer', body({ id: 'n:w1', text: 'x' }), q()), { status: 502, body: { error: 'gone' } });
+});
+
+test('work list: a picture with no words goes to the worker with the read line, and the brain sees it without', async () => {
+  const { o, seen } = setup();
+  const pic = '[image: /data/uploads/20261111T120000-ab12cd34.png]';
+  assert.deepEqual(await workRoute(o, 'POST', '/api/work/steer', body({ id: 'n:w1', text: pic }), q()), { status: 200, body: { done: 'sent' } });
+  assert.deepEqual(seen.replied, [['w1', `${pic}\n${READ_PICTURES}`, 'owner']]);
+  assert.ok(!seen.woke[0].includes(READ_PICTURES));
+  await workRoute(o, 'POST', '/api/work/steer', body({ id: 'n:w1', text: 'no picture here' }), q());
+  assert.deepEqual(seen.replied[1], ['w1', 'no picture here', 'owner'], 'a message with no picture has no read line');
 });
 
 test('work list: Stop, Open and Desktop find the row first', async () => {
