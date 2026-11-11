@@ -295,6 +295,47 @@ test('a worker message that runs ahead of a jarvisd turn is a worker event, and 
   } finally { brain.stop(); }
 });
 
+// The 2026-11-11 13:51Z order after a resume: a stale background-task notice is answered first, which closes jarvisd's
+// turn. The real reply comes next, opening with a tool_result line while jarvisd thinks the brain is idle, and no origin.
+const LATE = `#!/usr/bin/env node
+const out = o => console.log(JSON.stringify(o));
+require('readline').createInterface({ input: process.stdin }).on('line', line => {
+  const text = JSON.parse(line).message.content;
+  out({ type: 'result', result: text.includes('late') ? 'The background task finished.' : 'ok', usage: {} });
+  if (!text.includes('late')) return;
+  setTimeout(() => {
+    out({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 't1', type: 'tool_result', content: 'pick-and-ship' }] } });
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: 'You are right, ask me only when it is unclear.' }] } });
+    out({ type: 'result', result: 'You are right, ask me only when it is unclear.', usage: {} });
+  }, 100);
+});
+`;
+
+test('a turn with no peer message after a stale answer is the brain\'s own late reply: a reply, never a worker event', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jarvis-brain-late-'));
+  writeFileSync(join(dir, 'claude'), LATE);
+  chmodSync(join(dir, 'claude'), 0o755);
+  const brain = new Brain({ cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, systemPrompt: () => '', brief: () => '[session start] brief' });
+  const logs: string[] = [];
+  brain.on('log', (m: string) => logs.push(m));
+  brain.on('notice', () => {});
+  const order: string[] = [];
+  brain.on('worker', (t: string) => order.push(`worker:${t}`));
+  brain.on('reply', (t: string, _u: unknown, turns: number[]) => order.push(`reply:${t}:${turns.join(',')}`));
+  try {
+    const first = reply(brain);
+    brain.send('hello', 1);
+    await first;
+    const real = new Promise<void>(res => brain.on('reply', (t: string) => { if (t.startsWith('You are right')) res(); }));
+    brain.send('[Simon, in English] late plan cards', 5973);
+    await real;
+    assert.deepEqual(order, ['reply:ok:1', 'reply:The background task finished.:5973', 'reply:You are right, ask me only when it is unclear.:']);
+    assert.ok(logs.includes('brain started a turn on its own'));
+    assert.ok(logs.includes('brain answered a turn it started with no peer message, delivered as a reply'));
+    assert.equal(brain.busy, false);
+  } finally { brain.stop(); }
+});
+
 test('peerMessage reads the sender and text from the live result shape, and from the transcript form', () => {
   const result = { type: 'result', result: 'x', origin: { kind: 'peer', from: 'uds:/tmp/cc-socks/55175.sock', verifiedPeerPid: 55175, msg_id: 'cf5f04e5', name: 'probe-sender', fromMode: 'prompting', body: 'RELAY-OK-77' } };
   assert.deepEqual(peerMessage(result), { from: 'probe-sender', text: 'RELAY-OK-77' });

@@ -151,11 +151,16 @@ export function matchSender(native: Pick<Native, 'get' | 'list'>, peer: PeerMess
  */
 export function routeWorkerTurn(o: { native: Pick<Native, 'get' | 'list'>; store: Store; log: Log; now?: () => number },
   peerIn: PeerMessage | undefined, text: string): { worker?: NativeWorker; item?: Item; notice?: string; refusal?: string; unknown?: Item; speak: boolean } {
+  // No peer message at all: no worker sent anything, so it is the brain's own reply (brain.ts emits these as replies).
+  if (!peerIn) {
+    o.log('brain turn with no peer message routed as its own reply', { chars: text.length });
+    return { speak: text.trim() !== '' && text.trim() !== 'SILENT' };
+  }
   const match = matchSender(o.native, peerIn);
   if (!match) {
     const at = (o.now ?? Date.now)();
-    // No peer text at all: the brain's own answer is the only copy of what it read.
-    const said = peerIn?.text?.trim() ? peerIn.text : `(jarvisd did not get the message text. The brain answered:)\n\n${text}`;
+    // An empty peer body: the brain's own answer is the only copy of what it read.
+    const said = peerIn.text?.trim() ? peerIn.text : `(jarvisd did not get the message text. The brain answered:)\n\n${text}`;
     const unknown = o.store.insertItem({ source: 'native', external_id: unknownId(at), kind: 'question', dispatch_id: null,
       subject: UNKNOWN_SUBJECT, body: said, status: 'spoken', meta: JSON.stringify({ from: peerIn?.from ?? null }) });
     o.log('native message from an unknown sender kept on a card', { from: peerIn?.from ?? null, chars: peerIn?.text.length ?? 0, item: unknown?.external_id });

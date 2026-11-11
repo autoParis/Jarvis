@@ -100,10 +100,15 @@ test('a message with no sender is never dropped: it matches a worker by story, w
   assert.equal(stranger.unknown?.subject, UNKNOWN_SUBJECT);
   assert.equal(stranger.unknown?.body, 'QUESTION: hi?');
   assert.equal(stranger.unknown?.dispatch_id, null);
-  // The 2026-11-09 case: no peer at all. The brain's answer is kept on the card.
-  const none = routeWorkerTurn({ ...ro, now: () => 3000 }, undefined, 'PR 5321 is ready.');
-  assert.match(none.unknown?.body ?? '', /did not get the message text[\s\S]*PR 5321 is ready\./);
-  assert.ok(s.store.openItems().some(i => i.external_id === unknownId(3000)));
+  // No peer message at all (2026-11-11 13:51Z): it is the brain's own reply. No card, and it is spoken.
+  const none = routeWorkerTurn({ ...ro, now: () => 3000 }, undefined, 'Here is my answer to you.');
+  assert.equal(none.unknown, undefined);
+  assert.equal(none.speak, true);
+  assert.ok(!s.store.openItems().some(i => i.external_id === unknownId(3000)));
+  assert.equal(routeWorkerTurn({ ...ro, now: () => 3001 }, undefined, 'SILENT').speak, false);
+  // A peer message with an empty body and no match still goes on a card, with the brain's answer.
+  const empty = routeWorkerTurn({ ...ro, now: () => 3002 }, { from: 'nobody', text: '' }, 'PR 5321 is ready.');
+  assert.match(empty.unknown?.body ?? '', /did not get the message text[\s\S]*PR 5321 is ready\./);
   // Tapping it sends nothing and says why. The brain's relay with --item closes it.
   const tap = await answerAsk({ id: unknownId(2000), value: 'yes', store: s.store, log: s.log, note: () => {}, native: s.native });
   assert.equal(tap.status, 409);
