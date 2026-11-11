@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -219,4 +219,13 @@ test('jarvis-remind fails plainly when jarvisd is down', async () => {
     execFile(process.execPath, [bin, 'list'], { env: { ...process.env, JARVIS_URL: 'http://127.0.0.1:9' } }, (e, _o, err) => ok({ code: e ? Number(e.code) : 0, err })));
   assert.equal(r.code, 1);
   assert.match(r.err, /jarvisd unreachable/);
+});
+
+test('the brain rules: list before adding, no second reminder for one thing, and one reminder when a relay says the owner acts later', () => {
+  const vault = readFileSync(new URL('../vault/CLAUDE.md', import.meta.url), 'utf8');
+  const section = vault.slice(vault.indexOf('## Reminders'), vault.indexOf('\n## ', vault.indexOf('## Reminders') + 3));
+  assert.match(section, /Before you add a reminder, run `jarvis-remind list`/);
+  assert.match(section, /do not add a second one/);
+  assert.match(section, /relay an answer that says the owner does something later[\s\S]*set one reminder for it in the same turn/);
+  assert.match(section, /exactly as `due_eastern` gives it/);
 });

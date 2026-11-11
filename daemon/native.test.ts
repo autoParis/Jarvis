@@ -167,8 +167,9 @@ test('the Stop hook stores the report word for word and DONE or FAILED sets the 
   assert.deepEqual(reports[2], ['  done: the list is fixed\nbranch x, commit y', true]);
   assert.ok(logs.some(l => l.startsWith('native worker reported {"worker":"deabc023","final":true')));
 
+  // A FAILED after DONE is a follow-up's result: the story stays done (see the follow-up test below).
   native.stopHook({ session_id: SESSION, last_assistant_message: 'FAILED: no access' });
-  assert.equal(native.get('deabc023')?.outcome, 'failed');
+  assert.equal(native.get('deabc023')?.outcome, 'done');
   native.stopHook({ session_id: 'nobody', last_assistant_message: 'x' });
   assert.equal(reports.length, 4);
 });
@@ -969,6 +970,72 @@ test('a worker idle on a WAITING line is told to the brain once after STALL_MS, 
   s.tick(STALL_MS);
   await s.native.poll();
   assert.equal(s.notices.length, 2);
+});
+
+test('a WAITING line that only the owner ends shows Waiting on you with its text; a task, a wake-up or an ask does not', async () => {
+  const s = setupInteractive();
+  const w = await s.native.start({ name: 'empty-annonces-5361', cwd: '/repo', brief: 'b', interactive: true });
+  // The 5361 case: its ask was answered "you sign in later", and its next turn ends on WAITING.
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: Simon signs in to the empty Facebook profile in Chrome and tells me.\n\nI stop here.' });
+  let r = s.native.rows()[0];
+  assert.equal(r.state, 'waiting');
+  assert.equal(r.note, 'Simon signs in to the empty Facebook profile in Chrome and tells me.');
+  assert.deepEqual(r.native?.waitingOn, { text: 'Simon signs in to the empty Facebook profile in Chrome and tells me.', since: s.native.get(w.id)!.report_at });
+  // An open ask: the row shows the ask, not the WAITING line.
+  s.store.insertItem({ source: 'native', external_id: `ask:${w.id}:1`, kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`, subject: 'Question from 5361', body: 'A or B?', status: 'spoken' });
+  r = s.native.rows()[0];
+  assert.equal(r.note, 'Question from 5361');
+  assert.equal(r.native?.waitingOn, undefined);
+  s.store.markItem(`ask:${w.id}:1`, 'answered', 'A');
+  // A WAITING for a background task or a scheduled wake-up stays a working row with no note.
+  for (const extra of [{ background_tasks: [{ id: 'b1', status: 'running', description: 'wait for CI' }] }, { session_crons: [{ id: 'c1' }] }]) {
+    s.tick(1000);
+    s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: CI on the head commit', ...extra });
+    r = s.native.rows()[0];
+    assert.equal(r.state, 'working');
+    assert.equal(r.native?.waitingOn, undefined);
+  }
+  // A plain report after it clears the wait.
+  s.tick(1000);
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: Simon answers' });
+  assert.equal(s.native.rows()[0].state, 'waiting');
+  s.tick(1000);
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: it works' });
+  assert.equal(s.native.rows()[0].native?.waitingOn, undefined);
+});
+
+test('a follow-up that ends FAILED after DONE keeps the story done with its DONE report, and keeps the follow-up beside it', async () => {
+  // Worker fe594be3 (4967), 2026-11-11 12:24Z: done with PR #5418, then a steer to change the verdict ended FAILED.
+  const s = setupInteractive();
+  const w = await s.native.start({ name: '4967-verify-launch-501', cwd: '/repo', brief: 'b', interactive: true });
+  const done = 'DONE: PR #5418 is ready, verdict REVIEW.';
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: done });
+  assert.equal(s.native.get(w.id)!.outcome, 'done');
+  s.tick(60 * 60_000);
+  const failed = 'FAILED: the gate always says REVIEW on gate code, so I did not change the verdict.\n\nDetails.';
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: failed });
+  const after = s.native.get(w.id)!;
+  assert.equal(after.outcome, 'done');
+  assert.equal(after.state, 'done');
+  assert.equal(after.report, done, 'the DONE report stays the report');
+  assert.equal(after.report_at, new Date(1_800_000_000_000 + 60 * 60_000).toISOString(), 'the report time moves past the steer');
+  assert.deepEqual(s.reports.at(-1), [failed, true], 'the brain still hears the follow-up');
+  assert.ok(!s.notices.some(n => /failed/.test(n)), 'no failed notice');
+  const r = s.native.rows()[0];
+  assert.equal(r.native?.outcome, 'done');
+  assert.deepEqual(r.native?.followUp, { text: 'FAILED: the gate always says REVIEW on gate code, so I did not change the verdict.', at: after.report_at, outcome: 'failed' });
+  s.listing[0].status = 'idle';
+  await s.native.poll();
+  assert.equal(s.native.get(w.id)!.state, 'done', 'the poll keeps an idle one done');
+  // A later DONE replaces the follow-up.
+  s.tick(1000);
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: verdict unchanged, PR still ready.' });
+  assert.equal(s.native.rows()[0].native?.followUp, undefined);
+  // A worker that never reported DONE still fails.
+  const f = setupInteractive();
+  const w2 = await f.native.start({ name: 'other-1', cwd: '/repo', brief: 'b', interactive: true });
+  f.native.stopHook({ session_id: ISESSION, last_assistant_message: 'FAILED: tests do not pass' });
+  assert.equal(f.native.get(w2.id)!.outcome, 'failed');
 });
 
 test('a transcript write keeps a worker from being stuck, and a busy one with no transcript is never stuck', async () => {

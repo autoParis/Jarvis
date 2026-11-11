@@ -27,7 +27,11 @@ export type WorkRow = {
     /** Continue on phone: the Remote Control name it runs with in the Claude app. */
     remote?: string;
     /** Set while the worker is stuck (native.ts stalledFrom): when it last did anything, as an ISO time. */
-    stalledSince?: string };
+    stalledSince?: string;
+    /** Set while its last turn ended on a WAITING line that only the owner ends: the words after WAITING and the report time (ISO). */
+    waitingOn?: { text: string; since: string };
+    /** A follow-up turn's FAILED result on a story that stays done: its first line and when (ISO). */
+    followUp?: { text: string; at: string; outcome: 'failed' } };
   /** Set on a project terminal or Codex session from the new-session picker (terminal.ts). */
   tmux?: { name: string; project: string; kind: 'terminal' | 'codex'; cwd: string; branch: string };
 };

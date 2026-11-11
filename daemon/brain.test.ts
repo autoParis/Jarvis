@@ -251,6 +251,50 @@ test("The owner's message queued during an unrequested turn goes out after it, a
   } finally { brain.stop(); }
 });
 
+// The 2026-11-09 21:25:13 order: jarvisd writes a turn, and a worker's message that arrives 170 ms later runs first.
+// Claude Code prints the peer turn's result (with `origin`) before the result of jarvisd's turn.
+const AHEAD = `#!/usr/bin/env node
+const out = o => console.log(JSON.stringify(o));
+const origin = { kind: 'peer', from: 'uds:/tmp/cc-socks/34422.sock', verifiedPeerPid: 34422, msg_id: 'f9af417d', name: '4390-sup-1025-page-address-problem-483', fromMode: 'prompting', body: 'QUESTION: ship or wait?' };
+require('readline').createInterface({ input: process.stdin }).on('line', line => {
+  const text = JSON.parse(line).message.content;
+  if (!text.includes('race')) { out({ type: 'result', result: 'ok', usage: {} }); return; }
+  out({ type: 'command_lifecycle', command_uuid: 'c1', state: 'started' });
+  out({ type: 'result', result: 'Story 4390 asks: ship or wait?', origin, usage: {} });
+  out({ type: 'command_lifecycle', command_uuid: 'c1', state: 'completed' });
+  setTimeout(() => out({ type: 'result', result: 'PR 5321 is ready.', usage: {} }), 100);
+});
+`;
+
+test('a worker message that runs ahead of a jarvisd turn is a worker event, and the next result still answers jarvisd', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jarvis-brain-ahead-'));
+  writeFileSync(join(dir, 'claude'), AHEAD);
+  chmodSync(join(dir, 'claude'), 0o755);
+  const brain = new Brain({ cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, systemPrompt: () => '', brief: () => '[session start] brief' });
+  const logs: string[] = [];
+  brain.on('log', (m: string) => logs.push(m));
+  brain.on('notice', () => {});
+  const order: string[] = [];
+  brain.on('worker', (t: string, _u: unknown, peer: any) => order.push(`worker:${peer?.from}:${t}`));
+  brain.on('reply', (t: string, _u: unknown, turns: number[]) => order.push(`reply:${t}:${turns.join(',')}`));
+  try {
+    const first = reply(brain);
+    brain.send('hello', 1);
+    await first;
+    const mine = new Promise<void>(res => brain.on('reply', (_t: string, _u: unknown, turns: number[]) => { if (turns.includes(2)) res(); }));
+    brain.send('[worker event] race', 2);
+    await mine;
+    assert.deepEqual(order, [
+      'reply:ok:1',
+      'worker:4390-sup-1025-page-address-problem-483:Story 4390 asks: ship or wait?',
+      'reply:PR 5321 is ready.:2',
+    ]);
+    assert.ok(logs.includes('brain answered a worker message that ran ahead of a jarvisd turn'));
+    assert.ok(!logs.includes('brain started a turn on its own'), 'jarvisd\'s own result is not taken for an unrequested turn');
+    assert.equal(brain.busy, false);
+  } finally { brain.stop(); }
+});
+
 test('peerMessage reads the sender and text from the live result shape, and from the transcript form', () => {
   const result = { type: 'result', result: 'x', origin: { kind: 'peer', from: 'uds:/tmp/cc-socks/55175.sock', verifiedPeerPid: 55175, msg_id: 'cf5f04e5', name: 'probe-sender', fromMode: 'prompting', body: 'RELAY-OK-77' } };
   assert.deepEqual(peerMessage(result), { from: 'probe-sender', text: 'RELAY-OK-77' });

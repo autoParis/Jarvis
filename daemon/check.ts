@@ -18,6 +18,8 @@ export const CHECK_MS = 10 * 60_000;
 export const REMIND_MS = 60 * 60_000;
 /** An ask gets this long, past its two pushes (push.ts), before it counts as unanswered. */
 export const ASK_WAIT_MS = 15 * 60_000;
+/** A worker on a WAITING line that only the owner ends, with no open ask, gets this long before it counts as a finding. */
+export const OWNER_WAIT_MS = 30 * 60_000;
 /** A message from the owner gets this long, with the brain idle, before it counts as lost. */
 export const LOST_MS = 3 * 60_000;
 /** `turn` is the lost message a finding reports. */
@@ -67,6 +69,12 @@ export function findings(s: { asks: Item[]; requests: Request[]; rows: WorkRow[]
   for (const r of s.rows) {
     const since = r.kind === 'worker' ? r.native?.stalledSince : undefined;
     if (since) out.push({ key: `stalled:${r.id}:${since}`, line: `Worker stuck, nothing since ${eastern(sqlTime(Date.parse(since)))} Eastern (${Math.floor((s.now - Date.parse(since)) / 60_000)} min): dispatch=${r.id} title=${JSON.stringify(r.title)}. Nudge it with jarvis-native reply, and tell ${OWNER}.` });
+  }
+  // A worker that waits on the owner with no open ask (native.ts waitingOn). Worker 5361 (2026-11-11) waited 4 hours and nothing said so.
+  for (const r of s.rows) {
+    const wait = r.kind === 'worker' ? r.native?.waitingOn : undefined;
+    const waited = wait ? s.now - Date.parse(wait.since) : 0;
+    if (wait && waited >= OWNER_WAIT_MS) out.push({ key: `waiting:${r.id}:${wait.since}`, line: `Worker waits on ${OWNER} with no open ask, for ${Math.floor(waited / 60_000)} min: dispatch=${r.id} title=${JSON.stringify(r.title)} WAITING: ${JSON.stringify(wait.text)}. Tell ${OWNER} what it waits for. If he does it later, check jarvis-remind list and set one reminder.` });
   }
   for (const q of s.requests) {
     if (q.status === 'failed') out.push({ key: `failed:${q.id}`, line: `Request failed: ${JSON.stringify(q.title)} dispatch=${q.dispatch_id}` });

@@ -56,6 +56,7 @@ function rowHtml(r, now) {
   return `<div class="rrow ${esc(r.status)}" data-row="${esc(openIdOf(r))}" role="button" tabindex="0" title="${esc(r.title)}">`
     + (numberHtml(r) || requestMark(r.status))
     + `<div class="t">${esc(reportHref(r) ? r.title : r.title.replace(/^\s*#\d+\s*/, '') || r.title)}</div><span class="state">${STATE[r.status] || esc(r.status)}</span>${docLinkHtml(r) ? `<span class="wend">${docLinkHtml(r)}<span class="ago">${ago(r.at, now)}</span></span>` : `<span class="ago">${ago(r.at, now)}</span>`}${hide}`
+    + (r.followUp ? `<div class="follow">Follow-up: ${esc(r.followUp)}</div>` : '')
     + (r.row ? '' : `<div class="gone">${esc(closedNote(r))}</div>`) + '</div>';
 }
 

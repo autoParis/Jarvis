@@ -46,6 +46,13 @@ export async function nativeRoute(o: NativeRouteOptions, method: string, url: st
     const r = await o.native.reply(w.id, text, 'jarvis');
     if (!r.ok) return { status: 502, body: { error: r.error } };
     for (const id of answerOpenAsks(o.store, w.id, text, 'jarvis')) { o.log('native ask answered by the brain', { worker: w.id, item: id }); o.askChanged(id); }
+    // The card of a message jarvisd could not match: the brain found its sender and answered it.
+    const unknown = typeof body.item === 'string' ? o.store.item(body.item) : undefined;
+    if (unknown?.subject === UNKNOWN_SUBJECT && !unknown.dispatch_id && unknown.status !== 'answered') {
+      o.store.markItem(unknown.external_id, 'answered', text, 'jarvis');
+      o.log('unknown-sender message answered by the brain', { worker: w.id, item: unknown.external_id });
+      o.askChanged(unknown.external_id);
+    }
     return { status: 200, body: { ok: true, worker: `${ROW_PREFIX}${w.id}`, name: w.name } };
   }
   if (url === '/api/internal/native/list') return { status: 200, body: o.native.list() };
@@ -101,21 +108,62 @@ export function workerMessageKind(text: string): WorkerMessageKind {
 }
 
 
+/** The external id of a message jarvisd could not match to a worker. */
+export const unknownId = (at: number) => `unknown:${at}`;
+export const UNKNOWN_SUBJECT = 'Message from an unknown sender';
+
 /**
- * The brain answered a turn that a cross-session message started. Only a session jarvisd started counts
- * (criterion 6): anything else is logged and dropped, so its text never reaches the owner. For a worker:
+ * The worker that sent a cross-session message. First by its `--name`. When the name is missing or names no worker, by
+ * the text: a worker's session id, its worktree path, or the story number on the STORY line (worker names start with it,
+ * "4390-sup-1025-page-address-problem-483"). A text match counts only when it picks exactly one worker. Unfinished
+ * workers are tried first, then the rest that are not abandoned.
+ */
+export function matchSender(native: Pick<Native, 'get' | 'list'>, peer: PeerMessage | undefined): { worker: NativeWorker; by: string } | undefined {
+  if (!peer) return undefined;
+  const named = peer.from ? findWorker(native, peer.from) : undefined;
+  if (named) return { worker: named, by: 'name' };
+  const text = peer.text ?? '';
+  if (!text.trim()) return undefined;
+  const all = native.list().filter(w => w.state !== 'abandoned');
+  const unfinished = all.filter(w => !w.outcome && !['done', 'failed', 'stopped'].includes(w.state));
+  const story = /#?(\d{3,6})\b/.exec(fields(text).STORY ?? '')?.[1];
+  const tests: [string, (w: NativeWorker) => boolean][] = [
+    ['session', w => !!w.session_id && text.includes(w.session_id)],
+    ['worktree', w => w.cwd.length > 8 && text.includes(w.cwd)],
+    ['story', w => !!story && new RegExp(`(^|-)${story}-`).test(w.name)],
+  ];
+  for (const [by, hit] of tests) for (const pool of [unfinished, all]) {
+    const found = pool.filter(hit);
+    if (found.length === 1) return { worker: found[0], by };
+    if (found.length > 1) break;
+  }
+  return undefined;
+}
+
+/**
+ * The brain answered a turn that a cross-session message started. It is never dropped. matchSender finds the worker.
+ * When none matches, the message becomes an open question with no worker (`unknown`, a card that says so), and
+ * brainevents.ts tells the brain. For a worker:
  * - An ask with options becomes a question item (an ask card in the app, `[native question]` in the brief), and the
  *   brain's words are spoken.
  * - A notice becomes a done `event` item (a status line in the worker's pane). It gets no card and nothing is spoken.
  * - A question with no options makes no item. main.ts sends `refusal` back to the worker.
  */
 export function routeWorkerTurn(o: { native: Pick<Native, 'get' | 'list'>; store: Store; log: Log; now?: () => number },
-  peer: PeerMessage | undefined, text: string): { worker?: NativeWorker; item?: Item; notice?: string; refusal?: string; speak: boolean } {
-  const w = peer?.from ? findWorker(o.native, peer.from) : undefined;
-  if (!peer || !w) {
-    o.log('brain ignored a message from a session jarvisd did not start', { from: peer?.from ?? null, chars: peer?.text.length ?? 0 });
-    return { speak: false };
+  peerIn: PeerMessage | undefined, text: string): { worker?: NativeWorker; item?: Item; notice?: string; refusal?: string; unknown?: Item; speak: boolean } {
+  const match = matchSender(o.native, peerIn);
+  if (!match) {
+    const at = (o.now ?? Date.now)();
+    // No peer text at all: the brain's own answer is the only copy of what it read.
+    const said = peerIn?.text?.trim() ? peerIn.text : `(jarvisd did not get the message text. The brain answered:)\n\n${text}`;
+    const unknown = o.store.insertItem({ source: 'native', external_id: unknownId(at), kind: 'question', dispatch_id: null,
+      subject: UNKNOWN_SUBJECT, body: said, status: 'spoken', meta: JSON.stringify({ from: peerIn?.from ?? null }) });
+    o.log('native message from an unknown sender kept on a card', { from: peerIn?.from ?? null, chars: peerIn?.text.length ?? 0, item: unknown?.external_id });
+    return { unknown, speak: false };
   }
+  const w = match.worker;
+  const peer = peerIn!;
+  if (match.by !== 'name') o.log('native message matched to a worker without its name', { worker: w.id, by: match.by, from: peer.from ?? null });
   const at = (o.now ?? Date.now)();
   const kind = workerMessageKind(peer.text);
   if (kind === 'notice') {

@@ -382,18 +382,24 @@ export class Brain extends EventEmitter {
     }
     if (this.busy) addSteps(this.steps, e);
     if (e.type === 'result') {
+      const peer = peerMessage(e);
+      // A worker's message can run ahead of the turn jarvisd just wrote to stdin: Claude Code queued jarvisd's message,
+      // ran the peer message first, and prints its result (with `origin`) before jarvisd's. Worker be3fe01a, 2026-11-09
+      // 21:25:13: the peer arrived 170 ms after jarvisd's "[worker event]". That result answers the worker, not jarvisd,
+      // and jarvisd's turn is still running: its own result comes next.
+      const jumpedAhead = !!peer && !this.unrequested && this.busy;
       clearTimeout(this.hangTimer);
-      this.busy = false;
+      this.busy = jumpedAhead;
       this.lastTurnAt = Date.now();
       this.endWork(String(e.result ?? ''));
-      this.emit('working', false);
+      if (jumpedAhead) this.armHang(); else this.emit('working', false);
       const u = e.usage ?? {};
       // Turn usage sums every model call in the turn; the context size is the last call's input.
       const last = Array.isArray(u.iterations) && u.iterations.length ? u.iterations[u.iterations.length - 1] : u;
       this.contextTokens = (last.input_tokens ?? 0) + (last.cache_read_input_tokens ?? 0) + (last.cache_creation_input_tokens ?? 0);
       if (e.session_id && !this.sessionId) this.sessionId = e.session_id;
       this.resumingSaved = false;
-      this.inflight = [];
+      if (!jumpedAhead) this.inflight = [];
       this.persist();
       const text = String(e.result ?? '').trim();
       const usage = {
@@ -401,9 +407,13 @@ export class Brain extends EventEmitter {
         cache_write: u.cache_creation_input_tokens, output_tokens: u.output_tokens, latency_ms: Date.now() - this.sentAt,
         is_error: Boolean(e.is_error),
       };
+      if (jumpedAhead) {
+        this.emit('worker', text, usage, peer);
+        this.emit('log', 'brain answered a worker message that ran ahead of a jarvisd turn', { chars: text.length, from: peer?.from, turns: this.handed, error: Boolean(e.is_error) });
+        return;
+      }
       if (this.unrequested) {
         this.unrequested = false;
-        const peer = peerMessage(e);
         this.emit('worker', text, usage, peer);
         this.emit('log', 'brain answered a worker message', { chars: text.length, from: peer?.from, error: Boolean(e.is_error) });
       } else {
