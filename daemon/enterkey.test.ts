@@ -36,8 +36,9 @@ test('the daemon serves the module', () => {
 
 test('every box that sends on Enter goes through the rule', () => {
   const page = read('../web/index.html');
-  assert.match(page, /t\.onkeydown = e => \{ if \(enterSends\(e\)\)/);
-  assert.match(page, /\$\('steer-text'\)\.addEventListener\('keydown', e => \{ if \(enterSends\(e\)\)/);
+  // The chat's box and the pane's box are one chat (web/chatview.js makeChat), which sends on Enter through the rule.
+  assert.match(read('../web/chatview.js'), /box\.addEventListener\('keydown', e => \{ if \(enterSends\(e\)\)/);
+  assert.equal(page.match(/= makeChat\(\{/g)?.length, 2, 'the chat and the pane');
   assert.match(page, /\$\('req-free-text'\)\.addEventListener\('keydown', e => \{ if \(enterSends\(e\)\)/);
   // A one-line input cannot hold a line break, and pressing Enter in it submits the form whatever the device.
   assert.match(page, /<textarea id="req-free-text"/);

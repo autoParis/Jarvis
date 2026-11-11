@@ -1,6 +1,6 @@
 // A dictation mic button: hold to talk and release to send, or tap to start and tap again to send. Escape drops the
-// clip. The pane's box uses it. The chat's mic keeps its own copy of these rules in web/index.html, because hands-free
-// shares that mic's stream and state. Tested by daemon/mic.test.ts.
+// clip. Every chat's box has one (web/chatview.js): the brain chat and a worker's pane. Hands-free in the brain chat
+// shares that mic's stream, and pauses while held() is true. Tested by daemon/mic.test.ts.
 export const HOLD_MS = 300;
 
 /**
@@ -61,5 +61,5 @@ export function makeMic({ button, label, getStream, onStart = () => {}, onHint, 
     latched = true; show('Listening… press again to send'); start();
   });
   doc.addEventListener('keydown', e => { if (e.key === 'Escape' && latched) stop(false); });
-  return { stop, active: () => holding || latched || rec?.state === 'recording' || button.classList.contains('busy') };
+  return { stop, held: () => holding || latched, active: () => holding || latched || rec?.state === 'recording' || button.classList.contains('busy') };
 }

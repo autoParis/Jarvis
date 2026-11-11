@@ -88,7 +88,9 @@ test('every chat send in the page goes through sendOut, so no path can skip the 
     const open = Math.max(...openers.map(o => before.lastIndexOf(o)));
     return open >= 0 && !before.slice(open).includes('\n}\n') && !before.slice(open).includes('\n});\n');
   };
-  for (const m of page.matchAll(CHAT_SEND)) assert.ok(inside(page, m.index, ['sendOut({', 'makeComposer({']), `the fetch at offset ${m.index} is not inside a sendOut post`);
+  // A chat's `send` (web/chatview.js makeChat) goes to its composer, which runs it inside its own sendOut post.
+  for (const m of page.matchAll(CHAT_SEND)) assert.ok(inside(page, m.index, ['sendOut({', 'makeChat({']), `the fetch at offset ${m.index} is not inside a sendOut post`);
+  assert.match(readFileSync(new URL('../web/chatview.js', import.meta.url), 'utf8'), /makeComposer\(\{ doc, box, trayEl: tray, upload, send,/);
   const composer = readFileSync(new URL('../web/composer.js', import.meta.url), 'utf8');
   const call = composer.indexOf('return send(message');
   assert.ok(call > 0 && inside(composer, call, ['sendOut({']), 'the composer calls its send inside a sendOut post');

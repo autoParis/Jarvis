@@ -53,3 +53,14 @@ test('Escape or leaving the pane drops the clip', async () => {
   assert.equal(s.clips.length, 0);
   assert.equal(s.hints.at(-1), '', 'the hint goes');
 });
+
+test('held() is true while a dictation holds the mic, so hands-free pauses, and false once it sends', async () => {
+  const s = setup();
+  assert.equal(s.mic.held(), false);
+  await s.on.pointerdown(s.ev);
+  assert.equal(s.mic.held(), true, 'held down');
+  s.at(100); s.on.pointerup(s.ev);
+  assert.equal(s.mic.held(), true, 'a tap latches it');
+  await s.on.pointerdown(s.ev);
+  assert.equal(s.mic.held(), false);
+});

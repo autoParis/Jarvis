@@ -433,9 +433,8 @@ body.rail-closed .c-head .conn { display: block; }
 #chat, #pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #report { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 24px calc(32px + env(safe-area-inset-bottom)); }
 body.pane-open #chat { display: none; }
-#log, #pane-log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 24px 24px; }
-#items, #pane-lines { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
-#pane-lines { gap: 14px; }
+.chat-log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 24px 24px; }
+.chat-items { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
 .msg { overflow-wrap: anywhere; white-space: pre-wrap; }
 .line { position: relative; min-width: 0; }
 .line-owner { align-self: flex-end; max-width: 80%; }
@@ -636,8 +635,6 @@ button.hand:not(:disabled):active { background: var(--raised); transform: none; 
 .field:focus-within { border-color: var(--control); }
 textarea { flex: 1; min-width: 0; resize: none; font: inherit; font-size: 15px; line-height: 22px; min-height: 46px; max-height: 30vh; padding: 12px 6px; border: 0; background: transparent; }
 textarea:focus { outline: none; }
-#add, #steer-add { margin-bottom: 5px; }
-#steer-mic { margin-bottom: 5px; touch-action: none; user-select: none; -webkit-user-select: none; }
 
 /* The brain's model and effort: quiet text under the chat pill and a bottom sheet (web/modelpicker.js).
    It sits at the left edge, under the attach button, where the owner asked for it.
@@ -672,21 +669,22 @@ textarea:focus { outline: none; }
 .ms-foot { font-size: 12px; color: var(--muted); margin: 0 4px; }
 #model-body.busy { opacity: .55; pointer-events: none; }
 @media (hover: hover) { .ms-row:hover { background: var(--hover); } }
-/* Option A, the morphing pill (web/index.html #bar). Typing: attach, text, model chip, mic, white wave button.
+/* Option A, the morphing pill (web/chatview.js chatHtml), the same in the chat and in a worker's pane. Typing: attach, text, model chip, mic, white wave button.
    Text or a picture turns the wave into a dark send arrow. Hands-free turns the whole pill teal: keyboard, state, End. */
-#bar { align-items: flex-end; gap: 2px; min-height: 52px; padding: 0 6px; border-radius: 26px; transition: background-color .2s, border-color .12s; }
-#bar #add { margin-bottom: 8px; }
-#bar textarea { min-height: 50px; padding: 14px 6px; }
-#mic { margin-bottom: 8px; touch-action: none; user-select: none; -webkit-user-select: none; }
-:is(#mic, #steer-mic).rec { background: var(--bad); color: var(--on-bad); }
-:is(#mic, #steer-mic).busy { opacity: .55; }
-#wave { flex: none; width: 40px; height: 40px; margin: 0 0 6px 2px; border-radius: 50%; display: grid; place-items: center; background: #FFFFFF; color: #111213; box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(17 18 19 / .08); transition: background-color .15s, color .15s, transform .15s; }
-#wave svg { width: 20px; height: 20px; }
-#wave .send, #wave.send .wave { display: none; }
-#wave.send .send { display: block; }
-#wave.send { background: var(--ink); color: var(--on-ink); box-shadow: none; }
+.chat-bar { align-items: flex-end; gap: 2px; min-height: 52px; padding: 0 6px; border-radius: 26px; transition: background-color .2s, border-color .12s; }
+.chat-bar .chat-add { margin-bottom: 8px; }
+.chat-bar textarea { min-height: 50px; padding: 14px 6px; }
+.chat-mic { margin-bottom: 8px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.chat-mic.rec { background: var(--bad); color: var(--on-bad); }
+.chat-mic.busy { opacity: .55; }
+.chat-go { flex: none; width: 40px; height: 40px; margin: 0 0 6px 2px; border-radius: 50%; display: grid; place-items: center; background: #FFFFFF; color: #111213; box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(17 18 19 / .08); transition: background-color .15s, color .15s, transform .15s; }
+.chat-go svg { width: 20px; height: 20px; }
+.chat-go .send, .chat-go.send .wave { display: none; }
+.chat-go.send .send { display: block; }
+.chat-go.send { background: var(--ink); color: var(--on-ink); box-shadow: none; }
 #bar.hands #wave:not(.send) { background: var(--need); color: var(--on-need); box-shadow: none; }
-@media (hover: hover) { #wave:hover { transform: scale(1.05); } }
+@media (hover: hover) { .chat-go:hover { transform: scale(1.05); } }
+.chat-go:disabled { opacity: .5; }
 #keys, #voice-state, #hands-end { display: none; }
 #bar[data-mode="voice"] { background: var(--need); color: var(--on-need); border-color: transparent; align-items: center; padding: 0 6px; }
 #bar[data-mode="voice"] > :not(#keys, #voice-state, #hands-end) { display: none; }
@@ -702,30 +700,28 @@ textarea:focus { outline: none; }
 #voice-state[data-state="heard"] .vdot { background: var(--bad); opacity: 1; box-shadow: 0 0 0 3px rgb(255 255 255 / .6); }
 #hands-end { flex: none; height: 40px; padding: 0 16px; border-radius: 999px; background: var(--on-need); color: var(--need); font-size: 14px; font-weight: 600; }
 @media (hover: hover) { #hands-end:hover { opacity: .9; } }
-:is(#pending, #steer-pending) { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-:is(#pending, #steer-pending):empty { display: none; }
-:is(#pending, #steer-pending) .thumb { position: relative; }
-:is(#pending, #steer-pending) img { display: block; width: 64px; height: 64px; object-fit: cover; border-radius: var(--r-s); border: 1px solid var(--line); }
-:is(#pending, #steer-pending) .thumb-open { display: block; border-radius: var(--r-s); cursor: zoom-in; }
-:is(#pending, #steer-pending) .thumb-open:hover img { border-color: var(--need-ink); }
-:is(#pending, #steer-pending) .thumb-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px; background: var(--ink); color: var(--on-ink); }
-:is(#pending, #steer-pending) .thumb-remove svg { width: 10px; height: 10px; }
+.chat-tray { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.chat-tray:empty { display: none; }
+.chat-tray .thumb { position: relative; }
+.chat-tray img { display: block; width: 64px; height: 64px; object-fit: cover; border-radius: var(--r-s); border: 1px solid var(--line); }
+.chat-tray .thumb-open { display: block; border-radius: var(--r-s); cursor: zoom-in; }
+.chat-tray .thumb-open:hover img { border-color: var(--need-ink); }
+.chat-tray .thumb-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px; background: var(--ink); color: var(--on-ink); }
+.chat-tray .thumb-remove svg { width: 10px; height: 10px; }
 
 /* An open worker */
 .pl { overflow-wrap: anywhere; font-size: 16px; line-height: 1.5; }
-.pl.user { align-self: flex-end; max-width: 80%; background: var(--raised); border-radius: var(--r); padding: 8px 12px; font-size: 15px; white-space: pre-wrap; }
-.pl.user.pending { opacity: .6; }
-.line-owner > .pl.user { max-width: 100%; }
-.line-owner > .pl.user + .msg-foot { top: 100%; }
+/* The owner's message the worker has not read back yet (web/chatview.js chatLine `pending`) */
+.msg.owner.pending { opacity: .6; }
 .pl.tool { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font); }
 .pl.terminal { font: 12px/1.45 var(--mono); white-space: pre-wrap; background: var(--raised); border-radius: var(--r-s); padding: 8px 10px; }
-.pl .clipped { display: inline-block; margin-left: 6px; font-size: 11px; color: var(--bad); white-space: nowrap; }
+.line .clipped { display: inline-block; margin-left: 6px; font-size: 11px; color: var(--bad); white-space: nowrap; }
 .pl.tool .clipped { display: none; }
 .tool-run .chev { margin-left: 6px; flex: none; }
 .tool-run .fold-calls { display: flex; flex-direction: column; gap: 4px; padding: 4px 0 8px 26px; }
 .pl.wake { font-size: 13px; color: var(--muted); }
 .pl-tag { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 2px; }
-.pl.agent.said { border-left: 2px solid var(--control); padding-left: 12px; }
+.msg.jarvis.said { border-left: 2px solid var(--control); padding-left: 12px; }
 #pane .empty, #report .empty { color: var(--muted); font-size: 13px; }
 #report > .empty { max-width: 760px; margin: 12px auto 0; font-size: 14px; }
 .rdetail { display: flex; flex-direction: column; gap: 12px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
@@ -757,10 +753,6 @@ textarea:focus { outline: none; }
 #steer-hint { font-size: 13px; color: var(--muted); margin-bottom: 8px; overflow-wrap: anywhere; }
 #steer-hint:empty { display: none; }
 #steer-hint b { font-weight: 500; color: var(--need-ink); }
-#steer-row textarea { padding-left: 10px; }
-#steer-row .go { width: 36px; height: 36px; margin-bottom: 5px; border-radius: var(--r-s); display: grid; place-items: center; background: var(--ink); color: var(--on-ink); flex: none; }
-#steer-row .go svg { width: 16px; height: 16px; }
-#steer-row .go:disabled { opacity: .5; }
 
 /* The work list */
 .w-head { flex: none; height: 56px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 18px; }
@@ -995,7 +987,7 @@ a.num:hover { color: var(--ink); }
   .stop { height: 44px; }
   #pane-back { height: 44px; }
   #pane-sub { display: none; }
-  #log, #pane-log { padding: 8px 16px 16px; }
+  .chat-log { padding: 8px 16px 16px; }
   #report { padding: 0 16px calc(24px + env(safe-area-inset-bottom)); }
   .rp-title { font-size: 20px; line-height: 26px; padding-top: 4px; }
   .rp-all { min-height: 44px; padding: 0 12px; }
@@ -1005,10 +997,9 @@ a.num:hover { color: var(--ink); }
   .rp-sec.sub > .rp-body { padding-left: 8px; }
   .rp-ranked li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .dock { padding: 0 16px 8px; }
-  #add { width: 36px; margin-bottom: 5px; }
-  #bar { padding: 0 5px 0 2px; gap: 0; }
-  #bar #add, #bar #mic { width: 36px; height: 40px; margin-bottom: 6px; }
-  #bar textarea { padding-left: 4px; padding-right: 4px; }
+  .chat-bar { padding: 0 5px 0 2px; gap: 0; }
+  .chat-bar .chat-add, .chat-bar .chat-mic { width: 36px; height: 40px; margin-bottom: 6px; }
+  .chat-bar textarea { padding-left: 4px; padding-right: 4px; }
   #bar[data-mode="voice"] #keys { width: 44px; height: 44px; }
   #hands-end { height: 44px; }
   .ask-opt { grid-template-columns: minmax(0, 1fr); min-height: 56px; }
@@ -1108,13 +1099,13 @@ body:not(.term-open) .term-act { display: none; }
 .g-working { border-top-color: var(--accent); }
 /* the owner: the top bar icons are white (full ink: white in dark mode, near black in light). Only the count badges carry color */
 .c-head .ib, .need-btn, .need-btn.has-count { color: var(--ink); }
-.owner, .pl.user { background: var(--bubble); color: var(--bubble-ink); border-radius: 16px; }
+.owner { background: var(--bubble); color: var(--bubble-ink); border-radius: 16px; }
 .quote { background: var(--glass); }
-#bar { min-height: 58px; padding: 0 7px; border-radius: 30px; background: var(--glass-strong); border: 1px solid var(--glass-line); box-shadow: var(--float); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
-#bar:focus-within { border-color: var(--glass-line); }
-#bar textarea { min-height: 56px; padding: 17px 6px; }
-#bar #add, #mic { margin-bottom: 10px; }
-#wave, #wave.send { width: 44px; height: 44px; margin: 0 0 6px 2px; background: var(--wave); color: var(--wave-ink); box-shadow: var(--wave-shadow); }
+.chat-bar { min-height: 58px; padding: 0 7px; border-radius: 30px; background: var(--glass-strong); border: 1px solid var(--glass-line); box-shadow: var(--float); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.chat-bar:focus-within { border-color: var(--glass-line); }
+.chat-bar textarea { min-height: 56px; padding: 17px 6px; }
+.chat-bar .chat-add, .chat-mic { margin-bottom: 10px; }
+.chat-go, .chat-go.send { width: 44px; height: 44px; margin: 0 0 6px 2px; background: var(--wave); color: var(--wave-ink); box-shadow: var(--wave-shadow); }
 #bar.hands #wave:not(.send) { background: var(--need); color: var(--on-need); }
 /* Hands-free stays solid teal: white text on the green end of the gradient is only 3.3:1 */
 #bar[data-mode="voice"] { background: var(--need); border-color: transparent; }
@@ -1134,8 +1125,8 @@ body:not(.term-open) .term-act { display: none; }
   .pop { background: var(--top-fade), var(--aur); background-color: var(--ground); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .need-btn em { box-shadow: 0 0 0 2px var(--head-solid); }
   .dock { padding: 0 12px calc(10px + env(safe-area-inset-bottom)); }
-  #bar { padding: 0 6px 0 4px; }
-  #bar #add, #bar #mic { margin-bottom: 8px; }
+  .chat-bar { padding: 0 6px 0 4px; }
+  .chat-bar .chat-add, .chat-bar .chat-mic { margin-bottom: 8px; }
   #hands-end { height: 44px; }
 }
 
