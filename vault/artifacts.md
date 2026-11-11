@@ -2,6 +2,8 @@
 
 Read this before you propose a worker for a Design artifact, a slide deck or an artifact page. Each of these needs the Artifact tool, which every native worker has.
 
+Every design, mockup or UI change for the owner uses the taste skill (`design-taste-frontend`) and the `ui-ux-pro-max` skill. Name both in the worker spec, even when the owner does not. A redesign changes layout and components, not only colours, and each option differs from the others in structure. The owner uses dark mode, so show dark first.
+
 Propose a plain `worker-start` (a worktree like any other, or `worktree: main`). Its spec says:
 
 1. Call the Artifact tool with action quickstart and the right intent, create it from the type it names, keep it private, and read it back.
