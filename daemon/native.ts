@@ -101,6 +101,14 @@ export const DENY_MESSAGE = `${OWNER_CAP} denied it from the Jarvis app`;
 export const SILENT_DONE_MS = 2 * 60_000;
 /** The state key that says a worker's report at this time needs no silent-turn notice: it was a pause, or the notice went out. */
 const quietKey = (id: string) => `nativeQuiet:${id}`;
+/**
+ * The state key that holds the report time of a WAITING line that waits on the owner: no background task, no scheduled
+ * wake-up and no ask to the brain in that turn. Worker 5361 (2026-11-11): its ask was answered "you sign in later", it
+ * ended on WAITING, and its row showed a spinner for 4 hours.
+ */
+const ownerWaitKey = (id: string) => `nativeOwnerWait:${id}`;
+/** The words after "WAITING:" on the report's first line, for the row's note and the check's finding. */
+export const waitingText = (report: string) => (report.trim().split('\n')[0] ?? '').replace(WAITING_LINE, '').trim().slice(0, 200) || 'Waiting';
 /** At most this many REPORT_NUDGE blocks per worker in this window, whatever Claude Code says about the chain. */
 const NUDGE_MAX = 3, NUDGE_WINDOW_MS = 10 * 60_000;
 /** The state key that holds the activity time of the last stall told, so a jarvisd restart does not tell the same stall twice. */
@@ -674,6 +682,7 @@ export function makeNative(o: {
       // A stop that is not the answer to a block starts a new chain of the turn: it may be sent back once.
       if (!body.stop_hook_active) nudgedChain.delete(w.id);
       let pause: string | undefined;
+      let ownerWait = false;
       if (!outcome) {
         const action = w.approval_id ? store.approval(w.approval_id)?.action : undefined;
         const tasks = Array.isArray(body.background_tasks) ? body.background_tasks.filter((t: any) => !t?.status || t.status === 'running' || t.status === 'pending') : [];
@@ -686,12 +695,15 @@ export function makeNative(o: {
           : asked ? 'ask to the brain'
           : tasks.length ? `background task${tasks.length > 1 ? 's' : ''}: ${tasks.map((t: any) => t?.description ?? t?.command ?? t?.id).join('; ').slice(0, 160)}`
           : crons.length ? 'scheduled wake-up' : undefined;
+        // A WAITING line with nothing that ends by itself (a task, a wake-up, an ask) waits on the owner. rows() shows it.
+        ownerWait = pause === 'waiting line' && !tasks.length && !crons.length && !asked;
       }
       const t = iso();
       const nudges = (nudgeTimes.get(w.id) ?? []).filter(x => now() - x < NUDGE_WINDOW_MS);
       const nudge = !outcome && !pause && !nudgedChain.has(w.id) && nudges.length < NUDGE_MAX;
       const next = update(w.id, { report: text, report_at: t, transcript, ...(outcome ? { outcome, state: outcome } : w.remote ? { state: 'done' } : pause || nudge ? { state: 'working' } : {}) });
       if (pause) store.setState(quietKey(w.id), `pause:${t}`);
+      store.setState(ownerWaitKey(w.id), ownerWait ? t : '');
       log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length, ...(pause ? { pause } : {}), ...(nudge ? { sentBack: true } : {}) });
       o.onReport(next, text, !!outcome);
       if (nudge) {
@@ -753,19 +765,25 @@ export function makeNative(o: {
       // An open ask holds the row in view as waiting, whatever its process does (rowState).
       const asks = new Map(store.openItems().filter(i => i.source === 'native' && i.dispatch_id).map(i => [i.dispatch_id!, i.subject || 'A question for you'] as const));
       const asking = (w: NativeWorker) => asks.has(`${ROW_PREFIX}${w.id}`);
+      // Its last turn ended on a WAITING line that only the owner ends (stopHook), and nothing came since. Once it is
+      // stuck (STALL_MS), the stuck row and notice take over, as before.
+      const ownerWait = (w: NativeWorker) => w.state === 'working' && !w.outcome && !asking(w) && !stalled.has(w.id) && !!w.report_at
+        && store.getState(ownerWaitKey(w.id)) === w.report_at;
       return api.list().filter(w => w.state !== 'abandoned' && !(['done', 'failed', 'stopped'].includes(w.state) && now() - finishedAt(w) > ROW_MAX_AGE_MS && !onPhone(w) && !asking(w))).map(w => {
         const task = taskOf(w);
         const r: WorkRow = {
           id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(task.title, task.spec),
-          state: rowState(w, asking(w)),
+          state: rowState(w, asking(w) || ownerWait(w)),
           worktree: basename(w.cwd),
           // An interactive session takes a message in any state: a stopped or failed one is resumed first.
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
           native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}),
-            ...(stalled.has(w.id) ? { stalledSince: new Date(stalled.get(w.id)!).toISOString() } : {}) },
+            ...(stalled.has(w.id) ? { stalledSince: new Date(stalled.get(w.id)!).toISOString() } : {}),
+            ...(ownerWait(w) ? { waitingOn: { text: waitingText(w.report ?? ''), since: w.report_at! } } : {}) },
         };
         if (w.state === 'blocked' && w.waiting_for) r.note = w.waiting_for;
         else if (asking(w)) r.note = asks.get(`${ROW_PREFIX}${w.id}`);
+        else if (ownerWait(w)) r.note = waitingText(w.report ?? '');
         else if (stalled.has(w.id)) r.note = `Stuck: nothing for ${ago(now() - stalled.get(w.id)!).replace(' ago', '')}`;
         else if (w.state === 'done' && onPhone(w)) r.note = `In the Claude app as "${w.remote}"`;
         else if (w.state === 'done') r.note = `Done ${ago(now() - Date.parse(w.report_at ?? w.updated_at))}`;

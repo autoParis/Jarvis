@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeCheck, readDelivery, inCheckHours, CHECK_MS, ASK_WAIT_MS, LOST_MS, type Delivery } from './check.ts';
+import { makeCheck, readDelivery, inCheckHours, CHECK_MS, ASK_WAIT_MS, LOST_MS, OWNER_WAIT_MS, type Delivery } from './check.ts';
 import type { Work, WorkRow } from './work.ts';
 
 const at = (s: string) => Date.parse(s);
@@ -329,6 +329,24 @@ test('readDelivery counts a branch merged into an archived ref as delivered, and
   assert.deepEqual((await readDelivery(dir, [])).unmerged.map(b => b.branch).sort(), ['archive', 'old', 'old-work']);
   assert.deepEqual((await readDelivery(dir, ['archive'])).unmerged, []);
   assert.deepEqual((await readDelivery(dir, ['missing'])).unmerged.map(b => b.branch).sort(), ['archive', 'old', 'old-work']);
+});
+
+test('a worker that waits on the owner with no open ask is one finding after 30 minutes, once per WAITING report', async () => {
+  // Worker 5361 (2026-11-11): its ask was answered "you sign in later", and its row showed a spinner for 4 hours.
+  const since = new Date(DAY - OWNER_WAIT_MS + 60_000).toISOString();
+  const native = { id: 'aa11', sessionId: null, name: 'empty-annonces-5361', state: 'working' as const, waitingFor: null, outcome: null, waitingOn: { text: 'Simon signs in to the empty Facebook profile', since } };
+  const rows = [worker('n:aa11', { title: 'empty-annonces-5361', state: 'waiting', native }), worker('ctx_9')];
+  const { check, wakes, tick } = setup(rows);
+  await check.tick();
+  assert.deepEqual(wakes, [], 'not before 30 minutes');
+  tick(60_000);
+  await check.tick();
+  assert.equal(wakes.length, 1);
+  assert.match(wakes[0], /Worker waits on .* with no open ask, for 30 min: dispatch=n:aa11 title="empty-annonces-5361" WAITING: "Simon signs in to the empty Facebook profile"/);
+  assert.match(wakes[0], /jarvis-remind list/);
+  tick(CHECK_MS);
+  await check.tick();
+  assert.equal(wakes.length, 1, 'one finding per wait');
 });
 
 test('a worker stuck overnight is reported at the first tick after 8 AM, once per stall', async () => {
