@@ -841,17 +841,18 @@ export function makeNative(o: {
      * hook was lost (jarvisd was down) or ran before turn-text asks made cards. The turn goes through stopHook, so the
      * card, the brain's [native question] note (onTurnAsk) and the row's report and pause are what a hook on time would
      * have made. Once: an ask item of any status with the same text for that worker (open, answered, closed) makes none.
-     * Only a worker whose turn has ended counts: an interactive one with a pid at idle, a background one listed and not
-     * working. Returns how many cards it made.
+     * Only a live worker whose turn has ended counts: a pid, and idle (interactive) or not working (background). A stopped
+     * row is skipped. Returns how many cards it made.
      */
     async recoverAsks(): Promise<number> {
       const list = await agents();
       let made = 0;
       for (const r of store.nativeWorkers()) {
         const w = asWorker(r);
-        if (w.state === 'abandoned' || w.outcome || w.remote) continue;
+        if (w.state === 'abandoned' || w.state === 'stopped' || w.outcome || w.remote) continue;
         const a = listed(list, w);
-        const ended = w.kind === 'interactive' ? !!a?.pid && a.status === 'idle' : !!a && a.state !== 'working' && a.state !== 'blocked';
+        // Live: a pid. `claude stop` leaves a background session listed with none.
+        const ended = !!a?.pid && (w.kind === 'interactive' ? a.status === 'idle' : a.state !== 'working' && a.state !== 'blocked');
         if (!ended) continue;
         if (w.approval_id && store.approval(w.approval_id)?.action === 'side-chat') continue;
         const file = api.transcriptFile(w.id); if (!file) continue;

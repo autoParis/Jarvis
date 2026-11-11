@@ -388,4 +388,32 @@ test('the ask recovery skips a delivered ask, a busy worker, a finished worker a
   prose.store.updateNativeWorker(w4.id, { transcript: f });
   assert.equal(await prose.native.recoverAsks(), 0);
   for (const s of [delivered, busy, done, prose]) { assert.deepEqual(s.store.openItems(), []); assert.deepEqual(s.turnAsks, []); }
+
+  // A background session `claude stop` left listed with no pid is not live.
+  const gone = setup();
+  const w5 = await gone.native.start({ name: 'w-gone', cwd: '/tmp', brief: 'x' });
+  gone.store.updateNativeWorker(w5.id, { transcript: askTranscript(false) });
+  delete gone.agent.pid;
+  assert.equal(await gone.native.recoverAsks(), 0);
+});
+
+test('the ask recovery reads an interactive worker (5361 was one) only once its turn is idle', async () => {
+  const store = openStore(':memory:');
+  const agent: any = { kind: 'interactive', name: '5361-empty-listings-capture-583', pid: 777, status: 'busy', sessionId: 'c0ffee00-1111-2222-3333-444444444444' };
+  const claude: Claude = async (args) => {
+    const help = helpRun(args); if (help) return help;
+    if (args[0] === '--version') return { code: 0, out: '2.1.316', err: '' };
+    if (args[0] === 'agents') return { code: 0, out: JSON.stringify([agent]), err: '' };
+    return { code: 0, out: '', err: '' };
+  };
+  const turnAsks: Item[] = [];
+  const native = makeNative({ store, log: () => {}, jarvisUrl: 'http://127.0.0.1:1', dataDir: mkdtempSync(join(tmpdir(), 'jarvis-nr-')), claude,
+    spawnPty: () => 4242, killGroup: () => {}, onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, onTurnAsk: (_w, i) => turnAsks.push(i) });
+  const w = await native.start({ name: agent.name, cwd: '/tmp', brief: 'x', interactive: true });
+  store.updateNativeWorker(w.id, { transcript: askTranscript(false) });
+  assert.equal(await native.recoverAsks(), 0, 'busy: the turn has not ended');
+  agent.status = 'idle';
+  assert.equal(await native.recoverAsks(), 1);
+  assert.equal(store.openItems().filter(i => i.dispatch_id === `n:${w.id}`).length, 1);
+  assert.equal(turnAsks.length, 1);
 });
