@@ -9,6 +9,7 @@ import { urgent } from './push.ts';
 import { OWNER } from './config.ts';
 import { unmarked } from './voice.ts';
 import { routeWorkerTurn } from './nativeroutes.ts';
+import { ROW_PREFIX } from './native.ts';
 
 // What jarvisd does with the brain's events: a reply is stored, spoken and linked to its proposals, a turn a worker
 // started becomes an ask card or a status line, and the brain's state goes to every open page. main.ts wires it once.
@@ -39,6 +40,16 @@ export function unknownSenderNote(i: Item, peer: PeerMessage | undefined): strin
     + ` (sender name: ${peer?.from ? JSON.stringify(peer.from) : 'none'}). It is on ask card message_id=${i.external_id}, and your answer to it was not spoken.`
     + ` Find the sender in jarvis-native list (story number, worktree, recent report). Then tell ${OWNER} what it asks,`
     + ` and send his answer with jarvis-native reply --worker <name> --item ${i.external_id} --text "<words>". The message:\n${i.body}`;
+}
+
+/**
+ * What the brain hears about an ask a worker wrote in its turn text because its SendMessage did not reach the brain.
+ * jarvisd already made the card, so the brain speaks it and opens no ask of its own.
+ */
+export function turnAskNote(w: { id: string; name: string }, i: Item): string {
+  return `[native question] ${w.name}: Native worker ${w.name} (${ROW_PREFIX}${w.id}) could not reach you with SendMessage, so it wrote this ask in its turn text.`
+    + ` jarvisd made its ask card, message_id=${i.external_id}. Do not open an ask of your own. Speak the question to ${OWNER} as you speak any worker ask.`
+    + ` His tap on the card answers it. If he answers in the chat, send his words with jarvis-native reply --worker ${w.name} --text "<his words>". The ask:\n${i.body}`;
 }
 
 export function wireBrain(brain: Emitter, o: BrainEventCtx) {

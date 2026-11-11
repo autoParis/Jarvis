@@ -78,9 +78,13 @@ export function lastAssistantText(file: string): string | undefined {
  * The texts the last turn sent with SendMessage to the session named `to`, in order. The turn starts at the last user line
  * that is a prompt, a typed message or a cross-session message (`turnOrigin: peer`); tool results and meta lines (system
  * reminders) do not start one. Only the file's tail is read, so a message sent long ago in a very long turn is missed.
+ * A send whose tool result says it failed (`success: false`, or an error result) is left out: it never reached `to`.
+ * Worker 5361 (2026-11-11 14:47Z): "No agent named 'jarvis-brain' is reachable" while jarvisd restarted.
+ * A send with no result found stays in.
  */
 export function lastTurnMessages(file: string, to: string): string[] {
-  let sent: string[] = [];
+  let sent: { id: unknown; text: string }[] = [];
+  const failed = new Set<unknown>();
   for (const raw of tailOf(file).split('\n')) {
     if (!raw) continue;
     let e: any;
@@ -90,12 +94,13 @@ export function lastTurnMessages(file: string, to: string): string[] {
     if (e.type === 'user') {
       const results = Array.isArray(c) && c.length > 0 && c.every((b: any) => b?.type === 'tool_result');
       if (!results && (!e.isMeta || e.turnOrigin === 'peer')) sent = [];
+      if (results) for (const b of c) if (b.is_error === true || (c.length === 1 && e.toolUseResult?.success === false)) failed.add(b.tool_use_id);
       continue;
     }
     if (e.type !== 'assistant' || !Array.isArray(c)) continue;
-    for (const b of c) if (b?.type === 'tool_use' && b.name === 'SendMessage' && b.input?.to === to && typeof b.input.message === 'string') sent.push(b.input.message);
+    for (const b of c) if (b?.type === 'tool_use' && b.name === 'SendMessage' && b.input?.to === to && typeof b.input.message === 'string') sent.push({ id: b.id, text: b.input.message });
   }
-  return sent;
+  return sent.filter(s => s.id === undefined || !failed.has(s.id)).map(s => s.text);
 }
 
 /** Claude Code or Codex transcript lines as pane lines. `start` is the byte offset of the first line, which makes the ids. */
