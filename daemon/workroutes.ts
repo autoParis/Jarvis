@@ -8,8 +8,10 @@ import { ROW_PREFIX } from './native.ts';
 import type { Requests } from './requests.ts';
 import type { Work, WorkRow } from './work.ts';
 import { stop } from './steer.ts';
-import { readChatFile, withEvents, fileCursor } from './transcript.ts';
+import { readChatFile, withEvents, fileCursor, type Read, type Line } from './transcript.ts';
+import { spokenSentences } from './voice.ts';
 import type { RouteResult, Body } from './route.ts';
+import { withReadLine } from '../web/compose.js';
 
 // The work list's routes: the list, hiding a row, a "Worked for" row's steps, the transcript pane, and the row buttons
 // (Side chat, the steer box, Stop, Open, Desktop, Continue on phone). main.ts tries workRoute from its route table.
@@ -72,6 +74,45 @@ export type WorkCtx = {
   readLog: () => string;
 };
 
+/**
+ * A worker message gets `clips`, the number of sentences read aloud (spokenSentences in voice.ts), so the pane can show
+ * its speaker button and play it from /api/speech/worker/<row>/<line>/<i>. A message with nothing to read gets none.
+ */
+export function withClips<R extends Read>(r: R): R {
+  for (const l of r.lines as (Line & { clips?: number })[]) {
+    if (l.role !== 'agent' || l.kind) continue;
+    const n = spokenSentences(l.text).length;
+    if (n) l.clips = n;
+  }
+  return r;
+}
+
+export type SteerCtx = Pick<WorkCtx, 'native' | 'store' | 'work' | 'askChanged' | 'killed' | 'wake' | 'publish' | 'sync'>;
+
+/**
+ * One message from the owner to a native worker: the pane's box (/api/work/steer) and its mic (/api/voice with a
+ * target). The words go straight into the session (respawned first if its process was stopped). A message with a
+ * picture gets the read line (withReadLine in web/compose.js), so a worker started before that line existed reads the
+ * file too. The brain's note and the approval log keep the message without it.
+ */
+export async function steerWorker(o: SteerCtx, id: unknown, text: unknown): Promise<RouteResult> {
+  const row = o.work().rows.find(r => r.id === id);
+  if (!row || typeof text !== 'string') return { status: 404, body: { error: 'It is not in the work list any more.' } };
+  if (!row.native) return { status: 409, body: { error: 'Only a native worker takes a message here.' } };
+  const said = text.trim();
+  if (!said) return { status: 400, body: { error: 'Write a message first.' } };
+  const r = await o.native.reply(row.native.id, withReadLine(said), 'owner');
+  if (!r.ok) return { status: 502, body: { error: r.error } };
+  const a = o.store.addApproval({ action: 'session-type', args: JSON.stringify({ worker: row.id, text: said }), say: `Message to "${row.title.slice(0, 60)}"` });
+  o.store.decide(a.id, 'approved', 'button', said); o.store.finishApproval(a.id, 'done', 'sent');
+  const open = o.store.openItems().filter(i => i.source === 'native' && i.dispatch_id === row.id);
+  for (const i of open) { o.store.markItem(i.external_id, 'answered', said); o.askChanged(i.external_id); }
+  if (!o.killed()) o.wake(`[work list] ${OWNER} sent native worker ${row.native.name} (${row.id}) a message himself from the work list: ${JSON.stringify(said)}.${open.length ? ' That answers its open question.' : ''} Reply SILENT.`);
+  o.publish();
+  o.sync(); // a request that was Done goes back to Working now, not at the next poll (requests.ts)
+  return { status: 200, body: { done: 'sent' } };
+}
+
 export async function workRoute(o: WorkCtx, method: string, url: string, body: Body, query: URLSearchParams): Promise<RouteResult | undefined> {
   if (method === 'GET' && url === '/api/work') return { status: 200, body: { ...o.work(), hidden: hiddenIds(o.store), repos: o.repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL }, owner: { called: OWNER, cap: OWNER_CAP } } };
   // Hide or show a row in the app. Only the list of hidden ids changes.
@@ -113,7 +154,7 @@ export async function workRoute(o: WorkCtx, method: string, url: string, body: B
     if (!file) return { status: 200, body: { lines: [], busy, error: 'No transcript yet: the worker has not written its first turn.' } };
     const cursor = query.get('cursor') || undefined;
     o.watchPane(id, file);
-    try { return { status: 200, body: { ...withEvents(readChatFile(file, fileCursor(cursor)), o.store.eventsFor(id), cursor), busy } }; }
+    try { return { status: 200, body: { ...withClips(withEvents(readChatFile(file, fileCursor(cursor)), o.store.eventsFor(id), cursor)), busy } }; }
     catch (e) { return { status: 200, body: { lines: [], busy, error: `Transcript unreadable: ${(e as Error).message}` } }; }
   }
   if (read) return { status: 404, body: { error: 'It is not in the work list any more.' } };
@@ -131,21 +172,7 @@ export async function workRoute(o: WorkCtx, method: string, url: string, body: B
   // The steer box under the transcript. A native worker gets the words at once.
   if (url === '/api/work/steer') {
     const { id, text } = await body();
-    const row = o.work().rows.find(r => r.id === id);
-    if (!row || typeof text !== 'string') return { status: 404, body: { error: 'It is not in the work list any more.' } };
-    if (!row.native) return { status: 409, body: { error: 'Only a native worker takes a message here.' } };
-    // the owner's words go straight into the background session (respawned first if its process was stopped).
-    if (!text.trim()) return { status: 400, body: { error: 'Write a message first.' } };
-    const r = await o.native.reply(row.native.id, text.trim(), 'owner');
-    if (!r.ok) return { status: 502, body: { error: r.error } };
-    const a = o.store.addApproval({ action: 'session-type', args: JSON.stringify({ worker: row.id, text: text.trim() }), say: `Message to "${row.title.slice(0, 60)}"` });
-    o.store.decide(a.id, 'approved', 'button', text.trim()); o.store.finishApproval(a.id, 'done', 'sent');
-    const open = o.store.openItems().filter(i => i.source === 'native' && i.dispatch_id === row.id);
-    for (const i of open) { o.store.markItem(i.external_id, 'answered', text.trim()); o.askChanged(i.external_id); }
-    if (!o.killed()) o.wake(`[work list] ${OWNER} sent native worker ${row.native.name} (${row.id}) a message himself from the work list: ${JSON.stringify(text.trim())}.${open.length ? ' That answers its open question.' : ''} Reply SILENT.`);
-    o.publish();
-    o.sync(); // a request that was Done goes back to Working now, not at the next poll (requests.ts)
-    return { status: 200, body: { done: 'sent' } };
+    return steerWorker(o, id, text);
   }
   if (url === '/api/work/stop') {
     const { id } = await body();

@@ -204,6 +204,8 @@ export type VoiceFileCtx = {
   speaker: Pick<Speaker, 'noteSpoken'>;
   /** A stored Jarvis message's text, by turn id. */
   jarvisText: (turnId: number) => string | undefined;
+  /** A worker's message in its pane: its row id and the line id from the pane read (chatLineAt in transcript.ts). */
+  workerText: (rowId: string, lineId: string) => string | undefined;
   /** data/bakeoff: voice samples for picking the TTS model by ear. */
   bakeoffDir: string;
 };
@@ -227,6 +229,19 @@ export async function voiceFileRoute(o: VoiceFileCtx, req: http.IncomingMessage,
     if (!s) { notFound(res); return true; }
     const name = await o.voice.tts(s);
     o.speaker.noteSpoken(s); // the echo guard must know these words too, or the open mic takes a replay for the owner
+    sendClip(req, res, join(o.voice.dir, name));
+    return true;
+  }
+  // One sentence of a worker's message in its pane. A pane line has no turn number: it is the row id and the line's
+  // byte offset in the transcript (`f:<offset>`, daemon/transcript.ts), each URL-encoded.
+  const said = /^\/api\/speech\/worker\/([^/]+)\/([^/]+)\/(\d+)$/.exec(url);
+  if (said) {
+    let row = '', line = '';
+    try { row = decodeURIComponent(said[1]); line = decodeURIComponent(said[2]); } catch { /* a bad escape is a 404 */ }
+    const s = spokenSentences((row && line && o.workerText(row, line)) || '')[Number(said[3])];
+    if (!s) { notFound(res); return true; }
+    const name = await o.voice.tts(s);
+    o.speaker.noteSpoken(s);
     sendClip(req, res, join(o.voice.dir, name));
     return true;
   }
@@ -256,6 +271,8 @@ export type VoiceCtx = {
   log: Log;
   /** The owner's message, as if typed. `replyTo` is the turn he answers. */
   fromOwner: (text: string, replyTo?: number) => void;
+  /** The owner's message to a native worker, by row id, as the pane's box sends it (steerWorker in workroutes.ts). */
+  toWorker: (id: string, text: string) => Promise<RouteResult>;
   /** The folder /api/upload saves pictures in. Only pictures from it go with the words. */
   uploads: string;
   today: { list: () => unknown; add: (b: { words: string; go: boolean }) => RouteResult };
@@ -279,10 +296,18 @@ export async function voiceRoute(o: VoiceCtx, method: string, url: string, raw: 
     const r = await o.voice.stt(audio, hands ? { threshold: listen.vadThreshold, minSpeechMs: listen.vadMinSpeechMs } : undefined);
     if (r.vadError) log(`listen: vad failed, transcribing anyway: ${r.vadError}`);
     if (!hands) {
-      log(`stt ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)}${pics.lines.length ? ` pictures=${pics.lines.length}` : ''}: ${r.text}`);
+      const target = q.get('target');
+      log(`stt ${Date.now() - t0} ms conf=${r.confidence.toFixed(2)}${pics.lines.length ? ` pictures=${pics.lines.length}` : ''}${target ? ` to ${target}` : ''}: ${r.text}`);
       // Text the owner typed before he tapped the mic goes in front of the words, and the pictures after them, as one
       // message (web/dictate.js).
       const message = voiceMessage(q.get('typed'), r.text, pics.lines);
+      // `target` is a worker's row id: the mic in its pane. The message goes to that worker, not to the brain.
+      if (target) {
+        if (!message) return { status: 200, body: { text: r.text, confidence: r.confidence, sent: false } };
+        const s = await o.toWorker(target, message);
+        if (s.status !== 200) return { status: s.status, body: { ...(s.body as object), text: r.text } };
+        return { status: 200, body: { text: r.text, confidence: r.confidence, sent: true, message } };
+      }
       if (message) o.fromOwner(message, replyIdOf(q.get('replyTo')));
       return { status: 200, body: { text: r.text, confidence: r.confidence, sent: !!message } };
     }

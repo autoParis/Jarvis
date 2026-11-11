@@ -138,6 +138,23 @@ export function chatLines(jsonl: string, start: number): Line[] {
   return out;
 }
 
+/**
+ * The worker's message with pane id `id` (`f:<byte offset>`), for read aloud (/api/speech/worker in voice.ts). Only a
+ * worker message is returned: an id that points at the owner's words, a tool call or the middle of a line gives undefined.
+ */
+export function chatLineAt(file: string, id: string): string | undefined {
+  const m = /^f:(\d+)$/.exec(id);
+  if (!m) return undefined;
+  const from = Number(m[1]), size = statSync(file).size;
+  if (from >= size) return undefined;
+  const len = Math.min(FILE_CHUNK, size - from), buf = Buffer.alloc(len);
+  const fd = openSync(file, 'r');
+  try { readSync(fd, buf, 0, len, from); } finally { closeSync(fd); }
+  const text = buf.toString('utf8'), end = text.indexOf('\n');
+  if (end < 0) return undefined;
+  return chatLines(text.slice(0, end + 1), from).find(l => l.id === id && l.role === 'agent')?.text;
+}
+
 /** Reads complete lines after byte `cursor` (the last 2 MB on the first read). The cursor is the next unread byte. */
 export function readChatFile(file: string, cursor?: string): Read {
   const size = statSync(file).size;

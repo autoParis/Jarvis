@@ -71,7 +71,8 @@ test('paint draws a line for a stroke and a dot for a tap', () => {
 
 test('the page opens composer pictures in the viewer and waits for the marks before upload', () => {
   const page = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
-  assert.match(page, /\.thumb-open'\)\.onclick = \(\) => openViewer\(item\.baseUrl, item\)/);
+  assert.match(readFileSync(new URL('../web/composer.js', import.meta.url), 'utf8'), /\.thumb-open'\)\.onclick = \(\) => openViewer\(item\.baseUrl, item\)/);
+  assert.equal(page.match(/openViewer: \(src, item\) => openViewer\(src, item\)/g)?.length, 2, 'both boxes open their pictures in the viewer with the pen');
   assert.match(readFileSync(new URL('../web/compose.js', import.meta.url), 'utf8'), /await p\.ready;/);
   assert.match(page, /item\.file = file;\n\s*delete item\.path;/, 'a marked picture drops the path of an earlier upload');
   assert.match(page, /shotRowHtml\(p\.paths, esc\)/);

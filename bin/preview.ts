@@ -61,6 +61,8 @@ import { terminalRows } from '../daemon/termrows.ts';
 import { quoteOf, quoteLine, replyIdOf, type TurnRow } from '../daemon/quote.ts';
 import { makePreviewTasks } from './preview-tasks.ts';
 import { webVersion, versionEvent, webVersionRoute } from '../daemon/webfiles.ts';
+import { withReadLine } from '../web/compose.js';
+import { voiceMessage } from '../web/dictate.js';
 
 const CLOSED = process.env.PREVIEW_CLOSED ? JSON.parse(readFileSync(process.env.PREVIEW_CLOSED, 'utf8')) : undefined;
 // PREVIEW_REPORT=<file.md> fills ?s=reportask: a worker ask whose REPORT line names that file, its request row with
@@ -359,7 +361,9 @@ const LINES = [
   { role: 'agent', text: 'The failing test expects a paused account to show a grey pin. The story says to hide it, so I am following the story and updating that test.' },
   { role: 'user', text: 'Keep going, follow the story.' },
   { role: 'agent', text: 'All 39 map tests pass now. Running the full suite before I open the pull request.' },
-];
+].map((l, i) => ({ id: `f:${i * 100}`, ...l, ...(l.role === 'agent' ? { clips: clipCount(l.text) } : {}) }));
+// What the pane's box and mic sent, as the worker's transcript would show it on the next read (with the read line).
+const steered: { id: string; role: string; text: string }[] = [];
 
 const PREVIEW_REPOS = [{ name: 'acmeapp', path: '/Users/owner/Repos/acmeapp_nextjs' }, { name: 'fbm', path: '/Users/owner/Repos/FB-marketplace-uploader' }, { name: 'jarvis', path: '/Users/owner/Repos/jarvis' }];
 const termState = new Map<string, string>();
@@ -437,7 +441,10 @@ http.createServer(async (req, res) => {
     if (url === '/api/work') return send(res, 200, { at: '', rows: withTerms(scene.rows), hidden: scene.hidden, repos: PREVIEW_REPOS });
     if (url === '/api/listen/config') return send(res, 200, { client: {}, wakeWord: false });
     if (url === '/api/push/key') return send(res, 200, { publicKey: '' });
-    if (/^\/api\/work\/[^/]+\/read$/.test(url)) return send(res, 200, new URL(req.url!, 'http://x').searchParams.get('cursor') ? { lines: [], cursor: 'end' } : { lines: LINES, cursor: 'end' });
+    if (/^\/api\/work\/[^/]+\/read$/.test(url)) return send(res, 200, new URL(req.url!, 'http://x').searchParams.get('cursor') ? { lines: steered.splice(0), cursor: 'end' } : { lines: LINES, cursor: 'end' });
+    // Read aloud of a worker line: the preview has no voice. The console names the line asked for, and the clip is a 404.
+    const said = /^\/api\/speech\/worker\/([^/]+)\/([^/]+)\/(\d+)$/.exec(url);
+    if (said) { console.log(`read aloud ${decodeURIComponent(said[1])} ${decodeURIComponent(said[2])} sentence ${said[3]}`); return send(res, 404); }
     if (url === '/image') {
       const up = uploads.get(new URL(req.url!, 'http://x').searchParams.get('path') ?? '');
       if (up) { res.writeHead(200, { 'content-type': up.type }); return res.end(up.bytes); }
@@ -467,7 +474,23 @@ http.createServer(async (req, res) => {
     console.log(`upload ${path}: ${req.headers['content-type']}, ${uploads.get(path)!.bytes.length} bytes`);
     return send(res, 200, { path });
   }
-  const b = await body(req).catch(() => ({}));
+  // The pane's mic: the microphone here hears nothing, so the clip becomes these sample words, sent to the worker.
+  if (url === '/api/voice' && new URL(req.url!, 'http://x').searchParams.get('target')) {
+    for await (const _ of req) {}
+    const q = new URL(req.url!, 'http://x').searchParams, text = 'Sample words from the microphone';
+    const message = voiceMessage(q.get('typed'), text, q.getAll('image').map(p => `[image: ${p}]`));
+    steered.push({ id: `f:s${steered.length}-${Date.now()}`, role: 'user', text: withReadLine(message) });
+    console.log(`voice to ${q.get('target')}: ${message}`);
+    return send(res, 200, { text, confidence: 1, sent: true, message });
+  }
+  const b: any = await body(req).catch(() => ({}));
+  // The pane's box: what the worker gets goes to the console and back into the pane on the next read.
+  if (url === '/api/work/steer') {
+    const text = withReadLine(String(b.text ?? '').trim());
+    console.log(`steer ${b.id}: ${JSON.stringify(text)}`);
+    steered.push({ id: `f:s${steered.length}-${Date.now()}`, role: 'user', text });
+    return send(res, 200, { done: 'sent' });
+  }
   if (url.startsWith('/api/migration/')) {
     const r = migrationRoute(migration, 'POST', url, b);
     if (r) return send(res, r.status, r.body);

@@ -81,12 +81,17 @@ test('the voice query carries one image parameter per picture, and the daemon ac
 test('every chat send in the page goes through sendOut, so no path can skip the pictures', () => {
   const page = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   const CHAT_SEND = /^.*fetch\(.*['`]\/api\/(send|voice)\b.*$/gm;
-  assert.equal(page.match(CHAT_SEND)?.length, 3, 'Send/Enter, the mic dictation and a hands-free clip');
-  for (const m of page.matchAll(CHAT_SEND)) {
-    const before = page.slice(0, m.index);
-    const open = before.lastIndexOf('sendOut({');
-    assert.ok(open >= 0 && !before.slice(open).includes('\n}\n'), `the fetch at offset ${m.index} is not inside a sendOut post`);
-  }
+  assert.equal(page.match(CHAT_SEND)?.length, 4, 'Send/Enter, the chat mic, a hands-free clip and the pane mic');
+  // A send in a composer's `send` runs inside the composer's own sendOut post (web/composer.js, checked below).
+  const inside = (src: string, at: number, openers: string[]) => {
+    const before = src.slice(0, at);
+    const open = Math.max(...openers.map(o => before.lastIndexOf(o)));
+    return open >= 0 && !before.slice(open).includes('\n}\n') && !before.slice(open).includes('\n});\n');
+  };
+  for (const m of page.matchAll(CHAT_SEND)) assert.ok(inside(page, m.index, ['sendOut({', 'makeComposer({']), `the fetch at offset ${m.index} is not inside a sendOut post`);
+  const composer = readFileSync(new URL('../web/composer.js', import.meta.url), 'utf8');
+  const call = composer.indexOf('return send(message');
+  assert.ok(call > 0 && inside(composer, call, ['sendOut({']), 'the composer calls its send inside a sendOut post');
 });
 
 test('a picture whose pen marks are still being drawn in uploads only once they are, so the marks go out', async () => {

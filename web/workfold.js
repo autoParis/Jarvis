@@ -181,12 +181,14 @@ export const SPEAK = {
 
 /**
  * The row under a message from the owner or Jarvis: the time, a copy button, a reply button when the message has a turn
- * id and, on a Jarvis message with words to read, a speaker button. CSS shows it on hover, or on a tap on a touch screen.
+ * id and, on a Jarvis message with words to read, a speaker button. With no `at` the row has no time. CSS shows it on
+ * hover, or on a tap on a touch screen.
  */
 export function messageFootHtml(at, speak, turn) {
-  const speaker = speak ? `<button type="button" class="msg-speak" data-turn="${speak.id}" data-clips="${speak.clips}" data-state="idle" aria-label="${SPEAK.idle.title}" title="${SPEAK.idle.title}">${SPEAK.idle.html}</button>` : '';
+  const speaker = speak ? `<button type="button" class="msg-speak" data-turn="${esc(speak.id)}" data-clips="${esc(speak.clips)}" data-state="idle" aria-label="${SPEAK.idle.title}" title="${SPEAK.idle.title}">${SPEAK.idle.html}</button>` : '';
   const reply = Number.isInteger(turn) && turn > 0 ? `<button type="button" class="msg-reply" aria-label="Reply to this message" title="Reply">${REPLY_ICON}</button>` : '';
-  return `<div class="msg-foot"><span class="ago">${esc(formatStamp(at))}</span><button type="button" class="msg-copy" aria-label="Copy message" title="Copy">${COPY_ICON}</button>${reply}${speaker}</div>`;
+  const time = at ? `<span class="ago">${esc(formatStamp(at))}</span>` : '';
+  return `<div class="msg-foot">${time}<button type="button" class="msg-copy" aria-label="Copy message" title="Copy">${COPY_ICON}</button>${reply}${speaker}</div>`;
 }
 
 export const REPLY_ICON = footIcon('<path d="M9.5 15 4 9.5 9.5 4"/><path d="M4 9.5h10a6 6 0 0 1 0 12h-2"/>');

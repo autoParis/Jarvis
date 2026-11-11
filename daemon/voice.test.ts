@@ -20,6 +20,7 @@ function setup(stt: { text: string; speech?: boolean }, env: Record<string, stri
     voice: { stt: async (a, vad) => { seen.stt.push([a, vad]); return { text: stt.text, confidence: 0.9, speech: stt.speech ?? true }; } },
     listen: listenConfig(env), speaker, log: m => seen.logs.push(m),
     fromOwner: (text, replyTo) => seen.owner.push([text, replyTo]),
+    toWorker: async (id, text) => { (seen.worker ??= []).push([id, text]); return id === 'n:gone' ? { status: 404, body: { error: 'It is not in the work list any more.' } } : { status: 200, body: { done: 'sent' } }; },
     uploads: mkdtempSync(join(tmpdir(), 'jarvis-up-')),
     today: { list: () => ['row'], add: b => { seen.added.push(b); return { status: 200, body: { id: 4 } }; } },
   };
@@ -42,6 +43,20 @@ test('voice: the chat microphone sends the typed text, the words and the reply t
   const empty = setup({ text: '' });
   assert.deepEqual((await voiceRoute(empty.o, 'POST', '/api/voice', raw, q()))?.body, { text: '', confidence: 0.9, sent: false });
   assert.deepEqual(empty.seen.owner, []);
+});
+
+test('voice: the pane microphone sends to its worker, not to the brain', async () => {
+  const { o, seen } = setup({ text: 'run the tests' });
+  const r = await voiceRoute(o, 'POST', '/api/voice', raw, q('target=n:w1&typed=Then'));
+  assert.deepEqual(r, { status: 200, body: { text: 'run the tests', confidence: 0.9, sent: true, message: 'Then run the tests' } });
+  assert.deepEqual(seen.worker, [['n:w1', 'Then run the tests']]);
+  assert.deepEqual(seen.owner, [], 'the brain gets nothing');
+  const gone = await voiceRoute(o, 'POST', '/api/voice', raw, q('target=n:gone'));
+  assert.equal(gone?.status, 404);
+  assert.equal(gone?.body.text, 'run the tests', 'the words come back, so the page can keep them');
+  const empty = setup({ text: '' });
+  assert.deepEqual((await voiceRoute(empty.o, 'POST', '/api/voice', raw, q('target=n:w1')))?.body, { text: '', confidence: 0.9, sent: false });
+  assert.equal(empty.seen.worker, undefined);
 });
 
 test('voice: hands-free keeps a clip with the wake word, then the follow-up window, and drops the rest', async () => {
@@ -85,7 +100,8 @@ test('voice files: a clip with and without a range, one sentence of a stored mes
   const bakeoffDir = join(dir, 'bakeoff'); mkdirSync(bakeoffDir); writeFileSync(join(bakeoffDir, 'b.m4a'), 'x');
   const noted: string[] = [], rendered: string[] = [];
   const o = { voice: { dir, tts: async (s: string) => { rendered.push(s); return 'abc.m4a'; } }, speaker: { noteSpoken: (s: string) => noted.push(s) },
-    jarvisText: (id: number) => (id === 5 ? 'First one. Second one.' : undefined), bakeoffDir };
+    jarvisText: (id: number) => (id === 5 ? 'First one. Second one.' : undefined),
+    workerText: (row: string, line: string) => (row === 'n:w1' && line === 'f:120' ? 'Tests pass. Pushed it.' : undefined), bakeoffDir };
   let res = fakeRes();
   assert.equal(await voiceFileRoute(o, fakeReq(), res, '/audio/abc.m4a'), true);
   assert.equal(await res.done(), '0123456789');
@@ -103,6 +119,16 @@ test('voice files: a clip with and without a range, one sentence of a stored mes
   res = fakeRes();
   await voiceFileRoute(o, fakeReq(), res, '/api/speech/5/9');
   assert.equal(res.status, 404);
+  // A worker's message in its pane: the row id and the line id, each URL-encoded, then the sentence.
+  res = fakeRes();
+  await voiceFileRoute(o, fakeReq(), res, `/api/speech/worker/${encodeURIComponent('n:w1')}/${encodeURIComponent('f:120')}/1`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(rendered.at(-1), 'Pushed it.');
+  for (const bad of [`/api/speech/worker/n%3Aw1/f%3A99/0`, '/api/speech/worker/%E0%A4%A/f%3A120/0', `/api/speech/worker/n%3Aw1/f%3A120/5`]) {
+    res = fakeRes();
+    await voiceFileRoute(o, fakeReq(), res, bad);
+    assert.equal(res.status, 404, bad);
+  }
   res = fakeRes();
   await voiceFileRoute(o, fakeReq(), res, '/bakeoff');
   assert.match(await res.done(), /<audio controls preload="none" src="\/bakeoff\/b\.m4a">/);
