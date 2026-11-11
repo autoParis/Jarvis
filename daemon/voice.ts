@@ -204,6 +204,8 @@ export type VoiceFileCtx = {
   speaker: Pick<Speaker, 'noteSpoken'>;
   /** A stored Jarvis message's text, by turn id. */
   jarvisText: (turnId: number) => string | undefined;
+  /** A worker's message in its pane: its row id and the line id from the pane read (chatLineAt in transcript.ts). */
+  workerText: (rowId: string, lineId: string) => string | undefined;
   /** data/bakeoff: voice samples for picking the TTS model by ear. */
   bakeoffDir: string;
 };
@@ -227,6 +229,19 @@ export async function voiceFileRoute(o: VoiceFileCtx, req: http.IncomingMessage,
     if (!s) { notFound(res); return true; }
     const name = await o.voice.tts(s);
     o.speaker.noteSpoken(s); // the echo guard must know these words too, or the open mic takes a replay for the owner
+    sendClip(req, res, join(o.voice.dir, name));
+    return true;
+  }
+  // One sentence of a worker's message in its pane. A pane line has no turn number: it is the row id and the line's
+  // byte offset in the transcript (`f:<offset>`, daemon/transcript.ts), each URL-encoded.
+  const said = /^\/api\/speech\/worker\/([^/]+)\/([^/]+)\/(\d+)$/.exec(url);
+  if (said) {
+    let row = '', line = '';
+    try { row = decodeURIComponent(said[1]); line = decodeURIComponent(said[2]); } catch { /* a bad escape is a 404 */ }
+    const s = spokenSentences((row && line && o.workerText(row, line)) || '')[Number(said[3])];
+    if (!s) { notFound(res); return true; }
+    const name = await o.voice.tts(s);
+    o.speaker.noteSpoken(s);
     sendClip(req, res, join(o.voice.dir, name));
     return true;
   }

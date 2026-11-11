@@ -4,6 +4,9 @@ import assert from 'node:assert/strict';
 import { openStore } from './store.ts';
 import { workRoute, hiddenIds, type WorkCtx } from './workroutes.ts';
 import { READ_PICTURES } from '../web/compose.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const body = (v: unknown) => async () => v;
 const none = () => { throw new Error('the route read a body it does not need'); };
@@ -85,6 +88,19 @@ test('work list: the transcript pane for a closed request, a native worker, and 
   assert.equal((await workRoute(o, 'GET', '/api/work/n%3Agone/read', none, q()))?.status, 404);
   assert.deepEqual(await workRoute(o, 'GET', '/api/work/t%3Ax/read', none, q()), { status: 404, body: { error: 'It is not in the work list any more.' } });
   assert.deepEqual(seen.watched, [], 'no file, no watcher');
+});
+
+test('work list: a worker message in the pane says how many sentences read aloud has, the owner\'s words do not', async () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'jarvis-wr-')), 's.jsonl');
+  writeFileSync(file, [
+    { type: 'user', message: { content: 'go on' } },
+    { type: 'assistant', message: { content: 'Tests pass. Pushed it.' } },
+    { type: 'assistant', message: { content: '[image: /tmp/a.png]' } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const { o } = setup();
+  o.native.transcriptFile = () => file;
+  const r: any = await workRoute(o, 'GET', '/api/work/n%3Aw1/read', none, q());
+  assert.deepEqual(r.body.lines.map((l: any) => [l.role, l.clips]), [['user', undefined], ['agent', 2], ['agent', undefined]]);
 });
 
 test('work list: Side chat needs a listed repo, and a press that did not start answers 502', async () => {

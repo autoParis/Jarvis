@@ -26,6 +26,7 @@ import { homedir } from 'node:os';
 import { githubRepo, type Work } from './work.ts';
 import { makeRequests, backfillRequests, requestsRoute } from './requests.ts';
 import { workRoute, hiddenIds, makePaneWatcher, steerWorker } from './workroutes.ts';
+import { chatLineAt } from './transcript.ts';
 import { listenConfig } from './listen.ts';
 import { askCard, askRoute, auditEntries, type AskCard } from './asks.ts';
 import { brainAskRoute, briefLine as brainAskLine, isBrainAsk, toBrain } from './brainasks.ts';
@@ -401,7 +402,14 @@ const gateCtx = {
   gate, store, native, killed: () => existsSync(KILL_FILE), notice: gateNotice, proposed: chatLinks.proposed,
   hold: (text: string) => brain.hold(text), wake: (text: string) => brain.send(text),
 };
-const voiceFileCtx = { voice, speaker, jarvisText: (id: number) => store.jarvisText(id), bakeoffDir: join(ROOT, 'data', 'bakeoff') };
+const voiceFileCtx = {
+  voice, speaker, jarvisText: (id: number) => store.jarvisText(id),
+  // A worker's message, for read aloud in its pane. A transcript that moved or went away is a 404, not a crash.
+  workerText: (row: string, line: string) => {
+    const file = row.startsWith(ROW_PREFIX) ? native.transcriptFile(row) : undefined;
+    try { return file ? chatLineAt(file, line) : undefined; } catch { return undefined; }
+  },
+  bakeoffDir: join(ROOT, 'data', 'bakeoff') };
 const voiceCtx = { voice, listen, speaker, log, fromOwner, toWorker: (id: string, text: string) => steerWorker(workCtx, id, text), uploads: uploadDir(ROOT), today };
 const messagesCtx = {
   messages,

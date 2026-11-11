@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { chatLines, readChatFile, withEvents, fileCursor, CLIP } from './transcript.ts';
+import { chatLines, chatLineAt, readChatFile, withEvents, fileCursor, CLIP } from './transcript.ts';
 
 test('long text is clipped and marked, and a tool call is one short line', () => {
   const jsonl = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(CLIP + 10) }, { type: 'tool_use', name: 'Bash', input: { command: 'npm\n test' } }] } }) + '\n';
@@ -41,6 +41,21 @@ test('a chat file is read from its cursor, complete lines only', () => {
   appendFileSync(file, 'age":{"content":"four"}}\n');
   assert.deepEqual(readChatFile(file, second.cursor).lines.map(l => l.text), ['four']);
   assert.equal(readChatFile(file, 'f:999999').reset, true);
+});
+
+test('read aloud finds a worker message by its pane id, and only a worker message', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'jarvis-tr-')), 's.jsonl');
+  const user = JSON.stringify({ type: 'user', message: { content: 'go on' } }) + '\n';
+  const agent = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Tests pass.' }, { type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] } }) + '\n';
+  writeFileSync(file, user + agent);
+  const ids = readChatFile(file).lines.map(l => l.id);
+  assert.deepEqual(ids, ['f:0', `f:${Buffer.byteLength(user)}`, `f:${Buffer.byteLength(user)}#1`]);
+  assert.equal(chatLineAt(file, ids[1]), 'Tests pass.');
+  assert.equal(chatLineAt(file, ids[0]), undefined, 'the owner\'s words are not read');
+  assert.equal(chatLineAt(file, ids[2]), undefined, 'nor a tool call');
+  assert.equal(chatLineAt(file, 'f:3'), undefined, 'nor the middle of a line');
+  assert.equal(chatLineAt(file, 'f:999999'), undefined);
+  assert.equal(chatLineAt(file, 'bad'), undefined);
 });
 
 test('a native pane: a typed line is a plain user line, a mid-turn typed line comes from its queued_command attachment, a relayed one is a reply', () => {

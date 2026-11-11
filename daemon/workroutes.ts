@@ -8,7 +8,8 @@ import { ROW_PREFIX } from './native.ts';
 import type { Requests } from './requests.ts';
 import type { Work, WorkRow } from './work.ts';
 import { stop } from './steer.ts';
-import { readChatFile, withEvents, fileCursor } from './transcript.ts';
+import { readChatFile, withEvents, fileCursor, type Read, type Line } from './transcript.ts';
+import { spokenSentences } from './voice.ts';
 import type { RouteResult, Body } from './route.ts';
 import { withReadLine } from '../web/compose.js';
 
@@ -72,6 +73,19 @@ export type WorkCtx = {
   chatFiles: Map<string, string>;
   readLog: () => string;
 };
+
+/**
+ * A worker message gets `clips`, the number of sentences read aloud (spokenSentences in voice.ts), so the pane can show
+ * its speaker button and play it from /api/speech/worker/<row>/<line>/<i>. A message with nothing to read gets none.
+ */
+export function withClips<R extends Read>(r: R): R {
+  for (const l of r.lines as (Line & { clips?: number })[]) {
+    if (l.role !== 'agent' || l.kind) continue;
+    const n = spokenSentences(l.text).length;
+    if (n) l.clips = n;
+  }
+  return r;
+}
 
 export type SteerCtx = Pick<WorkCtx, 'native' | 'store' | 'work' | 'askChanged' | 'killed' | 'wake' | 'publish' | 'sync'>;
 
@@ -140,7 +154,7 @@ export async function workRoute(o: WorkCtx, method: string, url: string, body: B
     if (!file) return { status: 200, body: { lines: [], busy, error: 'No transcript yet: the worker has not written its first turn.' } };
     const cursor = query.get('cursor') || undefined;
     o.watchPane(id, file);
-    try { return { status: 200, body: { ...withEvents(readChatFile(file, fileCursor(cursor)), o.store.eventsFor(id), cursor), busy } }; }
+    try { return { status: 200, body: { ...withClips(withEvents(readChatFile(file, fileCursor(cursor)), o.store.eventsFor(id), cursor)), busy } }; }
     catch (e) { return { status: 200, body: { lines: [], busy, error: `Transcript unreadable: ${(e as Error).message}` } }; }
   }
   if (read) return { status: 404, body: { error: 'It is not in the work list any more.' } };

@@ -100,7 +100,8 @@ test('voice files: a clip with and without a range, one sentence of a stored mes
   const bakeoffDir = join(dir, 'bakeoff'); mkdirSync(bakeoffDir); writeFileSync(join(bakeoffDir, 'b.m4a'), 'x');
   const noted: string[] = [], rendered: string[] = [];
   const o = { voice: { dir, tts: async (s: string) => { rendered.push(s); return 'abc.m4a'; } }, speaker: { noteSpoken: (s: string) => noted.push(s) },
-    jarvisText: (id: number) => (id === 5 ? 'First one. Second one.' : undefined), bakeoffDir };
+    jarvisText: (id: number) => (id === 5 ? 'First one. Second one.' : undefined),
+    workerText: (row: string, line: string) => (row === 'n:w1' && line === 'f:120' ? 'Tests pass. Pushed it.' : undefined), bakeoffDir };
   let res = fakeRes();
   assert.equal(await voiceFileRoute(o, fakeReq(), res, '/audio/abc.m4a'), true);
   assert.equal(await res.done(), '0123456789');
@@ -118,6 +119,16 @@ test('voice files: a clip with and without a range, one sentence of a stored mes
   res = fakeRes();
   await voiceFileRoute(o, fakeReq(), res, '/api/speech/5/9');
   assert.equal(res.status, 404);
+  // A worker's message in its pane: the row id and the line id, each URL-encoded, then the sentence.
+  res = fakeRes();
+  await voiceFileRoute(o, fakeReq(), res, `/api/speech/worker/${encodeURIComponent('n:w1')}/${encodeURIComponent('f:120')}/1`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(rendered.at(-1), 'Pushed it.');
+  for (const bad of [`/api/speech/worker/n%3Aw1/f%3A99/0`, '/api/speech/worker/%E0%A4%A/f%3A120/0', `/api/speech/worker/n%3Aw1/f%3A120/5`]) {
+    res = fakeRes();
+    await voiceFileRoute(o, fakeReq(), res, bad);
+    assert.equal(res.status, 404, bad);
+  }
   res = fakeRes();
   await voiceFileRoute(o, fakeReq(), res, '/bakeoff');
   assert.match(await res.done(), /<audio controls preload="none" src="\/bakeoff\/b\.m4a">/);

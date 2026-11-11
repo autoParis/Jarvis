@@ -350,7 +350,7 @@ items.addEventListener('click', e => {
   const choice = e.target.closest('.chat-yes, .chat-no');
   if (choice) return decide(Number(choice.closest('[data-approval]').dataset.approval), choice.classList.contains('chat-yes'));
   const speaker = e.target.closest('.msg-speak');
-  if (speaker) return speech.toggle(Number(speaker.dataset.turn), Number(speaker.dataset.clips));
+  if (speaker) return speech.toggle(speakKey(speaker.dataset.turn), Number(speaker.dataset.clips));
   const b = e.target.closest('.hand');
   if (!b) return tapLine(e, items, noHover.matches);
   if (b.disabled) return;
@@ -919,10 +919,14 @@ $('auditbtn').onclick = async () => {
 let soundOn = localStorage.getItem('sound') !== 'off';
 const player = new Audio();
 // The speaker buttons and voice mode play through this one controller (web/speech.js).
-const speech = makeSpeech({ audio: player, clipUrl: (turn, i) => `/api/speech/${turn}/${i}`, warm: url => rawFetch(url).catch(() => {}), onChange: paintSpeakers });
+// A brain message is keyed by its turn number. A worker's message in its pane has no turn: its key is the row id and
+// the line id, each URL-encoded ("n%3Aab12/f%3A4096"), which /api/speech/worker reads (daemon/voice.ts).
+const speakKey = v => /^\d+$/.test(v) ? Number(v) : v;
+const clipUrl = (key, i) => typeof key === 'number' ? `/api/speech/${key}/${i}` : `/api/speech/worker/${key}/${i}`;
+const speech = makeSpeech({ audio: player, clipUrl, warm: url => rawFetch(url).catch(() => {}), onChange: paintSpeakers });
 function paintSpeakers() {
-  for (const b of items.querySelectorAll('.msg-speak')) {
-    const state = speech.state(Number(b.dataset.turn));
+  for (const b of [...items.querySelectorAll('.msg-speak'), ...$('pane-lines').querySelectorAll('.msg-speak')]) {
+    const state = speech.state(speakKey(b.dataset.turn));
     if (b.dataset.state === state) continue;
     b.dataset.state = state; b.innerHTML = SPEAK[state].html; b.title = SPEAK[state].title; b.setAttribute('aria-label', SPEAK[state].title);
   }
@@ -1365,6 +1369,7 @@ function paneAppend(lines) {
   }
   while (paneLines.children.length > PANE_MAX) (paneLines.firstChild.matches('.rdetail') ? paneLines.children[1] : paneLines.firstChild).remove();
   if (atBottom) paneLog.scrollTop = paneLog.scrollHeight;
+  paintSpeakers(); // a message read aloud before the pane closed shows its place again
 }
 // One pane line. A message from the owner or the worker is a shared message row, with the copy button under it.
 // The owner's pictures show as the row of squares above his words, as in the chat. The read line stays hidden.
@@ -1373,7 +1378,9 @@ function paneRow(l) {
   const agent = l.role === 'agent', own = l.role.startsWith('user');
   const text = own ? withoutReadLine(l.text) : l.text, p = own && splitPictures(text);
   const bodyHtml = agent ? markdown(l.text, shot) : own ? shotRowHtml(p.paths, esc) + (p.text ? `<div class="msg-text">${esc(p.text)}</div>` : '') : esc(l.text);
-  const line = messageRow({ lineClass: `line${own ? ' line-owner' : ''}`, bodyClass: `pl ${l.role}${agent ? ' md' : ''}`, bodyHtml, text });
+  // A worker's message with words to read has the speaker button. Its key names the row and the line (speakKey).
+  const speak = agent && l.clips && pane.id ? { id: `${encodeURIComponent(pane.id)}/${encodeURIComponent(l.id)}`, clips: l.clips } : null;
+  const line = messageRow({ lineClass: `line${own ? ' line-owner' : ''}`, bodyClass: `pl ${l.role}${agent ? ' md' : ''}`, bodyHtml, text, speak });
   if (l.role === 'user pending') line.dataset.sent = text;
   const d = line.firstElementChild, tag = paneTag(l);
   if (tag) { d.classList.add('said'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
@@ -1397,6 +1404,8 @@ function addToolRow(text) {
 paneLines.addEventListener('click', e => {
   const copy = e.target.closest('.msg-copy');
   if (copy) return copyMessage(copy);
+  const speaker = e.target.closest('.msg-speak');
+  if (speaker) return speech.toggle(speakKey(speaker.dataset.turn), Number(speaker.dataset.clips));
   const b = e.target.closest('.fold-toggle');
   if (!b) return tapLine(e, paneLines, noHover.matches);
   const open = b.getAttribute('aria-expanded') !== 'true';
