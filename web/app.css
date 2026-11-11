@@ -95,6 +95,15 @@ body.pop-open #needbar { position: relative; z-index: 31; }
 /* A pane open on the Mac: the labels go, the icons and counts stay, to make room for Stop */
 body.pane-open .need-btn .nl { display: none; }
 body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
+/* A narrow Mac window with the work list open: the labelled buttons need about 480 px plus the bar, so below 1040 px the
+   labels go too. The left column keeps the width of its icon, so the bar never paints over it. */
+@media (min-width: 780px) {
+  body:not(.pane-open) .c-head { grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); }
+}
+@media (min-width: 780px) and (max-width: 1039.98px) {
+  body:not(.rail-closed) .need-btn .nl { display: none; }
+  body:not(.rail-closed) .need-btn { padding: 0 8px; gap: 6px; }
+}
 #menu #menu-new { display: none; }
 #msg-body > [hidden] { display: none; }
 .pop-empty { margin: 8px 0; font-size: 14px; color: var(--muted); }
@@ -380,11 +389,10 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .rest .rest-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.35; }
 .rest { padding: 6px 8px; }
 
-/* Center column header: the title and work list icon, the two buttons in the middle, the tools */
+/* Center column header: the work list icon and connection dot, the two buttons in the middle, the tools */
 .c-head { flex: none; min-height: 56px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); align-items: center; gap: 8px; padding: 0 10px; }
 .h-left { grid-column: 1; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .c-head > .tools { grid-column: 3; }
-.c-head h1 { font-size: 16px; font-weight: 600; }
 .c-sub { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .h-chat, .h-pane { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .h-pane { flex: 1; display: none; }
@@ -951,7 +959,6 @@ a.num:hover { color: var(--ink); }
   .mt-shop { display: none; }
   .mt-x { width: 28px; height: 28px; }
   .mt-x::after { inset: -8px; }
-  .h-chat .c-sub { display: none; }
   .pop { position: fixed; inset: 0; z-index: 33; width: auto; max-width: none; max-height: none; transform: none; background: var(--ground); border: 0; border-radius: 0; box-shadow: none; padding-top: env(safe-area-inset-top); animation: rise .16s ease; }
   #pop-today { width: auto; height: auto; }
   #pop-migration { width: auto; }
