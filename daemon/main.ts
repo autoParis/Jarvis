@@ -52,7 +52,7 @@ const HOME_WORKTREE = process.env.JARVIS_HOME_WORKTREE ?? `path:${ROOT}`;
 const KILL_FILE = join(ROOT, 'data', 'KILL');
 
 const store = openStore(join(ROOT, 'data', 'jarvis.db'));
-const voice = makeVoice(ROOT);
+const voice = makeVoice(ROOT, (msg, data) => log(msg, data));
 const listen = listenConfig();
 const logIds: { run?: string } = {};
 const log = makeLog(logIds);
@@ -615,6 +615,13 @@ http.createServer(async (req, res) => {
       const r = await changeBrainModel({ body, brain, setState: store.setState, killed: existsSync(KILL_FILE) });
       if (r.status === 200) { log('brain model set', { model: brain.setting.model, effort: brain.setting.effort }); broadcast({ type: 'brain', brain: brainInfo() }); }
       return send(res, r.status, { error: r.error, ...brainInfo() });
+    }
+    // The page's record of each speech clip it played: play, wait (a stall), end, error, stop. See web/speech.js.
+    if (req.method === 'POST' && url === '/api/speech/log') {
+      const { events } = await json(req);
+      if (!Array.isArray(events)) return send(res, 400);
+      for (const e of events.slice(0, 100)) log('speech play', { ev: String(e?.ev).slice(0, 8), turn: Number(e?.turn), i: Number(e?.i), t: Number(e?.t), dur: e?.dur, code: e?.code, at: new Date(Number(e?.at) || 0).toISOString() });
+      return send(res, 204);
     }
     if (req.method === 'POST' && url === '/api/send') {
       const { text, replyTo } = await json(req);

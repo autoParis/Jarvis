@@ -38,11 +38,38 @@ export function byteRange(header: string | undefined, size: number): { start: nu
   return start > end ? 'bad' : { start, end };
 }
 
-export function makeVoice(root: string) {
+/**
+ * A bad render: its transcript matches its words less than MIN_MATCH, and the STT model is unsure of what it heard.
+ * Measured on 10,778 clips in data/audio: the garbage renders score under 0.3 with a confidence under 0.62, and a
+ * clean clip the STT model writes in its own way ("PR 4777" as "PR 4,777.", "sparis@autoroot" as "Sparus at
+ * Otteroute") keeps a confidence of 0.8 or more.
+ */
+export const MIN_MATCH = 0.6;
+const MAX_UNSURE = 0.75;
+export const badRender = (match: number, confidence: number) => match < MIN_MATCH && confidence < MAX_UNSURE;
+/** Renders tried for one sentence before the best one is kept anyway. A bad render is rare and random, a retry is clean. */
+const RENDERS = 3;
+
+type Log = (msg: string, data?: Record<string, unknown>) => void;
+
+export function makeVoice(root: string, log: Log = () => {}) {
   const dir = join(root, 'data', 'audio');
   const model = join(root, 'voice', 'models', 'parakeet-tdt-0.6b-v3');
   mkdirSync(dir, { recursive: true });
   const rendering = new Map<string, Promise<string>>();
+
+  /** What the STT model hears in a wav file, or null when the STT fails (then the render is not judged). */
+  async function hear(wav: string): Promise<{ text: string; confidence: number } | null> {
+    const json = `${wav}.json`;
+    try {
+      await sh(CLI, ['transcribe', wav, '--local-model-dir', model, '--output-json', json], 60_000);
+      const r = JSON.parse(readFileSync(json, 'utf8'));
+      return { text: String(r.text ?? '').trim(), confidence: Number(r.confidence ?? 0) };
+    } catch (e) {
+      log(`tts: check skipped, stt failed: ${e}`);
+      return null;
+    } finally { rmSync(json, { force: true }); }
+  }
 
   return {
     dir,
@@ -75,6 +102,9 @@ export function makeVoice(root: string) {
     /**
      * One sentence in, the file name of an m4a clip in `dir` out. The name comes from the voice and the words, so a
      * replay reuses the clip and a replay asked for while the reply is still rendering waits for the same render.
+     * The voice sometimes renders garbage of the right length ("The card is in the app." heard back as "As a year
+     * arrived."), and the cache would keep it forever. So each render is transcribed before it is cached, and a
+     * render that does not match its words is done again, up to RENDERS times. The best one is kept.
      */
     tts(text: string): Promise<string> {
       const lang = detectLang(text);
@@ -83,15 +113,26 @@ export function makeVoice(root: string) {
         if (existsSync(join(dir, out))) return out;
         const [engine, voice] = TTS[lang].split(':');
         const id = randomUUID();
-        const raw = join(dir, `${id}.${engine === 'say' ? 'aiff' : 'wav'}`), part = join(dir, `${id}.m4a`);
+        const ext = engine === 'say' ? 'aiff' : 'wav';
+        const raws: string[] = [], part = join(dir, `${id}.m4a`);
         try {
-          if (engine === 'say') await sh('say', ['-v', voice, '-o', raw, text]);
-          else await sh(CLI, ['tts', text, '--backend', engine, ...(voice ? ['--voice', voice] : []), '--lang', lang, '-o', raw], 120_000);
-          await sh('ffmpeg', ['-loglevel', 'error', '-y', '-i', raw, '-c:a', 'aac', '-b:a', '64k', part]);
+          let best = { raw: '', score: -1 };
+          for (let n = 1; n <= RENDERS; n++) {
+            const raw = join(dir, `${id}.${n}.${ext}`);
+            raws.push(raw);
+            if (engine === 'say') await sh('say', ['-v', voice, '-o', raw, text]);
+            else await sh(CLI, ['tts', text, '--backend', engine, ...(voice ? ['--voice', voice] : []), '--lang', lang, '-o', raw], 120_000);
+            const heard = await hear(raw);
+            const score = heard ? speechMatch(text, heard.text) : 1;
+            if (score > best.score) best = { raw, score };
+            if (!heard || !badRender(score, heard.confidence)) { best = { raw, score: 1 }; break; }
+            log('tts: render does not match its words', { out, try: n, score: +score.toFixed(2), confidence: heard?.confidence, text, heard: heard?.text });
+          }
+          if (best.score < MIN_MATCH) log('tts: kept the best of the bad renders', { out, score: +best.score.toFixed(2), text });
+          await sh('ffmpeg', ['-loglevel', 'error', '-y', '-i', best.raw, '-c:a', 'aac', '-b:a', '64k', part]);
           renameSync(part, join(dir, out)); // a killed render never leaves a half clip under the real name
         } finally {
-          rmSync(raw, { force: true });
-          rmSync(part, { force: true });
+          for (const f of [...raws, part]) rmSync(f, { force: true });
         }
         return out;
       });
@@ -119,15 +160,67 @@ function unmark(line: string): string {
     .replace(/[*`]+|(?<!\w)__?|__?(?!\w)/g, '');
 }
 
-/** Splits a reply into speakable sentences. Lines that are only a URL are shown, not spoken. */
+/**
+ * Says the dotted tokens a voice cannot read: an email becomes "name at host dot ca", a file or host name
+ * "voice dot ts", a version "2026 dot 1027 dot 144". A decimal like 3.5 stays, the voice reads it.
+ */
+export function speakable(line: string): string {
+  return line
+    .replace(/([\p{L}\p{N}._%+-]+)@([\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+)/gu, '$1 at $2')
+    .replace(/[\p{L}\p{N}]+(?:\.[\p{L}\p{N}]+)+/gu, tok => /^\d+\.\d+$/.test(tok) ? tok : tok.split('.').join(' dot '));
+}
+
+/**
+ * Splits a reply into speakable sentences. A sentence ends only at . ! or ? followed by a space or the end of the
+ * line, so a period inside an email, a version or a file name never cuts a clip. Lines that are only a URL are
+ * shown, not spoken.
+ */
 export function sentences(text: string): string[] {
   return text
     .replace(/^\s*(```|~~~)[\s\S]*?(?:^\s*\1.*$|(?![\s\S]))/gm, '')
     .split(/\n+/)
     .map(unmark)
     .filter(line => !/^\s*https?:\/\/\S+\s*$/.test(line))
-    .map(line => line.replace(/https?:\/\/\S+/g, 'the link'))
-    .flatMap(line => line.match(/[^.!?]+[.!?]*\s*/g) ?? [])
+    .map(line => speakable(line.replace(/https?:\/\/\S+/g, 'the link')))
+    .flatMap(line => line.split(/(?<=[.!?])\s+/))
     .map(s => s.trim())
     .filter(s => /[\p{L}\p{N}]/u.test(s));
+}
+
+const ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+  'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+/** 4686 as "four thousand six hundred eighty six", the way the STT model writes a number it heard. */
+export function numberWords(n: number): string {
+  if (n < 20) return ONES[n];
+  if (n < 100) return `${TENS[Math.floor(n / 10)]}${n % 10 ? ` ${ONES[n % 10]}` : ''}`;
+  for (const [size, name] of [[1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand'], [100, 'hundred']] as const)
+    if (n >= size) return `${numberWords(Math.floor(n / size))} ${name}${n % size ? ` ${numberWords(n % size)}` : ''}`;
+  return String(n);
+}
+
+/**
+ * Lowercase letters only, accents removed, numbers spelled out and "and" dropped: what a transcript of the words
+ * should spell, whether the STT model wrote "4686" or "four thousand six hundred and eighty six".
+ */
+const letters = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+  .replace(/(\d),(?=\d{3})/g, '$1')
+  .replace(/\d{1,12}/g, d => ` ${numberWords(Number(d))} `)
+  .replace(/\band\b/g, '')
+  .replace(/[^a-z]/g, '');
+
+/**
+ * How much of `text` the transcript `heard` contains, 0 to 1: one minus the edit distance between the two letter
+ * strings, divided by the longer length. A clean render scores near 1, the "alien sounds" renders score under 0.3.
+ */
+export function speechMatch(text: string, heard: string): number {
+  const a = letters(text), b = letters(heard);
+  if (!a.length && !b.length) return 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return 1 - prev[b.length] / Math.max(a.length, b.length);
 }
