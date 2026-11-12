@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,10 +18,10 @@ function setup(start = DAY) {
   const store = openStore(':memory:');
   let clock = start;
   const wakes: string[] = [];
-  const fail = { orca: undefined as string | undefined, git: undefined as string | undefined, paused: false };
+  const fail = { git: undefined as string | undefined, paused: false };
   const check = makeCheck({
-    store, jarvisRun: 'run_j', log: () => {}, now: () => clock, paused: () => fail.paused,
-    poll: async () => ({ at: '', rows: [], done: [], ...(fail.orca ? { error: fail.orca } : {}) }) as any,
+    store, log: () => {}, now: () => clock, paused: () => fail.paused,
+    poll: async () => ({ at: '', rows: [] }),
     requests: { synced: async () => {}, closing: () => false },
     delivery: async () => { if (fail.git) throw new Error(fail.git); return { master: 'a', unmerged: [] }; },
     running: 'a', brainBusy: () => false, wake: t => wakes.push(t),
@@ -134,14 +134,7 @@ test('a fired reminder not done by 4 PM is told again at 8 AM', async () => {
   assert.equal(wakes.length, 2);
 });
 
-test('Orca or git failing does not hold back a reminder, and the kill switch does', async () => {
-  const orca = setup();
-  orca.add('A', 5);
-  orca.pass(10 * MIN);
-  orca.fail.orca = 'Orca: no answer';
-  await orca.check.tick();
-  assert.equal(orca.wakes.length, 1);
-
+test('git failing does not hold back a reminder, and the kill switch does', async () => {
   const git = setup();
   git.add('B', 5);
   git.pass(10 * MIN);
@@ -226,4 +219,13 @@ test('jarvis-remind fails plainly when jarvisd is down', async () => {
     execFile(process.execPath, [bin, 'list'], { env: { ...process.env, JARVIS_URL: 'http://127.0.0.1:9' } }, (e, _o, err) => ok({ code: e ? Number(e.code) : 0, err })));
   assert.equal(r.code, 1);
   assert.match(r.err, /jarvisd unreachable/);
+});
+
+test('the brain rules: list before adding, no second reminder for one thing, and one reminder when a relay says the owner acts later', () => {
+  const vault = readFileSync(new URL('../vault/CLAUDE.md', import.meta.url), 'utf8');
+  const section = vault.slice(vault.indexOf('## Reminders'), vault.indexOf('\n## ', vault.indexOf('## Reminders') + 3));
+  assert.match(section, /Before you add a reminder, run `jarvis-remind list`/);
+  assert.match(section, /do not add a second one/);
+  assert.match(section, /relay an answer that says the owner does something later[\s\S]*set one reminder for it in the same turn/);
+  assert.match(section, /exactly as `due_eastern` gives it/);
 });

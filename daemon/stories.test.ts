@@ -165,7 +165,7 @@ test('the gate starts a queued story on the worker-start path, with no card, and
   const s = openStore(':memory:');
   const starts: any[] = [];
   const native = { start: async (a: any) => { starts.push(a); return { id: 'abcd1234', session_id: null, name: a.name, state: 'working' } as any; }, stop: async () => {}, abandon: async () => {} };
-  const gate = makeGate(s, { run: 'r', handle: 'h' }, () => {}, () => {}, undefined, undefined, undefined, native);
+  const gate = makeGate(s, () => {}, () => {}, undefined, undefined, native);
   const args = { repo: '/repos/product', taskTitle: '#42 extension ticket', spec: queueStartSpec(42, 'pick-and-ship-v3') };
   const a = await gate.queued(args, 'Start #42 extension ticket from the queue');
   assert.equal(a.status, 'done');

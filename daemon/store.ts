@@ -1,6 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { REMINDER_STATUSES, TODAY_STATUSES, SUPPORT_REPLY_STATUSES } from '../web/contract.js';
+
+/** A status list as SQL, for a CHECK constraint: 'a', 'b'. */
+const sqlList = (list: string[]) => list.map(s => `'${s}'`).join(', ');
 
 export type Item = {
   id: number; source: string; external_id: string; kind: string; dispatch_id: string | null;
@@ -17,6 +21,12 @@ export type Approval = {
   decided_by: string | null; owner_text: string | null; result: string | null; created_at: string; decided_at?: string | null;
   /** JSON { approves, restsOn }: the card's If you approve and It rests on lines, from the proposer. Null on older rows. */
   card?: string | null;
+  /** The Jarvis chat message that asked for this proposal (chatlink.ts). It carries its own Approve and Reject while pending. */
+  chat_turn?: number | null;
+  /** When the action ended (finishApproval). Null while pending or running, and on older rows. */
+  finished_at?: string | null;
+  /** When the owner's answer last changed this card in place (revise). Null if never. */
+  revised_at?: string | null;
 };
 
 /** One thing the owner asked Jarvis for: a worker it started for him. Shown in the Requests sidebar (requests.ts). */
@@ -72,10 +82,12 @@ export type NativeWorkerRow = {
    * when it took one), the flags a resume replays, how often it was resumed, and the named pipe jarvisd types into. */
   repo: string | null; model: string | null; permission_mode: string | null;
   resumes: number; last_resume_at: string | null; in_fifo: string | null;
+  /** Continue on phone (2026-11-08): the Remote Control name the session runs with, so a resume keeps it reachable from the Claude app. */
+  remote: string | null;
 };
 
 /** The native_workers columns a caller may leave out: they default to a background session with nothing to replay. */
-type NativeOptional = 'kind' | 'pgid' | 'repo' | 'model' | 'permission_mode' | 'resumes' | 'last_resume_at' | 'in_fifo';
+type NativeOptional = 'kind' | 'pgid' | 'repo' | 'model' | 'permission_mode' | 'resumes' | 'last_resume_at' | 'in_fifo' | 'remote';
 
 export function openStore(path: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -119,12 +131,12 @@ export function openStore(path: string) {
     CREATE TABLE IF NOT EXISTS reminders (
       id INTEGER PRIMARY KEY, text TEXT NOT NULL, due_at TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'fired', 'done')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlList(REMINDER_STATUSES)})),
       fired_at TEXT, told_at TEXT, done_at TEXT
     );
     CREATE TABLE IF NOT EXISTS today_items (
       id INTEGER PRIMARY KEY, words TEXT NOT NULL, title TEXT, kind TEXT CHECK (kind IN ('story', 'task', 'talk')), go INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'waiting', 'queued', 'working', 'ready', 'released', 'dropped', 'moved')),
+      status TEXT NOT NULL DEFAULT 'new' CHECK (status IN (${sqlList(TODAY_STATUSES)})),
       status_at TEXT NOT NULL DEFAULT (datetime('now')),
       reading TEXT, questions TEXT, assumptions TEXT, reason TEXT, result TEXT, not_proven TEXT, link TEXT, link_label TEXT, note TEXT,
       repo TEXT, spec TEXT, story TEXT, phase TEXT, brief TEXT, draft_report TEXT, dispatch TEXT, worktree TEXT, line TEXT,
@@ -136,7 +148,7 @@ export function openStore(path: string) {
     CREATE TABLE IF NOT EXISTS support_replies (
       id INTEGER PRIMARY KEY, reference TEXT NOT NULL, dealership TEXT NOT NULL, dealership_id TEXT NOT NULL, text TEXT NOT NULL,
       repo TEXT NOT NULL, pr INTEGER NOT NULL CHECK (pr > 0),
-      status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'held', 'sending', 'sent', 'failed', 'unknown', 'dropped')),
+      status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN (${sqlList(SUPPORT_REPLY_STATUSES)})),
       hold_kind TEXT, problem TEXT, note TEXT, outcome TEXT, tell TEXT, release_pr INTEGER, live_sha TEXT, manual_ok INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')), status_at TEXT NOT NULL DEFAULT (datetime('now')),
       attempted_at TEXT, finished_at TEXT
@@ -166,6 +178,8 @@ export function openStore(path: string) {
   // Interactive sessions by default (2026-11-07): what a resume replays, and the pipe jarvisd types into.
   if (!nativeCols.includes('repo')) db.exec(`ALTER TABLE native_workers ADD COLUMN repo TEXT; ALTER TABLE native_workers ADD COLUMN model TEXT; ALTER TABLE native_workers ADD COLUMN permission_mode TEXT;
     ALTER TABLE native_workers ADD COLUMN resumes INTEGER NOT NULL DEFAULT 0; ALTER TABLE native_workers ADD COLUMN last_resume_at TEXT; ALTER TABLE native_workers ADD COLUMN in_fifo TEXT;`);
+  // Continue on phone (2026-11-08): the Remote Control name a resume replays.
+  if (!nativeCols.includes('remote')) db.exec('ALTER TABLE native_workers ADD COLUMN remote TEXT;');
   // Side chats were recorded as requests until 2026-10-30. Hide them; their worker, worktree and session stay.
   db.exec(`UPDATE requests SET hidden_at = datetime('now') WHERE action = 'side-chat' AND hidden_at IS NULL`);
   // Added with web push; older databases get the columns here.
@@ -175,6 +189,9 @@ export function openStore(path: string) {
   if (!itemCols.includes('answered_by')) db.exec('ALTER TABLE items ADD COLUMN answered_by TEXT;');
   const approvalCols = (db.prepare('PRAGMA table_info(approvals)').all() as { name: string }[]).map(c => c.name);
   if (!approvalCols.includes('card')) db.exec('ALTER TABLE approvals ADD COLUMN card TEXT;'); // added with the headed approval card
+  if (!approvalCols.includes('chat_turn')) db.exec('ALTER TABLE approvals ADD COLUMN chat_turn INTEGER;'); // the chat message with its own Approve (chatlink.ts)
+  if (!approvalCols.includes('finished_at')) db.exec('ALTER TABLE approvals ADD COLUMN finished_at TEXT;'); // when the action ended; the Stop on a start notice counts from it
+  if (!approvalCols.includes('revised_at')) db.exec('ALTER TABLE approvals ADD COLUMN revised_at TEXT;'); // the owner changed the open card in place
 
   // Set when the brain's turn ends without an error, or when the check reports the message lost. Messages from before this column are not in question.
   const turnCols = (db.prepare('PRAGMA table_info(turns)').all() as { name: string }[]).map(c => c.name);
@@ -224,7 +241,7 @@ export function openStore(path: string) {
       return db.prepare('SELECT * FROM items WHERE external_id = ?').get(externalId) as Item | undefined;
     },
     /**
-     * Marks an open ask as being answered before the reply goes to Orca, so a retried reply is refused.
+     * Marks an open ask as being answered before the reply goes to the worker, so a retried reply is refused.
      * Returns 'claimed', 'untracked' (an ID jarvisd never stored), or the status that blocks a second reply.
      */
     claimReply(externalId: string): string {
@@ -232,12 +249,13 @@ export function openStore(path: string) {
       if (r.changes === 1) return 'claimed';
       return this.item(externalId)?.status ?? 'untracked';
     },
-    /** Orca refused the reply, so the ask is open again. */
+    /** The reply did not reach the worker, so the ask is open again. */
     releaseReply(externalId: string) {
       db.prepare(`UPDATE items SET status = 'spoken', updated_at = datetime('now') WHERE external_id = ? AND status = 'replying'`).run(externalId);
     },
+    /** Asks from native workers and the brain that wait on the owner. Asks of any other source are history: nothing answers them. */
     openItems(): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE status IN ('new', 'spoken', 'replying') AND kind IN ('question', 'escalation') ORDER BY id`).all() as Item[];
+      return db.prepare(`SELECT * FROM items WHERE source IN ('native', 'brain') AND status IN ('new', 'spoken', 'replying') AND kind IN ('question', 'escalation') ORDER BY id`).all() as Item[];
     },
     /** Closes asks a worker raised before one the owner has answered: the worker is past them. A reply going out is left to finish. Returns their ids. */
     closeEarlierAsks(): string[] {
@@ -248,19 +266,19 @@ export function openStore(path: string) {
     },
     /** Questions and escalations from the last 7 days, answered or not, for the ask cards in the chat history. */
     recentAsks(): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native') AND kind IN ('question', 'escalation') AND created_at > datetime('now', '-7 days') ORDER BY id DESC LIMIT 100`).all() as Item[];
+      return db.prepare(`SELECT * FROM items WHERE source IN ('native', 'brain') AND kind IN ('question', 'escalation') AND created_at > datetime('now', '-7 days') ORDER BY id DESC LIMIT 100`).all() as Item[];
+    },
+    /** A worker's question item with exactly this text, in any status, or undefined. The ask recovery makes a card once. */
+    workerAskWithBody(dispatch: string, body: string): Item | undefined {
+      return db.prepare(`SELECT * FROM items WHERE source = 'native' AND dispatch_id = ? AND kind = 'question' AND body = ? ORDER BY id DESC LIMIT 1`).get(dispatch, body) as Item | undefined;
     },
     /** What jarvisd did to a native session (kind `event` items, such as a resume), oldest first, for its pane's gap lines. */
     eventsFor(dispatch: string): Item[] {
       return db.prepare(`SELECT * FROM items WHERE source = 'native' AND dispatch_id = ? AND kind = 'event' ORDER BY id`).all(dispatch) as Item[];
     },
-    /** The answers a worker was sent, oldest first, for its conversation pane. */
-    answersTo(dispatch: string): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native') AND dispatch_id = ? AND kind IN ('question', 'escalation') AND status = 'answered' AND answer IS NOT NULL ORDER BY COALESCE(updated_at, created_at), id`).all(dispatch) as Item[];
-    },
     /** Questions and escalations the owner answered, newest first, for the audit log. */
     answeredAsks(limit: number): Item[] {
-      return db.prepare(`SELECT * FROM items WHERE source IN ('orca', 'native') AND kind IN ('question', 'escalation') AND status = 'answered' ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?`).all(limit) as Item[];
+      return db.prepare(`SELECT * FROM items WHERE source IN ('native', 'brain') AND kind IN ('question', 'escalation') AND status = 'answered' ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?`).all(limit) as Item[];
     },
     /** Approvals someone decided, newest first, for the audit log. Pending and automatic ones are left out. */
     decidedApprovals(limit: number): Approval[] {
@@ -306,6 +324,11 @@ export function openStore(path: string) {
       const r = db.prepare('INSERT INTO approvals (action, args, say, after_turn, card) VALUES (?, ?, ?, ?, ?)').run(a.action, a.args, a.say, this.lastOwnerTurn(), a.card ?? null);
       return this.approval(Number(r.lastInsertRowid))!;
     },
+    /** Sets the chat message on the given proposals that are still pending and have none yet. Returns the rows it changed. */
+    linkChatTurn(ids: number[], turnId: number): Approval[] {
+      return ids.filter(id => db.prepare(`UPDATE approvals SET chat_turn = ? WHERE id = ? AND status = 'pending' AND chat_turn IS NULL`).run(turnId, id).changes === 1)
+        .map(id => this.approval(id)!);
+    },
     approval(id: number): Approval | undefined {
       return db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as Approval | undefined;
     },
@@ -315,7 +338,12 @@ export function openStore(path: string) {
         .run(status, decidedBy, ownerText ?? null, id).changes === 1;
     },
     finishApproval(id: number, status: string, result: string) {
-      db.prepare('UPDATE approvals SET status = ?, result = ? WHERE id = ?').run(status, result, id);
+      db.prepare(`UPDATE approvals SET status = ?, result = ?, finished_at = datetime('now') WHERE id = ?`).run(status, result, id);
+    },
+    /** Changes a pending card's args, question and lines in place. Returns false if it is no longer pending. */
+    reviseApproval(id: number, a: { args: string; say: string; card?: string | null }): boolean {
+      return db.prepare(`UPDATE approvals SET args = ?, say = ?, card = COALESCE(?, card), revised_at = datetime('now') WHERE id = ? AND status = 'pending'`)
+        .run(a.args, a.say, a.card ?? null, id).changes === 1;
     },
     /**
      * The latest approval for the same action and args that would make a new one a repeat: still pending,
@@ -501,13 +529,13 @@ export function openStore(path: string) {
     },
     addNativeWorker(w: Omit<NativeWorkerRow, NativeOptional> & Partial<Pick<NativeWorkerRow, NativeOptional>>) {
       db.prepare(`INSERT INTO native_workers (id, session_id, name, cwd, approval_id, state, waiting_for, report, report_at, outcome, transcript, created_at, updated_at, kind, pgid,
-        repo, model, permission_mode, resumes, last_resume_at, in_fifo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        repo, model, permission_mode, resumes, last_resume_at, in_fifo, remote) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(w.id, w.session_id, w.name, w.cwd, w.approval_id, w.state, w.waiting_for, w.report, w.report_at, w.outcome, w.transcript, w.created_at, w.updated_at, w.kind ?? 'background', w.pgid ?? null,
-          w.repo ?? null, w.model ?? null, w.permission_mode ?? null, w.resumes ?? 0, w.last_resume_at ?? null, w.in_fifo ?? null);
+          w.repo ?? null, w.model ?? null, w.permission_mode ?? null, w.resumes ?? 0, w.last_resume_at ?? null, w.in_fifo ?? null, w.remote ?? null);
     },
     /** Sets the named columns and moves updated_at. `id`, `name` and `created_at` never change; `cwd` only when the listing names the session's real folder. */
     updateNativeWorker(id: string, f: Partial<Omit<NativeWorkerRow, 'id' | 'name' | 'created_at'>>) {
-      const allowed = ['session_id', 'approval_id', 'state', 'waiting_for', 'report', 'report_at', 'outcome', 'transcript', 'updated_at', 'pgid', 'cwd', 'model', 'permission_mode', 'resumes', 'last_resume_at', 'in_fifo'] as const;
+      const allowed = ['session_id', 'approval_id', 'state', 'waiting_for', 'report', 'report_at', 'outcome', 'transcript', 'updated_at', 'pgid', 'cwd', 'model', 'permission_mode', 'resumes', 'last_resume_at', 'in_fifo', 'kind', 'remote'] as const;
       const cols = allowed.filter(k => f[k] !== undefined);
       if (!cols.length) return;
       db.prepare(`UPDATE native_workers SET ${cols.map(k => `${k} = ?`).join(', ')} WHERE id = ?`).run(...cols.map(k => f[k] as string | number | null), id);

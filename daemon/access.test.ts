@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allowed, makeUiSessions, parseLsof, shellRefusal, UI_HEADER } from './access.ts';
+import { allowed, makeUiSessions, parseLsof, phoneRefusal, UI_HEADER } from './access.ts';
 
 test('an action as the owner needs the secret of an app page that is still open', () => {
   const ui = makeUiSessions();
@@ -29,12 +29,12 @@ const phone = {
   serveConfig: { TCP: { 7717: { HTTPS: true } } },
 };
 
-test('the shell takes a request from the phone through tailscale serve', () => {
-  assert.equal(shellRefusal(phone), undefined);
+test('the phone checks pass a request from the phone through tailscale serve', () => {
+  assert.equal(phoneRefusal(phone), undefined);
 });
 
-test('the shell refuses every route a process on the Mac has', () => {
-  const refused = (p: object, why: RegExp) => assert.match(shellRefusal({ ...phone, ...p }) ?? '', why);
+test('the phone checks refuse every route a process on the Mac has', () => {
+  const refused = (p: object, why: RegExp) => assert.match(phoneRefusal({ ...phone, ...p }) ?? '', why);
   refused({ forwardedFor: '100.64.0.20' }, /not the phone/); // curl or Chrome on the Mac through the tailnet URL
   refused({ forwardedFor: '100.64.0.30' }, /not the phone/); // through the proxies to the tailnet URL
   refused({ forwardedFor: `${PIXEL}, 127.0.0.1` }, /not the phone/); // the HTTP proxy adds to a forged header

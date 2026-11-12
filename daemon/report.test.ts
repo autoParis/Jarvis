@@ -51,7 +51,7 @@ function withRequest() {
   store.addRequest({ dispatch_id: 'ctx_a', approval_id: a.id, action: 'question', title: 'Request: why slow', words: null });
   const id = store.requests()[0].id;
   const reqs = makeRequests({ store, log: () => {}, repoOf: async () => undefined, onChange: () => {} });
-  const done = (n: string, body: string, outcome = 'succeeded') => store.insertItem({ source: 'orca', external_id: n, kind: 'worker_done', dispatch_id: 'ctx_a', subject: `Subject ${n}`, body, meta: JSON.stringify({ outcome }) });
+  const done = (n: string, body: string, outcome = 'succeeded') => store.insertItem({ source: 'native', external_id: n, kind: 'worker_done', dispatch_id: 'ctx_a', subject: `Subject ${n}`, body, meta: JSON.stringify({ outcome }) });
   return { store, id, reqs, done };
 }
 

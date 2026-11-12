@@ -356,11 +356,11 @@ test('the text cannot be changed, and a ticket has one open reply', () => {
   assert.throws(() => s.store.addSupportReply({ reference: 'TICKET-1045', dealership: 'D', dealership_id: UUID, text: 'other', repo: LIVE_REPO, pr: 1 }), /UNIQUE/);
 });
 
-test('the check runs the step inside its hours, even when Orca is down, and not outside them', async () => {
+test('the check runs the step inside its hours, and not outside them', async () => {
   const run = async (now: string) => {
     let ticks = 0;
-    const check = makeCheck({ store: openStore(':memory:'), jarvisRun: 'r', log: () => {}, now: () => Date.parse(now), paused: () => false, replies: async () => { ticks++; },
-      poll: async () => ({ at: '', rows: [], done: [], error: 'orca down' }) as any, requests: { synced: async () => {}, closing: () => false }, delivery: async () => ({ master: 'a', unmerged: [] }), running: 'a', brainBusy: () => false, wake: () => {} });
+    const check = makeCheck({ store: openStore(':memory:'), log: () => {}, now: () => Date.parse(now), paused: () => false, replies: async () => { ticks++; },
+      poll: async () => ({ at: '', rows: [] }), requests: { synced: async () => {}, closing: () => false }, delivery: async () => ({ master: 'a', unmerged: [] }), running: 'a', brainBusy: () => false, wake: () => {} });
     await check.tick();
     return ticks;
   };

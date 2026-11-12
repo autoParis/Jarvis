@@ -28,12 +28,13 @@ export function makeUiSessions() {
   };
 }
 
-// ---- The shell pane: The owner's phone only ----
+// ---- The phone checks: the owner's phone only, for terminals and pairing (termgate.ts, termroutes.ts) ----
 // The UI secret is not enough here, because any local process can read one from /api/events. The login header is not
 // enough either: measured on 2026-11-04, a curl on this Mac through the tailnet URL gets the owner's login and the Mac's IP,
 // the same as his Chrome, and a tunnel through tailscaled's own proxies (1055, 1056) to 127.0.0.1:7717 arrives from
 // tailscaled with whatever headers the client wrote. So a request passes only when all of this holds together.
-export const SHELL_DEVICES = new Set((process.env.JARVIS_SHELL_DEVICES || '100.64.0.10,fd7a:115c:a1e0::10').split(','));
+// The setting keeps its old name, JARVIS_SHELL_DEVICES, so a running setup needs no change.
+export const PHONE_DEVICES = new Set((process.env.JARVIS_SHELL_DEVICES || '100.64.0.10,fd7a:115c:a1e0::10').split(','));
 const TS_PROXY_PORTS = [1055, 1056];
 
 export type TcpSocket = { pid: number; name: string };
@@ -48,11 +49,11 @@ export function parseLsof(out: string): TcpSocket[] {
   return sockets;
 }
 
-export type ShellProbe = { login: unknown; forwardedFor: unknown; remotePort: number | undefined; port: number; servePid: number | undefined; sockets: TcpSocket[]; serveConfig: any };
+export type PhoneProbe = { login: unknown; forwardedFor: unknown; remotePort: number | undefined; port: number; servePid: number | undefined; sockets: TcpSocket[]; serveConfig: any };
 /** Why this request is not the owner's phone, or undefined when it is. */
-export function shellRefusal(p: ShellProbe): string | undefined {
+export function phoneRefusal(p: PhoneProbe): string | undefined {
   if (!ALLOWED_LOGINS.has(String(p.login ?? ''))) return 'no tailnet login';
-  if (typeof p.forwardedFor !== 'string' || !SHELL_DEVICES.has(p.forwardedFor)) return `device ${String(p.forwardedFor ?? 'none')} is not the phone`;
+  if (typeof p.forwardedFor !== 'string' || !PHONE_DEVICES.has(p.forwardedFor)) return `device ${String(p.forwardedFor ?? 'none')} is not the phone`;
   if (!p.servePid) return 'the tailnet node is not running';
   const peer = `127.0.0.1:${p.remotePort}->127.0.0.1:${p.port}`;
   if (!p.sockets.some(s => s.pid === p.servePid && s.name === peer)) return 'the connection did not come from the tailnet node';
@@ -67,8 +68,8 @@ export function shellRefusal(p: ShellProbe): string | undefined {
 const run = (file: string, args: string[]) => new Promise<string>(done =>
   execFile(file, args, { timeout: 3000, maxBuffer: 4e6 }, (err, out) => done(err && !out ? '' : out)));
 
-/** Reads the machine's state for shellRefusal. Absolute paths: PATH is not trusted. A failed read refuses. */
-export async function probeShell(req: http.IncomingMessage, port: number): Promise<ShellProbe> {
+/** Reads the machine's state for phoneRefusal. Absolute paths: PATH is not trusted. A failed read refuses. */
+export async function probePhone(req: http.IncomingMessage, port: number): Promise<PhoneProbe> {
   const remotePort = req.socket.remotePort;
   const socket = process.env.JARVIS_TS_SOCKET || `${homedir()}/.jarvis-host/ts-personal.sock`;
   const [lsof, launchd, serve] = await Promise.all([

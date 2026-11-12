@@ -7,9 +7,9 @@ import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { reportFile, reportTitle, listReports, readReport, REPORT_MARKER } from './reports.ts';
 import { sentences } from './voice.ts';
-import { docHref, docRoute, docHtml, docListHtml } from '../web/report.js';
+import { docHref, docRoute, docHtml, docListHtml, resolveImage } from '../web/report.js';
 
-const vm: { markdown?: (text: string, shot: (path: string) => string) => string } = {};
+const vm: { markdown?: (text: string, shot: (path: string, alt?: string) => string) => string } = {};
 runInNewContext(readFileSync(new URL('../web/markdown.js', import.meta.url), 'utf8'), vm);
 const markdown = vm.markdown!;
 const shot = (p: string) => `<SHOT ${p}>`;
@@ -135,6 +135,23 @@ test('a document shows whole: headings, tables, code and pictures, all escaped',
   assert.match(html, /<SHOT \/Users\/owner\/Desktop\/s\.png>/);
   assert.match(html, /11-06 10:00 a\.m\./); // Eastern, standard time
   assert.doesNotMatch(html, /<details/);
+});
+
+test('a document shows its pictures: a relative path is read against its folder, an absolute path and an [image:] line as they are', () => {
+  const seen: [string, string | undefined][] = [];
+  const pic = (p: string, alt?: string) => { seen.push([p, alt]); return `<SHOT ${p}>`; };
+  const body = '# Shots\n\n![Listing tab](4812-shots/01-top.png)\n\n![up](../up.png)\n\n![dot](./sub/./c.png)\n\n![abs](/Users/owner/Desktop/s.png)\n\n[image: /d/data/reports/x.png]';
+  const html = docHtml({ path: '/d/data/reports/4812.md', at: '2026-11-06T15:00:00Z', body }, { markdown, shot: pic });
+  assert.deepEqual(seen, [
+    ['/d/data/reports/4812-shots/01-top.png', 'Listing tab'],
+    ['/d/data/up.png', 'up'], // only the address: the daemon's /image check refuses it
+    ['/d/data/reports/sub/c.png', 'dot'],
+    ['/Users/owner/Desktop/s.png', 'abs'],
+    ['/d/data/reports/x.png', undefined],
+  ]);
+  assert.match(html, /<SHOT \/d\/data\/reports\/4812-shots\/01-top\.png>/);
+  assert.equal(resolveImage('a.png', ''), 'a.png'); // no folder: /image refuses a relative path
+  assert.equal(resolveImage('../../../../etc/x.png', '/d/r'), '/etc/x.png');
 });
 
 test('the list shows each title and its Eastern time, and says so when empty', () => {

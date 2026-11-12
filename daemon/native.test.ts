@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, type Approval } from './store.ts';
-import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, NUDGE, typedBytes, type NativeWorker } from './native.ts';
+import { helpRun, CLAUDE_HELP, AGENTS_HELP } from './fakeclaude.ts';
+import { makeNative, workerSettings, summarize, projectDir, NATIVE_FOOTER, ROW_PREFIX, SILENT_DONE_MS, IDLE_REAP_MS, IDLE_STOPPED, DESKTOP_WAITING, NUDGE, typedBytes, rowState, finishedAt, missingFeatures, REPORT_NUDGE, STALL_MS, type NativeWorker } from './native.ts';
+import { statusOf } from './requests.ts';
+import { lastTurnMessages } from './transcript.ts';
+import { isStoryStart, STORY_ADVISOR } from './workercontract.ts';
+import { storyStartSpec } from './today.ts';
 
 const SESSION = '00000000-0000-4000-8000-000000000001';
 
@@ -15,6 +20,7 @@ function fakeClaude() {
   let relayAnswer = 'SENT';
   const claude = async (args: string[]) => {
     calls.push(args);
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316 (Claude Code)\n', err: '' };
     if (args[0] === '--bg') return { code: 0, out: `backgrounded · ${agent.id} · ${agent.name}\n\n  claude attach ${agent.id}\n`, err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify(agent.pid === null && !agent.listed ? [] : [agent]), err: '' };
@@ -72,7 +78,7 @@ test('start parses the short id, finds the session and stores the worker', async
 
 test('start throws with the claude output when no id was printed', async () => {
   const { native, fake } = setup();
-  fake.claude = async () => ({ code: 1, out: '', err: 'Workspace not trusted\n' });
+  fake.claude = async (args: string[]) => helpRun(args) ?? { code: 1, out: '', err: 'Workspace not trusted\n' };
   const n = makeNative({ store: openStore(':memory:'), log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, claude: fake.claude });
   await assert.rejects(n.start({ name: 'p', cwd: '/x', brief: 'b' }), /Workspace not trusted/);
   void native;
@@ -139,9 +145,10 @@ test('recover fails pending permission cards left from before a restart', async 
 });
 
 test('the Stop hook stores the report word for word and DONE or FAILED sets the outcome', async () => {
-  const { native, reports, logs } = setup();
+  const { native, reports, logs, notices } = setup();
   await native.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
-  native.stopHook({ session_id: SESSION, transcript_path: '/t/s.jsonl', stop_hook_active: false, last_assistant_message: 'Still looking.\n\nMore to come.' });
+  // No line and nothing pending: sent back once with the nudge.
+  assert.deepEqual(native.stopHook({ session_id: SESSION, transcript_path: '/t/s.jsonl', stop_hook_active: false, last_assistant_message: 'Still looking.\n\nMore to come.' }), { decision: 'block', reason: REPORT_NUDGE });
   let w = native.get('deabc023')!;
   assert.equal(w.report, 'Still looking.\n\nMore to come.');
   assert.equal(w.outcome, null);
@@ -149,21 +156,24 @@ test('the Stop hook stores the report word for word and DONE or FAILED sets the 
   assert.equal(w.transcript, '/t/s.jsonl');
   assert.deepEqual(reports, [['Still looking.\n\nMore to come.', false]]);
 
-  native.stopHook({ session_id: SESSION, stop_hook_active: true, last_assistant_message: 'ignored' });
-  assert.equal(native.get('deabc023')?.report, 'Still looking.\n\nMore to come.');
+  // The answer to the block (stop_hook_active) is stored too; still no line, so the brain hears it now and it is not sent back again.
+  assert.deepEqual(native.stopHook({ session_id: SESSION, stop_hook_active: true, last_assistant_message: 'Still nothing.' }), {});
+  assert.equal(native.get('deabc023')?.report, 'Still nothing.');
+  assert.deepEqual(notices, ['Worker probe-7 ended its turn without a DONE or FAILED line. Its last words: Still nothing.']);
 
   native.stopHook({ session_id: SESSION, stop_hook_active: false, last_assistant_message: '  done: the list is fixed\nbranch x, commit y' });
   w = native.get('deabc023')!;
   assert.equal(w.outcome, 'done');
   assert.equal(w.state, 'done');
   assert.equal(w.report, '  done: the list is fixed\nbranch x, commit y');
-  assert.deepEqual(reports[1], ['  done: the list is fixed\nbranch x, commit y', true]);
+  assert.deepEqual(reports[2], ['  done: the list is fixed\nbranch x, commit y', true]);
   assert.ok(logs.some(l => l.startsWith('native worker reported {"worker":"deabc023","final":true')));
 
+  // A FAILED after DONE is a follow-up's result: the story stays done (see the follow-up test below).
   native.stopHook({ session_id: SESSION, last_assistant_message: 'FAILED: no access' });
-  assert.equal(native.get('deabc023')?.outcome, 'failed');
+  assert.equal(native.get('deabc023')?.outcome, 'done');
   native.stopHook({ session_id: 'nobody', last_assistant_message: 'x' });
-  assert.equal(reports.length, 3);
+  assert.equal(reports.length, 4);
 });
 
 test('preToolUse denies AskUserQuestion and nothing else', () => {
@@ -199,7 +209,8 @@ test('poll maps agent states to rows and tells each finding once', async () => {
   assert.equal(native.rows()[0].state, 'exited');
   assert.equal(native.rows()[0].steer, 'none');
 
-  // A turn ended without a DONE line: the brain hears it once the report is two minutes old.
+  // A turn ended without a DONE line and was sent back, but the next Stop hook never arrived (a restart): the backstop tells
+  // the brain once the report is two minutes old.
   const { native: n2, fake: f2, notices: no2, tick: t2 } = setup();
   await n2.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
   n2.stopHook({ session_id: SESSION, last_assistant_message: 'I think that is all.' });
@@ -223,7 +234,7 @@ test('rows have the contract shape and finished rows leave after a day', async (
   const w = await native.start({ name: 'fix-dead-list-412', cwd: '/w/fix-dead-list-412', brief: 'b', approvalId: 412 });
   assert.deepEqual(native.rows(), [{
     id: 'n:deabc023', kind: 'worker', dispatch: 'n:deabc023', title: 'fix-dead-list-412', group: 'other', state: 'working',
-    worktree: 'fix-dead-list-412', sideChat: false, steer: 'auto',
+    worktree: 'fix-dead-list-412', steer: 'auto',
     native: { id: 'deabc023', sessionId: SESSION, name: 'fix-dead-list-412', state: 'working', waitingFor: null, outcome: null, kind: 'background' },
   }]);
   assert.equal(native.list()[0].id, w.id);
@@ -290,7 +301,7 @@ const ISESSION = '00000000-0000-4000-8000-000000000002';
  * A stand-in for the pseudo-terminal path: `spawnPty` records argv, cwd and fifo and adds the session to the listing, in the
  * worktree folder when `-w` was passed, the way `claude agents` reports it live; `killGroup` drops the pid from the listing.
  */
-function setupInteractive(nowMs = 1_800_000_000_000) {
+function setupInteractive(nowMs = 1_800_000_000_000, extra: Partial<Parameters<typeof makeNative>[0]> = {}) {
   const store = openStore(':memory:');
   const listing: any[] = [];
   const spawns: { argv: string[]; cwd: string; fifo?: string }[] = [], killed: number[] = [], fifos: string[] = [];
@@ -298,6 +309,7 @@ function setupInteractive(nowMs = 1_800_000_000_000) {
   const calls: string[][] = [];
   const claude = async (args: string[]) => {
     calls.push(args);
+    const help = helpRun(args); if (help) return help;
     if (args[0] === '--version') return { code: 0, out: '2.1.316 (Claude Code)\n', err: '' };
     if (args[0] === 'agents') return { code: 0, out: JSON.stringify(listing), err: '' };
     if (args[0] === '-p') return { code: 0, out: JSON.stringify({ type: 'result', is_error: false, result: 'SENT' }), err: '' };
@@ -320,6 +332,7 @@ function setupInteractive(nowMs = 1_800_000_000_000) {
       return pgid;
     },
     killGroup: pgid => { killed.push(pgid); for (const a of listing) if (a.pgid === pgid) delete a.pid; },
+    ...extra,
   });
   return { store, native, listing, spawns, killed, fifos, calls, changes, notices, logs, reports, cards, tick: (ms: number) => { t += ms; } };
 }
@@ -450,7 +463,7 @@ test('a pid listed on the session refuses the resume; a message after the Deskto
   assert.equal(t.native.rows()[0].steer, 'auto', 'a stopped interactive row still takes a message');
   t.listing.push({ pid: 888, cwd: '/repo', kind: 'interactive', sessionId: ISESSION, name: 'desk-412', status: 'idle' });
   const n2 = makeNative({ store: t.store, log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {},
-    claude: async (args: string[]) => args[0] === 'agents' ? { code: 0, out: JSON.stringify(t.listing), err: '' } : { code: 0, out: JSON.stringify({ type: 'result', result: 'SENT' }), err: '' },
+    claude: async (args: string[]) => helpRun(args) ?? (args[0] === 'agents' ? { code: 0, out: JSON.stringify(t.listing), err: '' } : { code: 0, out: JSON.stringify({ type: 'result', result: 'SENT' }), err: '' }),
     mkfifo: () => {}, spawnPty: (argv, cwd, fifo) => { t.spawns.push({ argv, cwd, fifo }); t.listing.push({ pid: 999, pgid: 6000, cwd, kind: 'interactive', sessionId: ISESSION, name: 'desk-412', status: 'busy' }); return 6000; },
     killGroup: () => {}, alivePgid: () => false, killPid: pid => { killedPids.push(pid); for (const a of t.listing) if (a.pid === pid) delete a.pid; } });
   assert.deepEqual(await n2.reply(w2.id, 'back here', 'owner'), { ok: true });
@@ -611,6 +624,49 @@ test('the reaper ends a finished session idle for an hour, not a busy one, and a
   void store;
 });
 
+test('a done session that turns busy with no new turn (a resume, a compaction) is done again once idle', async () => {
+  // 5276-keep-the-muse-digest (2026-11-09): reported DONE, went busy for a compaction, and stayed "working" in Stories.
+  const { native, listing } = setupInteractive();
+  const w = await native.start({ name: 'muse-463', cwd: '/repo', brief: 'b', interactive: true });
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: PR #5297 is READY.' });
+  listing[0].status = 'busy';
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'working');
+  listing[0].status = 'idle';
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'done');
+  assert.equal(native.rows()[0].state, 'idle');
+
+  // A turn after the DONE that ends without DONE or FAILED is new work in progress: idle does not call it done.
+  listing[0].status = 'busy';
+  await native.poll();
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'Waiting for CI on the new head.' });
+  listing[0].status = 'idle';
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'working');
+});
+
+test('a done session listed busy while only a background command runs stays done, and a new turn is working', async () => {
+  // 609 (2026-11-11): DONE at 17:21 with a preview server still running. Claude Code listed the session busy until the
+  // server stopped at 17:33, and the row showed "working" in Other the whole time.
+  const T0 = 1_800_000_000_000;
+  let wrote = T0;
+  const { native, listing, tick } = setupInteractive(T0, { written: () => wrote });
+  const w = await native.start({ name: 'top-bar-609', cwd: '/repo', brief: 'b', interactive: true });
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: the title is gone.', transcript_path: '/t/609.jsonl' });
+  wrote = T0 + 100; // the end-of-turn lines, just after the Stop hook
+  listing[0].status = 'busy';
+  tick(5 * 60_000);
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'done');
+  assert.equal(native.rows()[0].state, 'idle');
+
+  // The owner types a message: the transcript gets the prompt, so busy is a real turn.
+  wrote = T0 + 5 * 60_000;
+  await native.poll();
+  assert.equal(native.get(w.id)?.state, 'working');
+});
+
 // ---- Stage 3: typing into the session ----
 
 test('typedBytes wraps the text in a bracketed paste and ends with a carriage return; escapes are dropped', () => {
@@ -630,7 +686,7 @@ test('a reply to an interactive worker is typed into its pipe, verbatim, with th
   const native = makeNative({
     store, log: (m, f) => logs.push(`${m} ${JSON.stringify(f ?? {})}`), jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')),
     onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {},
-    claude: async (args: string[]) => { calls.push(args); return args[0] === 'agents' ? { code: 0, out: JSON.stringify(listing), err: '' } : args[0] === '-p' ? { code: 0, out: JSON.stringify({ type: 'result', result: 'SENT' }), err: '' } : { code: 0, out: '2.1.316', err: '' }; },
+    claude: async (args: string[]) => { calls.push(args); const help = helpRun(args); if (help) return help; return args[0] === 'agents' ? { code: 0, out: JSON.stringify(listing), err: '' } : args[0] === '-p' ? { code: 0, out: JSON.stringify({ type: 'result', result: 'SENT' }), err: '' } : { code: 0, out: '2.1.316', err: '' }; },
     mkfifo: () => {}, alivePgid: () => true, killGroup: () => {},
     spawnPty: (argv, cwd, fifo) => { listing.push({ pid: 11, cwd, kind: 'interactive', sessionId: ISESSION, name: argv[2], status: 'idle' }); return 10; },
     writeFifo: (fifo, bytes) => { if (fail) { const e: any = new Error(fail); e.code = fail; throw e; } typed.push({ fifo, bytes }); },
@@ -695,4 +751,439 @@ test('a session in the desktop app stays stopped through the polls, so a later m
   assert.equal(r.state, 'stopped');
   assert.equal(r.waiting_for, 'Open in the Claude desktop app');
   assert.equal(spawns.length, 1, 'the desktop-held session is not treated as dead');
+});
+
+// ---- The work list's sections and stale rows (2026-11-09) ----
+
+test('a story worker sorts by its approved task title, not by its name, which drops the "#"', async () => {
+  const { native, store } = setupInteractive();
+  const a = store.addApproval({ action: 'worker-start', say: 'Start?', args: JSON.stringify({ taskTitle: '#4886 Check the price Facebook kept on a widget update', spec: 'Run pick-and-ship on issue #4886.' }) });
+  await native.start({ name: '4886-check-the-price-facebook-kept-on-a--443', cwd: '/repo', brief: 'b', interactive: true, approvalId: a.id });
+  const r = native.rows()[0];
+  assert.equal(r.group, 'story');
+  assert.equal(r.label, '#4886');
+  assert.equal(r.title, '4886-check-the-price-facebook-kept-on-a--443', 'the title stays the name');
+
+  // No story in the title: Other. No start card at all (a session continued on the phone): the name decides.
+  const s2 = setupInteractive();
+  const b = s2.store.addApproval({ action: 'worker-start', say: 'Start?', args: JSON.stringify({ taskTitle: 'Teal and mint app theme' }) });
+  await s2.native.start({ name: 'teal-and-mint-app-theme-420', cwd: '/repo', brief: 'b', interactive: true, approvalId: b.id });
+  assert.equal(s2.native.rows()[0].group, 'other');
+  const s3 = setupInteractive();
+  await s3.native.start({ name: 'issue-4412-fix', cwd: '/repo', brief: 'b', interactive: true });
+  assert.equal(s3.native.rows()[0].label, '#4412');
+});
+
+test('a worker the reaper stopped while it waits on an ask is waiting, not exited, so its request never reads failed', async () => {
+  const { native, listing, tick, store } = setupInteractive();
+  const w = await native.start({ name: '4886-check-443', cwd: '/repo', brief: 'b', interactive: true });
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'STORY: #4886\nQUESTION: How do I test it?' });
+  store.insertItem({ source: 'native', external_id: `ask:${w.id}:1`, kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`, subject: 'How do I test it?', body: 'b', status: 'spoken' });
+  listing[0].status = 'idle';
+  await native.poll(); tick(IDLE_REAP_MS + 1); await native.poll();
+  assert.equal(native.get(w.id)?.state, 'stopped', 'reaped');
+  const r = native.rows()[0];
+  assert.equal(r.state, 'waiting');
+  assert.equal(r.note, 'How do I test it?');
+  assert.equal(r.endedAt, undefined, 'an open ask keeps it out of the Done fold');
+  // The request layer reads the row as waiting on the owner, never failed.
+  assert.equal(statusOf(r, undefined, true, null, undefined, false), 'waiting');
+  tick(25 * 3_600_000);
+  assert.equal(native.rows().length, 1, 'and in the list while the ask is open');
+});
+
+test('rowState maps each native state to the work list', () => {
+  assert.equal(rowState({ state: 'stopped', waiting_for: IDLE_STOPPED }, false), 'idle');
+  assert.equal(rowState({ state: 'stopped', waiting_for: IDLE_STOPPED }, true), 'waiting');
+  assert.equal(rowState({ state: 'stopped', waiting_for: DESKTOP_WAITING }, false), 'idle');
+  assert.equal(rowState({ state: 'stopped', waiting_for: null }, false), 'exited');
+  assert.equal(rowState({ state: 'failed', waiting_for: null }, true), 'exited');
+  assert.equal(rowState({ state: 'done', waiting_for: null }, false), 'idle');
+  assert.equal(rowState({ state: 'done', waiting_for: null }, true), 'waiting');
+  assert.equal(rowState({ state: 'working', waiting_for: null }, false), 'working');
+  assert.equal(rowState({ state: 'blocked', waiting_for: 'x' }, false), 'waiting');
+});
+
+test('a finished row leaves a day after its report, not a day after the reaper stopped it', async () => {
+  const { native, listing, tick } = setupInteractive();
+  const w = await native.start({ name: 'chat-approve-433', cwd: '/repo', brief: 'b', interactive: true });
+  native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: shipped' });
+  const reportAt = native.get(w.id)!.report_at!;
+  listing[0].status = 'idle';
+  await native.poll(); tick(IDLE_REAP_MS + 1); await native.poll();
+  assert.equal(native.get(w.id)?.state, 'stopped');
+  assert.equal(native.rows()[0].endedAt, reportAt, 'its finish time is the report, not the reap');
+  assert.equal(finishedAt(native.get(w.id)!), Date.parse(reportAt));
+  // The request leaves DONE_KEEP_MS after it turned done, which follows the report. The row must not outlive it.
+  tick(24 * 3_600_000 - IDLE_REAP_MS);
+  assert.deepEqual(native.rows(), [], 'gone a day after the report, before its request leaves Completed');
+});
+
+test('missingFeatures: the real Claude Code help has everything the driver runs, and a missing piece is named', () => {
+  assert.deepEqual(missingFeatures(CLAUDE_HELP, AGENTS_HELP), []);
+  // A description that only mentions a flag does not count as having it.
+  const noBg = CLAUDE_HELP.replace(/^  --bg, --background/m, '  --background      ');
+  assert.deepEqual(missingFeatures(noBg, AGENTS_HELP), ['the --bg option']);
+  const noRespawn = CLAUDE_HELP.replace(/^  respawn \[options\] \[id\]/m, '  respawnx');
+  assert.deepEqual(missingFeatures(noRespawn, AGENTS_HELP), ['the claude respawn command']);
+  assert.deepEqual(missingFeatures(CLAUDE_HELP, AGENTS_HELP.replace(/^  --json/m, '  --jsonl')), ['the claude agents --json option']);
+  // A longer option with the same start is not the option.
+  assert.deepEqual(missingFeatures(CLAUDE_HELP.replace(/^  --remote-control \[name\]/m, '  --remote-controlx'), AGENTS_HELP), ['the --remote-control option']);
+});
+
+test('start works on any version that has the features, with no warning, and fails with the missing feature named', async () => {
+  for (const version of ['2.1.316 (Claude Code)', '2.4.0 (Claude Code)']) {
+    const { fake } = setup();
+    const logs: string[] = [];
+    const inner = fake.claude;
+    const claude = async (args: string[]) => args[0] === '--version' ? { code: 0, out: `${version}\n`, err: '' } : inner(args);
+    const n = makeNative({ store: openStore(':memory:'), log: (m, f) => logs.push(`${m} ${JSON.stringify(f ?? {})}`), jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, claude });
+    await n.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
+    assert.ok(logs.some(l => l.startsWith('native: claude has what the driver needs') && l.includes(version)), version);
+    assert.ok(!logs.some(l => /differs|pinned|lacks/.test(l)), version);
+  }
+  const calls: string[][] = [];
+  let help = CLAUDE_HELP.replace(/^  --bg, --background/m, '  --background      ');
+  const claude = async (args: string[]) => { calls.push(args); return args[0] === '--help' ? { code: 0, out: help, err: '' } : helpRun(args) ?? { code: 0, out: '9.0.0 (Claude Code)', err: '' }; };
+  const n = makeNative({ store: openStore(':memory:'), log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, claude });
+  await assert.rejects(n.start({ name: 'p', cwd: '/x', brief: 'b' }), /Claude Code 9\.0\.0 \(Claude Code\) lacks the --bg option, which Jarvis's native workers need\. Update Claude Code/);
+  assert.ok(!calls.some(a => a.includes('--bg')), 'nothing started');
+  // Only a pass is remembered: after an update the next start checks again and goes on.
+  help = CLAUDE_HELP;
+  await assert.rejects(n.start({ name: 'p', cwd: '/x', brief: 'b' }), /claude --bg did not start/);
+  assert.equal(calls.filter(a => a[0] === '--help').length, 2);
+});
+
+test('start says so when claude --help cannot be read', async () => {
+  const claude = async () => ({ code: 127, out: '', err: 'command not found' });
+  const n = makeNative({ store: openStore(':memory:'), log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: () => {}, claude });
+  await assert.rejects(n.start({ name: 'p', cwd: '/x', brief: 'b' }), /could not read `claude --help` \(exit 127\)/);
+});
+
+/** A worker transcript: a prompt, then the assistant lines given, each a list of content blocks. */
+function transcriptWith(...assistant: any[][]): string {
+  const f = join(mkdtempSync(join(tmpdir(), 'turn-')), 's.jsonl');
+  const lines = [{ type: 'user', message: { role: 'user', content: 'Do the task.' } },
+    ...assistant.flatMap((content, i) => [{ type: 'assistant', message: { role: 'assistant', content } }, { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${i}`, content: 'ok' }] } }])];
+  writeFileSync(f, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+  return f;
+}
+const send = (to: string, message: string) => ({ type: 'tool_use', id: 'x', name: 'SendMessage', input: { to, message } });
+
+test('lastTurnMessages: what the last turn sent to a session, from the last prompt on', () => {
+  const f = transcriptWith([send('jarvis-brain', 'STORY: 1\nQUESTION: a?\nOPTIONS: x because y')], [send('other', 'hi')], [{ type: 'text', text: 'Asked.' }]);
+  assert.deepEqual(lastTurnMessages(f, 'jarvis-brain'), ['STORY: 1\nQUESTION: a?\nOPTIONS: x because y']);
+  // A new prompt (here a cross-session reply) starts a new turn; a meta line (a system reminder) does not.
+  writeFileSync(f, `${JSON.stringify({ type: 'user', isMeta: true, message: { role: 'user', content: '<system-reminder>x</system-reminder>' } })}\n`, { flag: 'a' });
+  assert.equal(lastTurnMessages(f, 'jarvis-brain').length, 1);
+  writeFileSync(f, `${JSON.stringify({ type: 'user', isMeta: true, turnOrigin: 'peer', message: { role: 'user', content: 'green' } })}\n`, { flag: 'a' });
+  assert.deepEqual(lastTurnMessages(f, 'jarvis-brain'), []);
+});
+
+test('a turn with no report line is sent back once; its answer with DONE is the report, with no notice', async () => {
+  const { native, reports, notices, logs } = setup();
+  await native.start({ name: 'question-386', cwd: '/repo', brief: 'b' });
+  assert.deepEqual(native.stopHook({ session_id: SESSION, stop_hook_active: false, last_assistant_message: 'bin/jarvis-native is a small Node tool.' }), { decision: 'block', reason: REPORT_NUDGE });
+  assert.ok(logs.some(l => l.includes('"sentBack":true')));
+  assert.deepEqual(native.stopHook({ session_id: SESSION, stop_hook_active: true, last_assistant_message: 'DONE: answered\n\nbin/jarvis-native is a small Node tool.' }), {});
+  const w = native.get('deabc023')!;
+  assert.equal(w.outcome, 'done');
+  assert.equal(w.report, 'DONE: answered\n\nbin/jarvis-native is a small Node tool.');
+  assert.deepEqual(reports.map(r => r[1]), [false, true]);
+  assert.deepEqual(notices, []);
+  // The nudge names the three ways out and keeps the DONE line the spec asks for.
+  assert.match(REPORT_NUDGE, /`DONE: <one sentence>`/);
+  assert.match(REPORT_NUDGE, /`WAITING:`/);
+  assert.match(REPORT_NUDGE, /SendMessage/);
+});
+
+test('a pause is quiet: a WAITING line, an ask to the brain, a background task, a scheduled wake-up, a side chat', async () => {
+  const cases: [string, (s: ReturnType<typeof setup>) => Promise<any>][] = [
+    ['waiting line', async () => ({ last_assistant_message: 'WAITING: CI on the head commit' })],
+    ['ask to the brain', async () => ({ last_assistant_message: 'Asked Jarvis.', transcript_path: transcriptWith([send('jarvis-brain', 'STORY: 386\nQUESTION: Which one?\nOPTIONS: A because b')]) })],
+    ['background task', async () => ({ last_assistant_message: 'The wait checks every 30 seconds.', background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'wait for CI', command: 'sleep 25' }] })],
+    ['scheduled wake-up', async () => ({ last_assistant_message: 'Next wave in 20 minutes.', session_crons: [{ id: 'c1' }] })],
+    ['conversation', async s => { const a = s.store.addApproval({ action: 'side-chat', args: '{}', say: '' }); s.store.updateNativeWorker('deabc023', { approval_id: a.id }); return { last_assistant_message: 'Sure, what next?' }; }],
+  ];
+  for (const [name, body] of cases) {
+    const s = setup();
+    await s.native.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
+    const extra = await body(s);
+    assert.deepEqual(s.native.stopHook({ session_id: SESSION, stop_hook_active: false, ...extra }), {}, name);
+    assert.deepEqual(s.notices, [], name);
+    assert.ok(s.logs.some(l => l.startsWith('native worker reported') && l.includes('"pause":')), name);
+    // The two-minute backstop stays quiet for it too.
+    s.fake.agent.state = 'done'; delete s.fake.agent.pid;
+    s.tick(SILENT_DONE_MS);
+    await s.native.poll();
+    assert.deepEqual(s.notices, [], `${name}: backstop`);
+  }
+  // A NOTICE to the brain is not an ask: that turn is still sent back.
+  const s = setup();
+  await s.native.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
+  assert.deepEqual(s.native.stopHook({ session_id: SESSION, last_assistant_message: 'Pushed.', transcript_path: transcriptWith([send('jarvis-brain', 'NOTICE: CI runs now')]) }), { decision: 'block', reason: REPORT_NUDGE });
+  // A finished background task is not pending.
+  const s2 = setup();
+  await s2.native.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
+  assert.equal((s2.native.stopHook({ session_id: SESSION, last_assistant_message: 'ok', background_tasks: [{ id: 'b1', status: 'completed' }] }) as any).decision, 'block');
+});
+
+test('the backstop and the told state survive a jarvisd restart, so the notice is not repeated', async () => {
+  const s = setup();
+  await s.native.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
+  s.native.stopHook({ session_id: SESSION, stop_hook_active: false, last_assistant_message: 'Hmm.' });
+  s.native.stopHook({ session_id: SESSION, stop_hook_active: true, last_assistant_message: 'Hmm again.' });
+  assert.equal(s.notices.length, 1);
+  // A new daemon on the same database: its poll does not tell the brain a second time.
+  const notices: string[] = [];
+  const n2 = makeNative({ store: s.store, log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: (_w, t) => notices.push(t), claude: s.fake.claude, now: () => 1_800_000_000_000 + SILENT_DONE_MS * 2 });
+  s.fake.agent.state = 'done'; delete s.fake.agent.pid;
+  await n2.poll();
+  assert.deepEqual(notices, []);
+});
+
+test('a worker is sent back at most three times in ten minutes, whatever the hook body says', async () => {
+  const s = setup();
+  await s.native.start({ name: 'probe-7', cwd: '/repo', brief: 'b' });
+  const blocks = [1, 2, 3, 4].map(() => (s.native.stopHook({ session_id: SESSION, stop_hook_active: false, last_assistant_message: 'no line' }) as any).decision);
+  assert.deepEqual(blocks, ['block', 'block', 'block', undefined]);
+  assert.equal(s.notices.length, 1, 'the fourth is told at once');
+});
+
+// ---- Stuck workers (worker 579, 2026-11-11) ----
+/** A running background task, as Claude Code lists it in the Stop hook body. */
+const BG = [{ id: 'b1', status: 'running', description: 'helper session' }];
+
+test('a worker that waits on the owner never turns stuck and is never nudged; the same WAITING on a task still does', async () => {
+  const at = Date.parse('2026-11-11T09:37:00Z'); // 4:37 AM Eastern, the 5361 case
+  const s = setupInteractive(at);
+  await s.native.start({ name: 'empty-annonces-5361', cwd: '/repo', brief: 'b', interactive: true });
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: Simon signs in to the empty Facebook profile and tells me.' });
+  s.listing[0].status = 'idle';
+  s.tick(STALL_MS * 4);
+  await s.native.poll();
+  assert.deepEqual(s.notices, [], 'no stuck notice, so nothing tells the brain to nudge it');
+  assert.equal(s.calls.filter(c => c[0] === '-p').length, 0, 'nothing was sent to the worker');
+  const r = s.native.rows()[0];
+  assert.equal(r.state, 'waiting');
+  assert.equal(r.note, 'Simon signs in to the empty Facebook profile and tells me.');
+  assert.equal(r.native?.stalledSince, undefined);
+  assert.ok(r.native?.waitingOn);
+  // The same wait with a background task is not a wait on the owner: it turns stuck as before.
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the helper session', background_tasks: BG });
+  s.tick(STALL_MS);
+  await s.native.poll();
+  assert.equal(s.notices.length, 1);
+  assert.match(s.notices[0], /is stuck/);
+  assert.match(s.native.rows()[0].note ?? '', /^Stuck: /);
+});
+
+test('a worker idle on a WAITING line is told to the brain once after STALL_MS, at any hour, and the row says stuck', async () => {
+  const at = Date.parse('2026-11-11T01:05:33Z'); // 8:05 PM Eastern, outside the check hours
+  const s = setupInteractive(at);
+  const w = await s.native.start({ name: 'worker-pane-579', cwd: '/repo', brief: 'b', interactive: true });
+  s.tick(6 * 60_000);
+  // A WAITING on its own background task: a wait that only the owner ends is never stuck (next test).
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the throwaway test session must write its first reply.', background_tasks: BG });
+  s.listing[0].status = 'idle';
+  await s.native.poll();
+  s.tick(STALL_MS - 1);
+  await s.native.poll();
+  assert.deepEqual(s.notices, [], 'not before STALL_MS');
+  assert.equal(s.native.rows()[0].native?.stalledSince, undefined);
+  s.tick(2);
+  await s.native.poll();
+  assert.equal(s.notices.length, 1);
+  assert.match(s.notices[0], /^Worker worker-pane-579 is stuck: its task is unfinished and it wrote nothing for 75 min/);
+  assert.match(s.notices[0], /WAITING: the throwaway test session/);
+  assert.match(s.notices[0], /Nudge it now/);
+  const r = s.native.rows()[0];
+  assert.equal(r.state, 'working', 'the request stays live');
+  assert.match(r.note ?? '', /^Stuck: nothing for /);
+  assert.equal(r.native?.stalledSince, s.native.get(w.id)!.report_at);
+  s.tick(8 * 3_600_000);
+  await s.native.poll();
+  assert.equal(s.notices.length, 1, 'one notice per stall');
+
+  // A restart on the same database does not tell the same stall again, and still marks the row.
+  const notices: string[] = [];
+  const n2 = makeNative({ store: s.store, log: () => {}, jarvisUrl: 'http://x', dataDir: mkdtempSync(join(tmpdir(), 'native-')), onChange: () => {}, onReport: () => {}, onCard: () => {}, onNotice: (_w, t) => notices.push(t),
+    claude: async (args: string[]) => helpRun(args) ?? (args[0] === 'agents' ? { code: 0, out: JSON.stringify(s.listing), err: '' } : { code: 0, out: '', err: '' }), now: () => at + 9 * 3_600_000 });
+  await n2.poll();
+  assert.deepEqual(notices, []);
+  assert.ok(n2.rows()[0].native?.stalledSince);
+
+  // New activity (a nudge starts a turn that reports) clears it, and a second stall is told again.
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: CI on the new head.', background_tasks: BG });
+  await s.native.poll();
+  assert.equal(s.native.rows()[0].native?.stalledSince, undefined);
+  s.tick(STALL_MS);
+  await s.native.poll();
+  assert.equal(s.notices.length, 2);
+});
+
+test('a WAITING line that only the owner ends shows Waiting on you with its text; a task, a wake-up or an ask does not', async () => {
+  const s = setupInteractive();
+  const w = await s.native.start({ name: 'empty-annonces-5361', cwd: '/repo', brief: 'b', interactive: true });
+  // The 5361 case: its ask was answered "you sign in later", and its next turn ends on WAITING.
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: Simon signs in to the empty Facebook profile in Chrome and tells me.\n\nI stop here.' });
+  let r = s.native.rows()[0];
+  assert.equal(r.state, 'waiting');
+  assert.equal(r.note, 'Simon signs in to the empty Facebook profile in Chrome and tells me.');
+  assert.deepEqual(r.native?.waitingOn, { text: 'Simon signs in to the empty Facebook profile in Chrome and tells me.', since: s.native.get(w.id)!.report_at });
+  // An open ask: the row shows the ask, not the WAITING line.
+  s.store.insertItem({ source: 'native', external_id: `ask:${w.id}:1`, kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`, subject: 'Question from 5361', body: 'A or B?', status: 'spoken' });
+  r = s.native.rows()[0];
+  assert.equal(r.note, 'Question from 5361');
+  assert.equal(r.native?.waitingOn, undefined);
+  s.store.markItem(`ask:${w.id}:1`, 'answered', 'A');
+  // A WAITING for a background task or a scheduled wake-up stays a working row with no note.
+  for (const extra of [{ background_tasks: [{ id: 'b1', status: 'running', description: 'wait for CI' }] }, { session_crons: [{ id: 'c1' }] }]) {
+    s.tick(1000);
+    s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: CI on the head commit', ...extra });
+    r = s.native.rows()[0];
+    assert.equal(r.state, 'working');
+    assert.equal(r.native?.waitingOn, undefined);
+  }
+  // A plain report after it clears the wait.
+  s.tick(1000);
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: Simon answers' });
+  assert.equal(s.native.rows()[0].state, 'waiting');
+  s.tick(1000);
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: it works' });
+  assert.equal(s.native.rows()[0].native?.waitingOn, undefined);
+});
+
+test('a follow-up that ends FAILED after DONE keeps the story done with its DONE report, and keeps the follow-up beside it', async () => {
+  // Worker fe594be3 (4967), 2026-11-11 12:24Z: done with PR #5418, then a steer to change the verdict ended FAILED.
+  const s = setupInteractive();
+  const w = await s.native.start({ name: '4967-verify-launch-501', cwd: '/repo', brief: 'b', interactive: true });
+  const done = 'DONE: PR #5418 is ready, verdict REVIEW.';
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: done });
+  assert.equal(s.native.get(w.id)!.outcome, 'done');
+  s.tick(60 * 60_000);
+  const failed = 'FAILED: the gate always says REVIEW on gate code, so I did not change the verdict.\n\nDetails.';
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: failed });
+  const after = s.native.get(w.id)!;
+  assert.equal(after.outcome, 'done');
+  assert.equal(after.state, 'done');
+  assert.equal(after.report, done, 'the DONE report stays the report');
+  assert.equal(after.report_at, new Date(1_800_000_000_000 + 60 * 60_000).toISOString(), 'the report time moves past the steer');
+  assert.deepEqual(s.reports.at(-1), [failed, true], 'the brain still hears the follow-up');
+  assert.ok(!s.notices.some(n => /failed/.test(n)), 'no failed notice');
+  const r = s.native.rows()[0];
+  assert.equal(r.native?.outcome, 'done');
+  assert.deepEqual(r.native?.followUp, { text: 'FAILED: the gate always says REVIEW on gate code, so I did not change the verdict.', at: after.report_at, outcome: 'failed' });
+  s.listing[0].status = 'idle';
+  await s.native.poll();
+  assert.equal(s.native.get(w.id)!.state, 'done', 'the poll keeps an idle one done');
+  // A later DONE replaces the follow-up.
+  s.tick(1000);
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: verdict unchanged, PR still ready.' });
+  assert.equal(s.native.rows()[0].native?.followUp, undefined);
+  // A worker that never reported DONE still fails.
+  const f = setupInteractive();
+  const w2 = await f.native.start({ name: 'other-1', cwd: '/repo', brief: 'b', interactive: true });
+  f.native.stopHook({ session_id: ISESSION, last_assistant_message: 'FAILED: tests do not pass' });
+  assert.equal(f.native.get(w2.id)!.outcome, 'failed');
+});
+
+test('a transcript write keeps a worker from being stuck, and a busy one with no transcript is never stuck', async () => {
+  let wrote = 0;
+  const s = setupInteractive(1_800_000_000_000, { written: () => wrote });
+  await s.native.start({ name: 'busy-1', cwd: '/repo', brief: 'b', interactive: true });
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: the build', transcript_path: '/t.jsonl', background_tasks: BG });
+  s.tick(STALL_MS + 1);
+  wrote = 1_800_000_000_000 + STALL_MS; // the transcript moved a moment ago
+  await s.native.poll();
+  assert.deepEqual(s.notices, []);
+  s.tick(STALL_MS);
+  await s.native.poll();
+  assert.equal(s.notices.length, 1, 'a busy worker whose transcript stopped moving is stuck too: its tool hangs');
+
+  const b = setupInteractive();
+  await b.native.start({ name: 'busy-2', cwd: '/repo', brief: 'b', interactive: true });
+  b.tick(STALL_MS * 3);
+  await b.native.poll();
+  assert.deepEqual(b.notices, [], 'busy, no transcript to read');
+});
+
+test('an open ask, a side chat or a finished task is never stuck', async () => {
+  const ask = setupInteractive();
+  const w = await ask.native.start({ name: 'ask-1', cwd: '/repo', brief: 'b', interactive: true });
+  ask.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: an answer from jarvis-brain' });
+  ask.store.insertItem({ source: 'native', external_id: `ask:${w.id}:1`, kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`, body: 'A or B?', status: 'spoken' });
+  ask.listing[0].status = 'idle';
+  ask.tick(STALL_MS + 1);
+  await ask.native.poll();
+  assert.ok(!ask.notices.some(n => /is stuck/.test(n)), 'an ask waits on the owner and has its own pushes');
+
+  const side = setupInteractive();
+  const a = side.store.addApproval({ action: 'side-chat', args: '{}', say: '' });
+  await side.native.start({ name: 'side-1', cwd: '/repo', brief: 'b', interactive: true, approvalId: a.id });
+  side.native.stopHook({ session_id: ISESSION, last_assistant_message: 'Sure, what next?' });
+  side.listing[0].status = 'idle';
+  side.tick(STALL_MS + 1);
+  await side.native.poll();
+  assert.ok(!side.notices.some(n => /is stuck/.test(n)), 'a side chat waits on the owner');
+
+  const done = setupInteractive();
+  await done.native.start({ name: 'done-1', cwd: '/repo', brief: 'b', interactive: true });
+  done.native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: shipped' });
+  done.listing[0].status = 'idle';
+  done.tick(STALL_MS + 1);
+  await done.native.poll();
+  assert.ok(!done.notices.some(n => /is stuck/.test(n)));
+});
+
+test('workerSettings turns the advisor tool off for a non-story worker and leaves it on for a story worker', () => {
+  const off = workerSettings('http://x', '') as any;
+  assert.equal(off.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, '1', 'an empty advisorModel alone falls back to the global model');
+  const story = workerSettings('http://x', STORY_ADVISOR) as any;
+  assert.equal(story.advisorModel, STORY_ADVISOR);
+  assert.equal(story.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, undefined);
+  const inherit = workerSettings('http://x') as any;
+  assert.equal('advisorModel' in inherit, false);
+  assert.equal(inherit.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, undefined);
+});
+
+test('isStoryStart takes a story spec from Today or the brain, and nothing else', () => {
+  for (const skill of ['pick-and-ship', 'pick-and-ship-v3']) assert.ok(isStoryStart('today-start', storyStartSpec('4886', skill)), skill);
+  assert.ok(isStoryStart('worker-start', 'Run pick-and-ship on issue #4886.'));
+  assert.equal(isStoryStart('today-start', 'Book the dentist and report back.'), false);
+  assert.equal(isStoryStart('question', 'Run the pick-and-ship skill on issue #1.'), false);
+  assert.equal(isStoryStart('side-chat', 'pick-and-ship'), false);
+});
+
+const advisorOf = (args: string[]) => {
+  const s = JSON.parse(readFileSync(args[args.indexOf('--settings') + 1], 'utf8'));
+  assert.equal(s.hooks.Stop[0].hooks[0].url.endsWith('/api/hooks/stop'), true, 'every variant keeps the hooks');
+  if (s.advisorModel === '') assert.equal(s.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, '1', 'an off worker also gets the env switch');
+  else assert.equal(s.env?.CLAUDE_CODE_DISABLE_ADVISOR_TOOL, undefined, 'an on or inherit worker has no env switch');
+  return 'advisorModel' in s ? s.advisorModel : 'inherit';
+};
+
+test('a background start picks the advisor from its card: on for a story, off for a task, as is with no card', async () => {
+  const cases: [string | undefined, string][] = [[storyStartSpec('4886', 'pick-and-ship-v3'), STORY_ADVISOR], ['Book the dentist.', ''], [undefined, 'inherit']];
+  for (const [spec, want] of cases) {
+    const { native, fake, store } = setup();
+    const card = spec === undefined ? undefined : store.addApproval({ action: 'today-start', say: '', args: JSON.stringify({ spec }) });
+    await native.start({ name: 'w-1', cwd: '/repo', brief: 'go', approvalId: card?.id });
+    assert.equal(advisorOf(fake.calls.find(c => c[0] === '--bg')!), want, String(spec));
+  }
+});
+
+test('an interactive story worker starts and resumes with the advisor, a question worker without it', async () => {
+  for (const [action, spec, want] of [['worker-start', 'Run pick-and-ship on issue #4886.', STORY_ADVISOR], ['question', 'What does X do?', '']] as const) {
+    const { native, listing, spawns, store } = setupInteractive();
+    const card = store.addApproval({ action, say: '', args: JSON.stringify({ spec }) });
+    const w = await native.start({ name: 'iw-1', cwd: '/repo', brief: 'b', approvalId: card.id, interactive: true });
+    native.stopHook({ session_id: ISESSION, last_assistant_message: 'DONE: finished' });
+    for (const a of listing) delete a.pid;
+    assert.deepEqual(await native.reply(w.id, 'one more thing', 'jarvis'), { ok: true });
+    assert.equal(spawns.length, 2);
+    assert.ok(argvOf(spawns[1]).includes('--resume'));
+    assert.equal(advisorOf(argvOf(spawns[0])), want, `${action} start`);
+    assert.equal(advisorOf(argvOf(spawns[1])), want, `${action} resume`);
+  }
 });

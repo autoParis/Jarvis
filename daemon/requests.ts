@@ -1,27 +1,36 @@
 import { execFile } from 'node:child_process';
 import { basename } from 'node:path';
 import type { Store, Approval, Request } from './store.ts';
-import type { Work, WorkRow, WorkerInfo } from './work.ts';
+import type { Work, WorkRow } from './work.ts';
 import { findPr } from './work.ts';
 import type { Log } from './log.ts';
-import type { OrcaResult } from './orca.ts';
 import { fields, STOP_ANSWER } from './asks.ts';
-import { readStopNotice } from './prompt.ts';
-import { findWorkerSession, readChatFile, type Read } from './transcript.ts';
+import { readChatFile, type Read } from './transcript.ts';
 import { ROW_PREFIX } from './native.ts';
+import { readReport, askReportPath, reportPathIn } from './workercontract.ts';
+import { docHref } from '../web/contract.js';
+import type { RouteResult, Body } from './route.ts';
 
 // The Requests sidebar: one row per thing the owner asked Jarvis for, from the worker start to its PR. A request is
-// recorded when the gate starts a worker for him, and its status follows the work poller. Nothing here touches
+// recorded when the gate starts a worker for him, and its status follows the native workers' rows. Nothing here touches
 // a worktree, a session or a branch: removing or hiding a row only marks it in the requests table.
 
 export type RequestStatus = 'waiting' | 'working' | 'review' | 'done' | 'failed';
 /** What the app shows for one request. `row` is the work-list row that opens its conversation, if one is listed. */
-export type RequestView = { id: number; title: string; words: string | null; status: RequestStatus; at: string; startedAt: string; pr?: string; url?: string; row?: string; report?: boolean };
+export type RequestView = { id: number; title: string; words: string | null; status: RequestStatus; at: string; startedAt: string; pr?: string; url?: string; row?: string; report?: boolean; doc?: RequestDoc;
+  /** The first line of a follow-up turn's FAILED result on a story that stays done (native.ts followUpOf). */
+  followUp?: string };
+/**
+ * A document in data/reports the request's worker wrote: from an ask's REPORT line, else a data/reports path in its
+ * DONE report. `waits` is true when an open question rests on it, so the owner must read it. `href` opens it in the
+ * report viewer (web/contract.js docHref).
+ */
+export type RequestDoc = { path: string; title: string; href: string; waits: boolean };
 /** A worker's last report, for the app's report page. `failed` is its own outcome, which can differ from the request's status. */
 export type RequestReport = { id: number; title: string; status: string; at: string; subject: string; body: string; failed: boolean };
 
-/** Worker starts that answer something the owner asked for, research questions included. Side chats live in their own
- * Orca tab, so they are not tracked. */
+/** Worker starts that answer something the owner asked for, research questions included. Side chats are the owner's own
+ * conversations, so they are not tracked. */
 export const REQUEST_ACTIONS = new Set(['worker-start', 'question', 'today-start', 'today-draft']);
 /** A Today draft runs read-only in the main checkout like a question, and a Today run in its own worktree like a worker-start. */
 const REQUEST_KIND: Record<string, string> = { 'today-start': 'worker-start', 'today-draft': 'question' };
@@ -30,7 +39,6 @@ export const DONE_KEEP_MS = 24 * 60 * 60_000;
 /** A working request whose worker is missing from this many polls in a row is over. */
 export const ABSENT_POLLS = 2;
 const PR_CHECK_MS = 5 * 60_000;
-const BACKFILL_KEY = 'requestsSessionBackfill';
 
 /** The title as shown: Jarvis sometimes starts a task title with "Request:" or "Requests:", which the list does not need. */
 export function shownTitle(title: string): string {
@@ -43,7 +51,7 @@ const json = (s: string | null): any => { try { return JSON.parse(s ?? ''); } ca
 export function requestFromApproval(a: Approval, words: string | undefined): Parameters<Store['addRequest']>[0] | undefined {
   if (!REQUEST_ACTIONS.has(a.action) || a.status !== 'done') return undefined;
   const res = json(a.result);
-  // An Orca start names its dispatch; a native start names its worker, `n:<id>`, which is also its work-list row.
+  // A start names its worker, `n:<id>`, which is also its work-list row. An older start named a dispatch id.
   const dispatch = res?.dispatchId ?? (typeof res?.worker === 'string' && res.worker.startsWith(ROW_PREFIX) ? res.worker : undefined);
   if (typeof dispatch !== 'string') return undefined;
   const args = json(a.args) ?? {};
@@ -75,7 +83,7 @@ export type HistoryEntry = { at: string; kind: 'question' | 'escalation' | 'work
 export type RequestDetail = { id: number; title: string; words: string | null; status: string; at: string; startedAt: string; worktree?: string; pr?: string; url?: string; history: HistoryEntry[]; transcript?: boolean };
 
 const iso = (t: string) => t.includes('T') ? t : `${t.replace(' ', 'T')}Z`;
-const APPROVAL_TITLE: Record<string, string> = { 'worker-start': 'Worker start', question: 'Question worker start', 'worker-stop': 'Worker stop', 'worker-send': 'Message to the worker', 'today-start': 'Worker start from Today', 'today-draft': 'Story draft from Today' };
+const APPROVAL_TITLE: Record<string, string> = { 'worker-start': 'Worker start', question: 'Question worker start', 'worker-stop': 'Worker stop', 'today-start': 'Worker start from Today', 'today-draft': 'Story draft from Today' };
 
 function itemEntry(i: { external_id: string; kind: string; subject: string | null; body: string | null; answer: string | null; created_at: string; updated_at: string | null; meta: string | null }): HistoryEntry {
   const answer = i.answer ? { answer: i.answer, ...(i.updated_at ? { answeredAt: iso(i.updated_at) } : {}), ...(i.answered_by === 'jarvis' ? { answeredBy: 'jarvis' as const } : {}) } : {};
@@ -87,10 +95,6 @@ function itemEntry(i: { external_id: string; kind: string; subject: string | nul
   if (i.kind === 'question') {
     const f = fields(i.body ?? '');
     return { at, kind: 'question', title: 'Question', text: [f.QUESTION, f.CONTEXT].filter(Boolean).join('\n\n') || i.body || '', ...answer };
-  }
-  if (i.external_id.startsWith('msg_stop_')) {
-    const n = readStopNotice(i.body);
-    return { at, kind: 'escalation', title: n.kind === 'prompt' ? 'Stopped at a prompt' : 'Stopped without reporting', text: n.output, ...answer };
   }
   return { at, kind: 'escalation', title: i.subject || 'Escalation', text: i.body ?? '', ...answer };
 }
@@ -116,7 +120,7 @@ export function requestDetail(store: Store, id: number, log = ''): RequestDetail
     if (e?.dispatch === r.dispatch_id && !['working', 'waiting'].includes(e.to)) history.push({ at: line.slice(0, line.indexOf(' ')), kind: 'status', title: `Status: ${e.from} to ${e.to}`, failed: e.to === 'failed' });
   }
   history.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  // A worker stopped before worker_done never reports its PR, but a stop notice can still hold the link. Only a full link counts.
+  // A worker stopped before its report never names its PR, but another of its messages can still hold the link. Only a full link counts.
   const seen = r.pr ? undefined : [...items].reverse().map(i => findPr(i.body ?? '')).find(f => f.url);
   return {
     id: r.id, title: shownTitle(r.title), words: r.words, status: r.status, at: iso(r.status_at), startedAt: iso(r.created_at),
@@ -148,7 +152,7 @@ export function conversation(r: Pick<Request, 'dispatch_id' | 'session' | 'workt
 }
 
 /** A native worker's last DONE or FAILED report, shaped like a worker_done item. Native reports live on the worker row
- * (native.ts), never in `items`. Undefined for an Orca dispatch or a native worker with no outcome yet. */
+ * (native.ts), never in `items`. Undefined for any other dispatch or a native worker with no outcome yet. */
 function nativeReport(store: Store, dispatch: string): { subject: string; body: string; meta: string; created_at: string } | undefined {
   if (!dispatch.startsWith(ROW_PREFIX)) return undefined;
   const w = store.nativeWorker(dispatch.slice(ROW_PREFIX.length));
@@ -158,23 +162,57 @@ function nativeReport(store: Store, dispatch: string): { subject: string; body: 
   return { subject: w.name, body: w.report, meta: JSON.stringify({ outcome: w.outcome === 'done' ? 'succeeded' : 'failed' }), created_at: at };
 }
 
+/**
+ * A native worker's worktree folder name, or undefined when it runs in the repo's main checkout (a question, a draft,
+ * `worktree: main`): that folder is not its own, and other sessions there are not its conversation.
+ */
+function nativeWorktree(store: Store, nw: { cwd: string; repo?: string | null; approval_id: number | null }): string | undefined {
+  let repo = nw.repo ?? undefined;
+  if (!repo && nw.approval_id) { try { repo = JSON.parse(store.approval(nw.approval_id)?.args ?? '{}').repo; } catch {} }
+  const trim = (p: string) => p.replace(/\/+$/, '');
+  return typeof repo === 'string' && trim(repo) === trim(nw.cwd) ? undefined : basename(nw.cwd);
+}
+
 /** True when the owner or the brain sent a native worker more work after its last report: the report no longer settles it. */
 function repliedAfter(store: Store, dispatch: string, reportAt: string): boolean {
   if (!dispatch.startsWith(ROW_PREFIX)) return false;
   return !!store.db.prepare(`SELECT 1 FROM items WHERE source = 'native' AND kind = 'reply' AND dispatch_id = ? AND created_at > ? LIMIT 1`).get(dispatch, reportAt);
 }
 
+/** The asks' statuses that still wait on the owner (store.openItems). */
+const OPEN_ASK = new Set(['new', 'spoken', 'replying']);
+
+/**
+ * The report a request's worker wrote, newest first: an open ask's report (the owner must read it), else the report its
+ * last DONE or FAILED names, else an answered ask's report. Undefined when none names a file `reportOf` can open.
+ */
+export function requestDoc(store: Store, dispatch: string, reportOf: (path: string) => { path: string; title: string } | undefined): RequestDoc | undefined {
+  const asks = store.db.prepare(`SELECT body, status FROM items WHERE dispatch_id = ? AND kind IN ('question', 'escalation') ORDER BY id DESC LIMIT 20`)
+    .all(dispatch) as { body: string | null; status: string }[];
+  const doc = (path: string | undefined, waits: boolean): RequestDoc | undefined => {
+    const s = path ? reportOf(path) : undefined;
+    return s && { path: s.path, title: s.title, href: docHref(s.path), waits };
+  };
+  const askDoc = (open: boolean) => {
+    for (const a of asks) if (OPEN_ASK.has(a.status) === open) { const d = doc(askReportPath(a.body ?? '') ?? reportPathIn(a.body), open); if (d) return d; }
+  };
+  const done = store.db.prepare(`SELECT body FROM items WHERE kind = 'worker_done' AND dispatch_id = ? ORDER BY id DESC LIMIT 1`).get(dispatch) as { body: string | null } | undefined
+    ?? nativeReport(store, dispatch);
+  return askDoc(true) ?? doc(reportPathIn(done?.body), false) ?? askDoc(false);
+}
+
 const failing = (outcome: string | undefined) => !!outcome && outcome !== 'succeeded' && outcome !== 'in_progress';
 
 /**
- * The status the work list implies, or undefined when it says nothing new (the worker is no longer listed by Orca).
+ * The status the work list implies, or undefined when it says nothing new (the worker is no longer listed).
  * `prOpen` is the last known PR state: true open, false merged or closed, undefined not checked yet.
+ * `unmerged` is true when a request with no PR has a branch with commits that are not on the base branch yet.
  */
-export function statusOf(row: WorkRow | undefined, outcome: string | undefined, isLive: boolean, pr: string | null, prOpen: boolean | undefined, finished: boolean): RequestStatus | undefined {
+export function statusOf(row: WorkRow | undefined, outcome: string | undefined, isLive: boolean, pr: string | null, prOpen: boolean | undefined, finished: boolean, unmerged = false): RequestStatus | undefined {
   if (row?.state === 'waiting') return 'waiting';
   if (isLive) return row?.state === 'exited' ? 'failed' : 'working';
   if (failing(outcome)) return 'failed';
-  if (outcome === 'succeeded' || finished) return pr && prOpen !== false ? 'review' : 'done';
+  if (outcome === 'succeeded' || finished) return (pr ? prOpen !== false : unmerged) ? 'review' : 'done';
   return undefined;
 }
 
@@ -185,35 +223,65 @@ function stoppedAt(store: Store, dispatch: string): string | null {
     UNION ALL SELECT updated_at FROM items WHERE dispatch_id = ? AND answer = ?)`).get(dispatch, dispatch, STOP_ANSWER) as { at: string | null }).at;
 }
 
-/** `gh pr view` for a PR link: true open, false merged or closed, undefined when gh did not answer. */
-function ghPrOpen(url: string): Promise<boolean | undefined> {
-  return new Promise(resolve => execFile('gh', ['pr', 'view', url, '--json', 'state'], { timeout: 15_000 }, (err, out) => {
+/**
+ * `gh pr view` for a PR link: true open, false merged or closed, 'missing' when the repo has no PR with that number,
+ * undefined when gh did not answer.
+ */
+function ghPrOpen(url: string): Promise<PrState> {
+  return new Promise(resolve => execFile('gh', ['pr', 'view', url, '--json', 'state'], { timeout: 15_000 }, (err, out, errOut) => {
+    if (err && /Could not resolve to a PullRequest/i.test(String(errOut))) return resolve('missing');
     const state = !err && json(out)?.state;
     resolve(state === 'OPEN' ? true : state === 'MERGED' || state === 'CLOSED' ? false : undefined);
   }));
 }
+export type PrState = boolean | 'missing' | undefined;
+
+/**
+ * True when the branch checked out in `dir` has no commit that its repo's master (or main) lacks, false when it has
+ * some, undefined when git cannot tell (the folder is gone).
+ */
+function gitBranchMerged(dir: string): Promise<boolean | undefined> {
+  const count = (base: string) => new Promise<number | undefined>(resolve => execFile('git', ['-C', dir, 'rev-list', '--count', `${base}..HEAD`], { timeout: 10_000 }, (err, out) => {
+    const n = Number.parseInt(String(out).trim(), 10);
+    resolve(err || Number.isNaN(n) ? undefined : n);
+  }));
+  return count('master').then(n => n ?? count('main')).then(n => n === undefined ? undefined : n === 0);
+}
+
+/** The checkout a request's worker started from: the native worker's repo, else the `repo` its start approval named. */
+function requestRepo(store: Store, r: Request, nw: { repo?: string | null } | undefined): string | undefined {
+  if (nw?.repo) return nw.repo;
+  const repo = r.approval_id ? json(store.approval(r.approval_id)?.args ?? null)?.repo : undefined;
+  return typeof repo === 'string' ? repo : undefined;
+}
+const trimDir = (p: string) => p.replace(/\/+$/, '');
 
 export function makeRequests(opts: {
   store: Store; log: Log;
-  /** For finding a worker's session and worktree. Without it, only what `sync` is handed is recorded. */
-  orca?: (args: string[]) => Promise<OrcaResult>;
-  /** The folders a transcript may be read from. The default is Claude's and Codex's. */
-  transcriptDirs?: string[];
   /** GitHub web URL of a checkout, to turn "PR #12" into a link (work.ts githubRepo). */
   repoOf: (dir: string) => Promise<string | undefined>;
-  prOpen?: (url: string) => Promise<boolean | undefined>;
+  prOpen?: (url: string) => Promise<PrState>;
+  /**
+   * The checkout whose work ships by merging the worker's branch, with no PR (Jarvis's own). A finished request from it
+   * with no PR waits for merge while its branch has commits master lacks.
+   */
+  mergeRepo?: string;
+  branchMerged?: (dir: string) => Promise<boolean | undefined>;
   onChange: (list: RequestView[]) => void;
   now?: () => number;
+  /** Reads a report in data/reports (reports.ts reportSummary); undefined when it cannot be opened. Without it no row has a doc. */
+  reportOf?: (path: string) => { path: string; title: string } | undefined;
 }) {
   const { store, log } = opts;
   const now = opts.now ?? Date.now;
   const prOpen = opts.prOpen ?? ghPrOpen;
+  const branchMerged = opts.branchMerged ?? gitBranchMerged;
   const prChecks = new Map<number, { at: number; open?: boolean }>();
-  // Polls in a row an open request's worker was missing. Only a poll where every Run answered counts.
+  const branchChecks = new Map<number, { at: number; merged?: boolean }>();
+  /** The GitHub link of "PR #12" in the repo of `dir`, or undefined when the repo is not known. */
+  const linkOf = (pr: string, dir: string | undefined) => dir ? opts.repoOf(dir).then(repo => repo && `${repo}/pull/${pr.slice(4)}`).catch(() => undefined) : Promise.resolve(undefined);
+  // Syncs in a row an open request's worker was missing from the work list.
   const absent = new Map<number, number>();
-  // Requests already searched for a session since the start, so a closed one is not searched at every poll.
-  const searched = new Set<number>();
-  const findSession = (dispatch: string, cwd?: string) => opts.orca && !dispatch.startsWith(ROW_PREFIX) ? findWorkerSession(opts.orca, dispatch, { cwd, dirs: opts.transcriptDirs }) : Promise.resolve(undefined);
   let rows: WorkRow[] = [];
   let last = '';
   let syncing: Promise<void> | undefined;
@@ -223,11 +291,15 @@ export function makeRequests(opts: {
     return store.requests().map(r => {
       // A native request's dispatch is its work-list row, listed from the moment the worker starts, before the next poll.
       const fresh = r.dispatch_id.startsWith(ROW_PREFIX) && (r.status === 'working' || r.status === 'waiting') ? { id: r.dispatch_id } : undefined;
-      const row = conversation(r, rows) ?? fresh;
+      const listed = conversation(r, rows);
+      const row = listed ?? fresh;
+      const followUp = listed?.native?.followUp;
       const hasReport = reported.has(r.dispatch_id) || !!nativeReport(store, r.dispatch_id)?.body.trim();
+      const doc = opts.reportOf ? requestDoc(store, r.dispatch_id, opts.reportOf) : undefined;
       return {
         id: r.id, title: shownTitle(r.title), words: r.words, status: r.status as RequestStatus, at: `${r.status_at.replace(' ', 'T')}Z`, startedAt: `${r.created_at.replace(' ', 'T')}Z`,
-        ...(r.pr ? { pr: r.pr } : {}), ...(r.pr_url ? { url: r.pr_url } : {}), ...(row ? { row: row.id } : {}), ...(hasReport ? { report: true } : {}),
+        ...(r.pr ? { pr: r.pr } : {}), ...(r.pr_url ? { url: r.pr_url } : {}), ...(row ? { row: row.id } : {}), ...(hasReport ? { report: true } : {}), ...(doc ? { doc } : {}),
+        ...(followUp ? { followUp: followUp.text } : {}),
       };
     });
   }
@@ -238,22 +310,25 @@ export function makeRequests(opts: {
     if (key !== last) { last = key; opts.onChange(next); }
   }
 
-  async function sync(work: Work, workers: WorkerInfo[], complete: boolean) {
+  async function sync(work: Work) {
     rows = work.rows;
-    const byDispatch = new Map(workers.map(w => [w.dispatch, w]));
     for (const r of store.requests()) {
-      const w = byDispatch.get(r.dispatch_id);
+      // A native worker's folder and session are on its own row (native.ts).
+      const nw = r.dispatch_id.startsWith(ROW_PREFIX) ? store.nativeWorker(r.dispatch_id.slice(ROW_PREFIX.length)) : undefined;
       const f: Parameters<Store['updateRequest']>[1] = {};
-      const path = w?.path;
+      const path = nw?.cwd;
       // A question runs read-only in the repo's main checkout. Other sessions there are not its conversation, and a
-      // PR it names in its answer is not its own, so it takes no worktree and no PR.
+      // PR it names in its answer is not its own, so it takes no worktree and no PR. Nor does a native worker in the main checkout.
       const question = r.action === 'question';
-      if (path && !question && basename(path) !== r.worktree) f.worktree = basename(path);
-      if (w?.session && w.session !== r.session) f.session = w.session;
+      const repoDir = requestRepo(store, r, nw);
+      const worktree = nw ? nativeWorktree(store, nw) : undefined;
+      if (worktree && !question && worktree !== r.worktree) f.worktree = worktree;
+      const session = nw?.session_id;
+      if (session && session !== r.session) f.session = session;
       const cur = { ...r, ...f };
       const row = conversation(cur, rows);
 
-      // The PR: the link the worker wrote in worker_done, else the PR Orca linked to its workspace.
+      // The PR: the link the worker wrote in its report, else the PR its row names.
       const doneMsg = store.db.prepare(`SELECT subject, body, meta, created_at FROM items WHERE kind = 'worker_done' AND dispatch_id = ? ORDER BY id DESC LIMIT 1`)
         .get(r.dispatch_id) as { subject: string; body: string; meta: string | null; created_at: string } | undefined
         ?? nativeReport(store, r.dispatch_id);
@@ -261,90 +336,95 @@ export function makeRequests(opts: {
         const found = doneMsg ? findPr(`${doneMsg.subject}\n${doneMsg.body}`) : {};
         const pr = found.pr ?? row?.pr ?? (row?.label?.startsWith('PR #') ? row.label : undefined);
         if (pr) {
-          f.pr = pr;
-          f.pr_url = found.url ?? (path ? await opts.repoOf(path).then(repo => repo && `${repo}/pull/${pr.slice(4)}`).catch(() => undefined) : undefined);
+          const url = found.url ?? await linkOf(pr, path ?? repoDir);
+          // A bare number in a report can be any PR it talks about ("a PR #12 in a DONE report got no link"). It counts
+          // only when its repo has that PR. When gh does not answer, it is kept and the PR check below tests it again.
+          const state = url && !found.url ? await prOpen(url).catch(() => undefined) : undefined;
+          if (state === 'missing') log('request PR number skipped, no such PR', { request: r.id, dispatch: r.dispatch_id, pr, url });
+          else {
+            f.pr = pr;
+            f.pr_url = url;
+            if (typeof state === 'boolean') prChecks.set(r.id, { at: now(), open: state });
+          }
         }
+      } else if (r.pr && !r.pr_url && !question) {
+        // A PR found while the worker's folder was unknown: its link comes from the repo the request started in.
+        const url = await linkOf(r.pr, path ?? repoDir);
+        if (url) { f.pr_url = url; log('request PR linked', { request: r.id, dispatch: r.dispatch_id, url }); }
       }
 
       // A native worker sent more work after its DONE or FAILED is working again until its next report: that report
       // no longer settles the request. Its PR link still counts.
       // native.ts keeps one report column: a later turn that only asks something replaces the text but not the outcome.
-      const final = !r.dispatch_id.startsWith(ROW_PREFIX) || /^\s*(DONE|FAILED)\b/i.test(doneMsg?.body ?? '');
+      const final = !r.dispatch_id.startsWith(ROW_PREFIX) || readReport(doneMsg?.body ?? '').outcome !== null;
       const settled = doneMsg && final && !repliedAfter(store, r.dispatch_id, doneMsg.created_at) ? doneMsg : undefined;
       // A native worker's row stays listed for a day after its DONE or FAILED line, so once it has reported it is not live.
       const isLive = rows.some(x => x.id === r.dispatch_id) && !(r.dispatch_id.startsWith(ROW_PREFIX) && settled);
-      // Orca settles a worker's outcome when it finishes, so in progress without a live row is a dropped row, the same as not listed.
-      const unsettled = !w || !w.outcome || w.outcome === 'in_progress';
       const open = r.status === 'working' || r.status === 'waiting';
-      if (!open || isLive || !unsettled) absent.delete(r.id);
-      else if (complete) absent.set(r.id, (absent.get(r.id) ?? 0) + 1);
+      if (!open || isLive) absent.delete(r.id);
+      else absent.set(r.id, (absent.get(r.id) ?? 0) + 1);
       const over = (absent.get(r.id) ?? 0) >= ABSENT_POLLS;
-      const reported = json(settled?.meta ?? null)?.outcome;
-      const outcome = unsettled ? reported ?? w?.outcome : w.outcome;
+      const outcome = json(settled?.meta ?? null)?.outcome;
 
-      // Orca settles a stopped worker as failed, but the owner ending it is not a failure. A failure from before the stop still is.
+      // The owner ending a worker is not a failure. A failure from before the stop still is.
       // The ask card's Stop is only a message, so that worker counts as stopped once it has ended.
       const stopAt = stoppedAt(store, r.dispatch_id);
-      const failedFirst = !!stopAt && ((r.status === 'failed' && r.status_at < stopAt) || (failing(reported) && settled!.created_at < stopAt));
-      const ended = !unsettled || over || !!settled || row?.state === 'exited' || r.status === 'failed';
+      const failedFirst = !!stopAt && ((r.status === 'failed' && r.status_at < stopAt) || (failing(outcome) && settled!.created_at < stopAt));
+      const ended = over || !!settled || row?.state === 'exited' || r.status === 'failed';
       const stopped = !!stopAt && !failedFirst && ended;
 
-      const pr = f.pr ?? r.pr, url = f.pr_url ?? r.pr_url;
+      let pr = f.pr ?? r.pr;
+      const url = f.pr_url ?? r.pr_url;
+      const finished = !!settled || over || stopped;
       let check = prChecks.get(r.id);
-      if (url && r.status !== 'done' && (!check || now() - check.at >= PR_CHECK_MS) && (w?.outcome === 'succeeded' || settled || over || stopped)) {
-        check = { at: now(), open: await prOpen(url).catch(() => undefined) ?? check?.open };
-        prChecks.set(r.id, check);
+      if (pr && url && r.status !== 'done' && (!check || now() - check.at >= PR_CHECK_MS) && finished) {
+        const state = await prOpen(url).catch(() => undefined);
+        if (state === 'missing') {
+          // Not a real PR (a number read from a report): the request has none.
+          f.pr = null; f.pr_url = null; pr = null; prChecks.delete(r.id); check = undefined;
+          log('request PR cleared, no such PR', { request: r.id, dispatch: r.dispatch_id, pr: r.pr, url });
+        } else {
+          check = { at: now(), open: state ?? check?.open };
+          prChecks.set(r.id, check);
+        }
+      }
+      // Jarvis's own work has no PR: it waits for merge until master holds every commit of the worker's branch.
+      let merged = branchChecks.get(r.id);
+      const tree = cur.worktree && path && basename(path) === cur.worktree ? path : undefined;
+      if (!pr && tree && opts.mergeRepo && repoDir && trimDir(repoDir) === trimDir(opts.mergeRepo) && r.status !== 'done' && finished
+        && (!merged || now() - merged.at >= PR_CHECK_MS)) {
+        merged = { at: now(), merged: await branchMerged(tree).catch(() => undefined) ?? merged?.merged };
+        branchChecks.set(r.id, merged);
       }
       // Done after a merge stays done: the PR check is in memory, and a restart must not reopen it as "in review".
-      const status = statusOf(row, stopped ? undefined : outcome, isLive && !stopped, pr, r.status === 'done' ? false : check?.open, !!settled || over || stopped);
+      const status = statusOf(row, stopped ? undefined : outcome, isLive && !stopped, pr, r.status === 'done' ? false : check?.open, !!settled || over || stopped,
+        r.status !== 'done' && merged?.merged === false);
       if (status && status !== r.status) { f.status = status; log('request status', { request: r.id, dispatch: r.dispatch_id, from: r.status, to: status }); }
 
-      // A done request leaves 24 hours after it became done, by its status_at. Never while Orca is not answering.
-      if (r.status === 'done' && !f.status && !work.error && now() - Date.parse(`${r.status_at.replace(' ', 'T')}Z`) >= DONE_KEEP_MS) {
+      // A done request leaves 24 hours after it became done, by its status_at.
+      if (r.status === 'done' && !f.status && now() - Date.parse(`${r.status_at.replace(' ', 'T')}Z`) >= DONE_KEEP_MS) {
         f.removed = true;
         log('request removed a day after done', { request: r.id, dispatch: r.dispatch_id });
-      }
-      // Orca names only a chat-tab worker's session, so any other is looked up, as soon as there is a folder and at each status change.
-      if (!cur.session && path && (open || f.status || !searched.has(r.id))) {
-        searched.add(r.id);
-        const s = await findSession(r.dispatch_id, path);
-        if (s) { f.session = s.session; log('request session found', { request: r.id, dispatch: r.dispatch_id, session: s.session }); }
       }
       store.updateRequest(r.id, f);
     }
     publish();
   }
 
-  /** Asks Orca about one request's worker and fills what is empty. It never overwrites, and works on a stopped worker. */
+  /** Fills what is empty on one request from its native worker's row. It never overwrites, and works on a stopped worker. */
   async function fill(r: Request): Promise<void> {
-    if (r.dispatch_id.startsWith(ROW_PREFIX)) {
-      // A native worker is not Orca's: what it knows is on its own row.
-      const w = store.nativeWorker(r.dispatch_id.slice(ROW_PREFIX.length));
-      const f: Parameters<Store['updateRequest']>[1] = {};
-      if (!r.session && w?.session_id) f.session = w.session_id;
-      if (!r.worktree && w && r.action !== 'question') f.worktree = basename(w.cwd);
-      if (f.worktree || f.session) { store.updateRequest(r.id, f); log('request filled', { request: r.id, dispatch: r.dispatch_id, ...f }); }
-      return;
-    }
-    if (!opts.orca ||(r.session && (r.worktree || r.action === 'question'))) return;
-    const show = await opts.orca(['orchestration', 'worker-show', '--dispatch', r.dispatch_id, '--full']).catch(() => undefined);
-    const res = show?.ok ? show.result : undefined;
-    const path: string | undefined = (res?.worker?.worktreeId ?? res?.terminalResource?.worktreeId)?.split('::')[1];
-    const inc: string | undefined = res?.terminalResource?.endpointIncarnation;
+    if (!r.dispatch_id.startsWith(ROW_PREFIX)) return;
+    const w = store.nativeWorker(r.dispatch_id.slice(ROW_PREFIX.length));
     const f: Parameters<Store['updateRequest']>[1] = {};
-    if (!r.worktree && path && r.action !== 'question') f.worktree = basename(path);
-    if (!r.session) {
-      const session = inc?.startsWith('structured:') ? inc.slice(11) : (await findSession(r.dispatch_id, path))?.session;
-      if (session) f.session = session;
-    }
+    if (!r.session && w?.session_id) f.session = w.session_id;
+    if (!r.worktree && w && r.action !== 'question') f.worktree = basename(w.cwd);
     if (f.worktree || f.session) { store.updateRequest(r.id, f); log('request filled', { request: r.id, dispatch: r.dispatch_id, ...f }); }
   }
-
   const api = {
     list,
-    /** After every work poll. Overlapping polls share one sync. */
-    sync(work: Work, workers: WorkerInfo[], complete = true): Promise<void> {
-      syncing ??= sync(work, workers, complete).catch(e => log(`requests: sync failed: ${e}`)).finally(() => { syncing = undefined; });
+    /** After every native poll and every final report. Overlapping calls share one sync. */
+    sync(work: Work): Promise<void> {
+      syncing ??= sync(work).catch(e => log(`requests: sync failed: ${e}`)).finally(() => { syncing = undefined; });
       return syncing;
     },
     /** Resolves when the sync running now, if any, has finished. */
@@ -357,34 +437,14 @@ export function makeRequests(opts: {
       if (ok) { log('request hidden', { request: id }); publish(); }
       return ok;
     },
-    /** A worker the gate just started for the owner. Its worktree is known at once; its session may need a later poll. */
+    /** A worker the gate just started for the owner. */
     started(a: Approval) {
       if (recordRequest(store, a)) { log('request recorded', { approval: a.id, action: a.action }); publish(); }
-      const dispatch = json(a.result)?.dispatchId;
-      if (REQUEST_ACTIONS.has(a.action) && typeof dispatch === 'string') return api.capture(dispatch);
-      return Promise.resolve();
     },
-    /** Records what Orca knows about this dispatch's worker now. The gate calls it when a stop goes through. */
+    /** Records what this dispatch's worker row knows now. The gate calls it when a stop goes through. */
     async capture(dispatch: string): Promise<void> {
       const r = store.db.prepare('SELECT * FROM requests WHERE dispatch_id = ?').get(dispatch) as Request | undefined;
       if (r) await fill(r).catch(e => log(`requests: capture failed: ${e}`));
-    },
-    /** One time only: fills session and worktree on every earlier request where Orca still knows them. `state` says it ran. */
-    async backfill(): Promise<number> {
-      if (!opts.orca || store.getState(BACKFILL_KEY)) return 0;
-      // Orca down at this start proves nothing, so the next start tries again.
-      const up = await opts.orca(['orchestration', 'run-list', '--limit', '1']).catch(() => undefined);
-      if (!up?.ok) { log('requests: backfill waits, Orca did not answer'); return 0; }
-      let n = 0;
-      for (const r of store.allRequests()) {
-        const was = `${r.session ?? ''}|${r.worktree ?? ''}`;
-        await fill(r).catch(e => log(`requests: backfill failed: ${e}`));
-        const after = store.request(r.id)!;
-        if (`${after.session ?? ''}|${after.worktree ?? ''}` !== was) n++;
-      }
-      store.setState(BACKFILL_KEY, new Date(now()).toISOString());
-      log('requests: backfill done', { filled: n });
-      return n;
     },
     /** A request with no listed conversation, read-only: the record on the first read, and the transcript if it can be found. */
     async read(id: number, cursor: string | undefined, files: Map<string, string>, readLog: () => string = () => ''): Promise<(Read & { detail?: RequestDetail }) | undefined> {
@@ -394,9 +454,6 @@ export function makeRequests(opts: {
       let file = r.session ? files.get(r.session) : undefined;
       if (!file && r.session && r.dispatch_id.startsWith(ROW_PREFIX)) {
         file = store.nativeWorker(r.dispatch_id.slice(ROW_PREFIX.length))?.transcript ?? undefined;
-        if (file) files.set(r.session, file);
-      } else if (!file && r.session && opts.orca) {
-        file = (await findWorkerSession(opts.orca, r.dispatch_id, { known: r.session, dirs: opts.transcriptDirs }))?.file;
         if (file) files.set(r.session, file);
       }
       const detail = cursor ? undefined : requestDetail(store, id, readLog());
@@ -415,3 +472,21 @@ export function makeRequests(opts: {
 }
 
 export type Requests = ReturnType<typeof makeRequests>;
+
+/**
+ * The Requests sidebar's routes. Hiding a row changes only the requests table: no worktree, session or branch is touched.
+ * The report behind a row's Report link is read-only.
+ */
+export async function requestsRoute(o: { requests: Pick<Requests, 'list' | 'hide'>; store: Store }, method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+  if (method === 'GET' && url === '/api/requests') return { status: 200, body: o.requests.list() };
+  if (method === 'POST' && url === '/api/requests/hide') {
+    const { id } = await body();
+    return o.requests.hide(Number(id)) ? { status: 204 } : { status: 404, body: { error: 'It is not in the list any more.' } };
+  }
+  const reportOf = method === 'GET' && url.match(/^\/api\/requests\/(\d+)\/report$/);
+  if (reportOf) {
+    const r = requestReport(o.store, Number(reportOf[1]));
+    return r ? { status: 200, body: r } : { status: 404, body: { error: 'No report is stored for this request.' } };
+  }
+  return undefined;
+}

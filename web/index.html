@@ -17,7 +17,6 @@
 <aside id="work" aria-label="Work">
   <div class="w-head"><b>Work</b><span class="c-sub" id="workcount"></span></div>
   <button type="button" id="tojarvis" class="here"><b>Jarvis</b><span class="conn" id="status" title="connecting…"><span class="sr">connecting…</span></span><small>Main conversation</small></button>
-  <div id="workerr" hidden></div>
   <div class="list"><div id="worklist"></div></div>
   <div class="done-line" id="doneinfo"></div>
 </aside>
@@ -25,30 +24,30 @@
   <header class="c-head">
     <div class="h-left">
       <button type="button" class="ib" id="railbtn" aria-label="Work list" title="Work list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M15 5v14"/></svg></button>
-    <div class="h-chat"><h1>Jarvis</h1><span class="c-sub">Main conversation</span><span class="conn" title="connecting…"></span></div>
+    <div class="h-chat"><h1 class="sr">Jarvis</h1><span class="conn" title="connecting…"></span></div>
     <div class="h-pane"><button type="button" id="pane-back" aria-label="Back to Jarvis"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span id="pane-back-label">Jarvis</span></button><div class="h"><div id="pane-title"></div><div id="pane-sub"></div></div></div>
     </div>
     <!-- Option H of the top area: one icon and one count for each need. The desktop keeps the label; the phone shows the icons with round badges. -->
     <div id="needbar">
-      <button type="button" class="need-btn need-req" id="req-btn" aria-expanded="false" aria-controls="pop-requests" aria-label="Requests, nothing open" title="Requests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.6a2.4 2.4 0 0 1 4.7.7c0 1.6-2.4 2.1-2.4 3.6M12 16.8h.01"/></svg><span class="nl">Requests</span><em hidden></em></button>
-      <button type="button" class="need-btn need-msg" id="msg-btn" aria-expanded="false" aria-controls="pop-messages" aria-label="Messages, nothing open" title="Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17h-8.5L6 20.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"/></svg><span class="nl">Messages</span><em hidden></em></button>
+      <button type="button" class="need-btn need-req" id="req-btn" hidden aria-expanded="false" aria-controls="pop-requests" aria-label="Requests, nothing open" title="Requests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.6a2.4 2.4 0 0 1 4.7.7c0 1.6-2.4 2.1-2.4 3.6M12 16.8h.01"/></svg><span class="nl">Requests</span><em hidden></em></button>
+      <button type="button" class="need-btn need-msg" id="msg-btn" hidden aria-expanded="false" aria-controls="pop-messages" aria-label="Messages, nothing open" title="Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17h-8.5L6 20.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"/></svg><span class="nl">Messages</span><em hidden></em></button>
       <button type="button" class="need-btn need-today" id="today-btn" aria-expanded="false" aria-controls="pop-today" aria-label="Today, nothing needs you" title="Today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 7h10M9.5 12h10M9.5 17h10M4.5 7h.01M4.5 12h.01M4.5 17h.01"/></svg><span class="nl">Today</span><em hidden></em></button>
       <button type="button" class="need-btn need-mig" id="mig-btn" aria-expanded="false" aria-controls="pop-migration" aria-label="Leads, nobody to contact" title="Leads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M15 11h6M18 8l3 3-3 3"/></svg><span class="nl">Leads</span><em hidden></em></button>
     </div>
     <div class="tools">
-      <button type="button" class="ib" id="pane-open" hidden aria-label="Open in Orca" title="Open in Orca"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M18 14v5H5V6h5"/></svg></button>
+      <button type="button" class="ib" id="pane-open" hidden aria-label="Open in Terminal" title="Open in Terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M18 14v5H5V6h5"/></svg></button>
       <button type="button" class="ib" id="pane-desktop" hidden aria-label="Open in the Claude desktop app" title="Open in the Claude desktop app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+      <button type="button" class="ib" id="pane-phone" hidden aria-label="Continue on phone" title="Continue on phone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/></svg></button>
       <button type="button" class="term-act" id="term-copy" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg><span id="term-copy-label">Copy attach command</span></button>
       <button type="button" class="term-act bad" id="term-end" hidden>End</button>
       <button type="button" class="stop" id="pane-stop" hidden><span class="g g-stopped" aria-hidden="true"></span><span id="pane-stop-label">Stop</span></button>
       <button type="button" class="ib" id="newchat" aria-label="New session" title="New session" aria-haspopup="dialog" aria-expanded="false" aria-controls="newpick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
       <div id="more"><button type="button" class="ib" id="morebtn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="menu" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg></button>
-        <div id="menu" hidden><button id="menu-new" type="button">New session</button><button id="alerts" type="button" aria-pressed="false" hidden>Alerts<span></span></button><button id="sound" type="button" aria-pressed="false">Sound<span></span></button><button id="reportsbtn" type="button">Reports</button><button id="auditbtn" type="button">Audit log</button><button id="shellbtn" type="button">Shell</button><button id="pairbtn" type="button" hidden>Pair the Mac</button></div></div>
+        <div id="menu" hidden><button id="menu-new" type="button">New session</button><button id="alerts" type="button" aria-pressed="false" hidden>Alerts<span></span></button><button id="sound" type="button" aria-pressed="false">Sound<span></span></button><button id="reportsbtn" type="button">Reports</button><button id="tasksbtn" type="button">Scheduled tasks</button><button id="auditbtn" type="button">Audit log</button><button id="pairbtn" type="button" hidden>Pair the Mac</button></div></div>
     </div>
   </header>
   <!-- The meeting toast (Leads, temporary): the Eastern day of the meeting only. The x closes it for that meeting, on every screen. -->
   <div class="mtoast-row"><div class="mtoast" id="mtoast" role="status" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></svg><b class="mt-who"></b><span class="mt-at"></span><button type="button" class="mt-x" id="mtoast-x" aria-label="Close the meeting reminder" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div></div>
-  <div id="doneline" hidden><span class="txt"></span><button type="button" aria-label="Dismiss">×</button></div>
   <section id="pop-requests" class="pop" role="dialog" aria-label="Requests" tabindex="-1" hidden>
     <div class="pop-head"><b>Requests</b><span class="c-sub" id="req-pos"></span><button type="button" class="ib pop-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     <div class="pop-body" id="req-body">
@@ -84,44 +83,26 @@
     <div id="today-queue" aria-label="Story queue" hidden></div>
     <div class="pop-body" id="today-list"></div>
   </section>
-  <div id="chat">
-    <div id="log"><div id="items"></div></div>
-    <form id="f" class="dock"><div class="dock-in">
-      <div id="chat-working" class="working-line" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Working…</div>
+  <!-- The brain chat and a worker's pane are one chat (web/chatview.js chatHtml). These hold what each adds to the dock. -->
+  <div id="chat"></div>
+  <template id="chat-above">
       <!-- The message the owner answers, from the reply button or a swipe to the left. Sending clears it, X cancels it. -->
       <div id="reply-strip" hidden>
         <button type="button" id="reply-go" class="rs-body" aria-label="Go to the message you are answering"><span class="rs-text"><b id="reply-who"></b><span id="reply-line"></span></span></button>
         <button type="button" id="reply-cancel" aria-label="Cancel the reply" title="Cancel the reply"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>
       </div>
-      <div id="pending"></div>
-      <!-- One pill (option A, morphing). Typing: attach, text, mic (dictate), wave (hands-free) or send.
-           Hands-free: the same pill turns teal and shows what the voice loop is doing, End, and a keyboard button. -->
-      <div class="composer">
-        <div class="field" id="bar" data-mode="type">
-          <button id="add" type="button" class="ib" aria-label="Attach a picture" title="Attach a picture"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.2a1.7 1.7 0 0 1-2.4-2.4L15 7"/></svg></button>
-          <input id="file" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-          <textarea id="t" rows="1" placeholder="Message Jarvis" aria-label="Message"></textarea>
-          <button id="mic" type="button" class="ib" aria-label="Dictate: hold to talk, or tap to start and tap again to send" title="Dictate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
-          <button id="wave" type="button" aria-label="Start hands-free" title="Hands-free"><svg class="wave" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg><svg class="send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
-          <button id="keys" type="button" class="ib" aria-label="Type instead" title="Type instead"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg></button>
-          <button id="voice-state" type="button" aria-live="polite"><span class="vdot" aria-hidden="true"></span><span id="voice-label">Listening</span></button>
-          <button id="hands-end" type="button">End</button>
-        </div>
-      </div>
+  </template>
+  <template id="chat-below">
       <!-- The brain's model and effort as quiet text under the pill, at the left edge, so a tap meant for the text box never lands on it. -->
       <div class="dock-tools"><button id="model-pill" type="button" class="model-pill" aria-haspopup="dialog" aria-label="Model and effort" disabled>…</button></div>
-    </div></form>
-  </div>
-  <section id="pane" hidden aria-label="Transcript">
-    <div id="pane-log"><div id="pane-lines"></div></div>
-    <form id="steer" class="dock"><div class="dock-in">
-      <div id="pane-working" class="working-line" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Working…</div>
+  </template>
+  <section id="pane" hidden aria-label="Transcript"></section>
+  <template id="pane-above">
       <div id="wait-box" hidden><span>This session is waiting on you</span><button type="button" id="wait-open">Open the question</button></div>
+      <div id="phone-box" hidden><span id="phone-what"></span><button type="button" id="phone-stop">Stop it and continue</button></div>
       <div id="steer-cards"></div>
       <div id="steer-hint"></div>
-      <div class="composer" id="steer-row"><div class="field"><textarea id="steer-text" rows="1" aria-label="Message to this session"></textarea><button type="submit" class="go" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></div></div>
-    </div></form>
-  </section>
+  </template>
   <section id="report" hidden aria-label="Report"></section>
   <section id="term" hidden aria-label="Terminal">
     <div id="term-host" tabindex="0" aria-label="Terminal screen. Keys go straight to the shell."></div>
@@ -148,13 +129,12 @@
     <button type="submit" class="np-go" id="np-go"><span id="np-go-label">Start</span><kbd id="np-keys" aria-hidden="true">⌘↵</kbd></button>
   </div>
 </form>
-<section id="shell" hidden role="dialog" aria-label="Shell">
-  <div class="w-head"><b>Shell</b><div class="tools"><button type="button" class="shell-act" id="shell-hide">Hide</button><button type="button" class="shell-act bad" id="shell-close">Close</button></div></div>
-  <p id="shell-note">Ends on Close, after 3 minutes with this page closed, or when jarvisd restarts. Commands go to the log, output does not. Line output only: vim and top do not draw here.</p>
-  <pre id="shell-out" tabindex="0" aria-live="off"></pre>
-  <p id="shell-ended" hidden></p>
-  <form id="shell-form"><textarea id="shell-text" rows="3" aria-label="Command" placeholder="Paste a command" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"></textarea>
-    <div class="shell-row"><button type="button" class="shell-act" id="shell-ctrlc">Ctrl-C</button><button type="submit" class="shell-act run" id="shell-run">Run</button></div></form>
+<section id="tasks" hidden role="dialog" aria-label="Scheduled tasks">
+  <div class="tk-wrap">
+    <div class="tk-top"><h1>Scheduled tasks</h1><span id="tasks-count" class="tk-count"></span><button type="button" class="ib" id="tasks-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div id="tasks-body"></div>
+    <p class="tk-foot">One mark per hour for frequent tasks, one per run for daily and weekly tasks. Newest on the right.<span id="tasks-read"></span></p>
+  </div>
 </section>
 <section id="audit" hidden role="dialog" aria-label="Audit log">
   <div class="w-head"><b>Audit log</b><div class="tools"><button type="button" class="ib" id="audit-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div></div>
@@ -166,30 +146,66 @@
   <p id="model-err" role="alert" hidden></p>
   <div id="model-body"></div>
 </section>
-<div id="viewer" role="dialog" aria-label="Image"><img alt=""><button type="button">Close</button></div>
+<div id="viewer" role="dialog" aria-label="Picture" aria-modal="true">
+  <div class="v-stage"><img alt=""><canvas aria-label="Draw on the picture"></canvas></div>
+  <button type="button" class="v-close">Close</button>
+  <!-- Only for a picture in the box, before it is sent: a pen to circle or point at something. -->
+  <div class="ink-bar" role="toolbar" aria-label="Pen" hidden>
+    <span class="ink-colors"></span>
+    <button type="button" class="ink-undo" aria-label="Undo the last mark" title="Undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg><span>Undo</span></button>
+    <button type="button" class="ink-clear" aria-label="Clear all marks" title="Clear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg><span>Clear</span></button>
+    <button type="button" class="ink-done">Done</button>
+  </div>
+</div>
+<!-- jarvisd serves new web code, but the owner is busy: the page reloads once he is idle, or now on a tap (web/reload.js). -->
+<button type="button" id="reload-btn" class="reload-btn" title="Jarvis has new code. Reload to use it." hidden>Reload</button>
 <script src="/markdown.js"></script>
 <script src="/askcard.js"></script>
 <script src="/paste.js"></script>
 <script type="module">
 import { DEFAULTS, makeSegmenter, levelDb, encodeWav } from '/listen.js';
 import { STATE as REQ_STATE, ago, requestMark, openIdOf } from '/requestlist.js';
-import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, messageFootHtml, toolRunHtml, toolRunSummary, briefFoldHtml, paneTag, COPY_ICON, COPIED_ICON, SPEAK, REPLY_ICON, quoteHtml, quoteSnippet, quoteWho } from '/workfold.js';
+import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, toolRunHtml, toolRunSummary, paneTag, SPEAK, REPLY_ICON, quoteSnippet, quoteWho } from '/workfold.js';
+import { messageRow, rowText } from '/messagerow.js';
 import { makeSpeech } from '/speech.js';
 import { enterSends } from '/enterkey.js';
-import { makeScreen, feed as feedScreen, screenText } from '/shell.js';
 import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
 import { todayButton, makeTodayPop, queueHtml } from '/today.js';
 import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
 import { boxAfterSend } from '/dictate.js';
+import { sendOut, imageParams, withoutReadLine } from '/compose.js';
+import { IMAGE_MAX } from '/composer.js';
+import { chatHtml, chatParts, chatLine, makeList, makeChat } from '/chatview.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
 import { reportHtml, docHtml, docListHtml, docRoute, docHref } from '/report.js';
+import { listHtml as tasksHtml, when as taskWhen, countText as taskCount } from '/tasks.js';
 import { makeModelPicker } from '/modelpicker.js';
+import { INK, makeInk, toImagePoint, paint, exportMarked } from '/draw.js';
 import { openTerminal, keyboardInset } from '/terminal.js';
 import { KINDS, orderRepos, projectLabel, setProduct, restore, view as pickView, startBody, termStart, startedRow, segHtml, stepRadio } from '/newpick.js';
-import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml } from '/worklist.js';
+import { setOwner, mergeWork, workListHtml, doneLine, groupOpen, approvalTag, approvalBodyHtml, approvalPairHtml, approvalOutcomeText, requestDetailHtml, chatDecisionHtml, startedNoticeHtml, undoDeadline } from '/worklist.js';
+import { makeBackNav, makeDrafts } from '/backnav.js';
+import { makeReloader, makeTyped, busyReason } from '/reload.js';
+// The mouse's back button and the browser's Back leave a worker's pane, a terminal or a report, as the pane's Back does.
+const backNav = makeBackNav({
+  win: window,
+  current: () => term || pane.id ? 'worker' : report.id ? 'report' : null,
+  leave: () => $('pane-back').click(),
+});
+const steerDrafts = makeDrafts();
 // The owner's name and the product label for the detail pane and the picker, once at load (GET /api/work).
 fetch('/api/work').then(r => r.json()).then(w => { setOwner(w.owner); setProduct(w.product); }).catch(() => {});
 const $ = id => document.getElementById(id);
+// The two chats, drawn by the same module. The brain chat keeps the ids its hands-free code and its reply strip use.
+$('chat').innerHTML = chatHtml({
+  ids: { form: 'f', log: 'log', items: 'items', working: 'chat-working', tray: 'pending', bar: 'bar', add: 'add', file: 'file', box: 't', mic: 'mic', go: 'wave' },
+  label: 'Message', placeholder: 'Message Jarvis', handsFree: true, above: $('chat-above').innerHTML, below: $('chat-below').innerHTML,
+});
+$('pane').innerHTML = chatHtml({
+  ids: { form: 'steer', log: 'pane-log', items: 'pane-lines', working: 'pane-working', composer: 'steer-row', tray: 'steer-pending', box: 'steer-text', mic: 'steer-mic', go: 'steer-go' },
+  label: 'Message to this session', above: $('pane-above').innerHTML,
+});
+const chatEls = chatParts($('chat')), paneEls = chatParts($('pane'));
 // Every POST carries this page's secret from the event stream. jarvisd refuses actions as the owner without it,
 // so a process on the Mac cannot press Approve or speak for him with a plain request.
 let uiSession = '';
@@ -204,8 +220,9 @@ const IMAGE_MARKER = /\[image:\s*([^\]\n]+?)\s*\]/g;
 function render(text) {
   return text.split(IMAGE_MARKER).map((part, i) => i % 2 ? shot(part) : links(part)).join('');
 }
-function shot(path) {
-  const src = '/image?path=' + encodeURIComponent(path), name = path.split('/').pop();
+// `alt` is the text of a report's `![alt](path)`: it names the picture in place of the file name.
+function shot(path, alt) {
+  const src = '/image?path=' + encodeURIComponent(path), name = alt || path.split('/').pop();
   return `<button type="button" class="shot" data-src="${esc(src)}"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" onerror="this.parentNode.classList.add('broken')"><span>${esc(name)}</span></button>`;
 }
 const viewer = $('viewer');
@@ -213,55 +230,36 @@ const viewer = $('viewer');
 document.addEventListener('click', e => {
   const b = e.target.closest('.shot');
   if (!b || b.classList.contains('broken')) return;
-  viewer.querySelector('img').src = b.dataset.src;
-  viewer.classList.add('open');
+  openViewer(b.dataset.src);
 });
-viewer.onclick = () => { viewer.classList.remove('open'); viewer.querySelector('img').removeAttribute('src'); };
 function links(text) {
   return esc(text).replace(/https?:\/\/[^\s)]+/g, u =>
     /\.(png|jpe?g|gif|webp)(\?|$)/i.test(u) ? `<a href="${u}" target="_blank"><img src="${u}" alt=""></a>` : `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 }
-const lineText = new WeakMap(); // what the copy button under each message copies: the text as written, markdown included
 // `quote` is the message the owner answered, on a message he sent as a reply. It sits on top of his words.
 function add(cls, text, at, speak, quote) {
   if (cls === 'event') return addEvent(text, at);
-  const d = document.createElement('div');
-  d.className = 'msg ' + cls;
   // Jarvis writes markdown; everything else (The owner, events) shows as typed.
-  if (cls === 'jarvis') { d.classList.add('md'); d.innerHTML = markdown(text, shot); titleCards(d); }
-  else d.innerHTML = (cls === 'owner' ? quoteHtml(quote) : '') + render(text);
-  const line = document.createElement('div');
-  line.className = 'line line-' + cls;
   const turn = (cls === 'owner' || cls === 'jarvis') && Number.isInteger(speak?.id) ? speak.id : 0;
+  // A message that asked for a proposal carries its Approve and Reject, under its last line and above the time row.
+  let between;
+  if (cls === 'jarvis' && turn) { between = document.createElement('div'); between.className = 'chat-decide'; between.innerHTML = chatDecisionHtml(approvals.values(), turn, tapped); }
+  // The owner's and Jarvis's messages are the chat's shared row (web/chatview.js chatLine), as in a worker's pane.
+  // His pictures go in one row of small squares above his words. A tap opens one big.
+  const line = cls === 'owner' || cls === 'jarvis'
+    ? chatLine({ role: cls === 'owner' ? 'owner' : 'agent', text, bodyHtml: cls === 'jarvis' ? markdown(text, shot) : '', quote, esc, render, at, speak: speak?.clips ? speak : null, turn, between })
+    : messageRow({ lineClass: `line line-${cls}`, bodyClass: `msg ${cls}`, bodyHtml: render(text), text, at });
+  if (cls === 'jarvis') titleCards(line.firstElementChild);
   if (turn) { line.dataset.turn = turn; line.dataset.at = at; }
-  line.append(d);
-  line.insertAdjacentHTML('beforeend', messageFootHtml(at, cls === 'jarvis' && speak?.clips ? speak : null, turn));
-  lineText.set(line, text);
   append(line, cls === 'owner');
 }
-async function copyMessage(b) {
-  let done = true;
-  try { await navigator.clipboard.writeText(lineText.get(b.closest('.line'))); } catch { done = false; }
-  b.innerHTML = done ? COPIED_ICON : COPY_ICON;
-  b.title = done ? 'Copied' : 'Could not copy';
-  b.setAttribute('aria-label', b.title);
-  clearTimeout(b.resetTimer);
-  b.resetTimer = setTimeout(() => { b.innerHTML = COPY_ICON; b.title = 'Copy'; b.setAttribute('aria-label', 'Copy message'); }, 1500);
-}
+// The chat's list (web/chatview.js makeList): it stays pinned to the newest message unless the owner scrolled up.
 // A new line rises into place. Lines drawn from the history do not.
+const noHover = matchMedia('(hover: none)');
 let drawingHistory = false;
-function append(el, force) {
-  if (!drawingHistory) el.classList.add('rise');
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
-  items.appendChild(el);
-  if (atBottom || force) toBottom();
-}
-// Stay pinned to the newest message while images and cards finish laying out, unless the owner scrolled up.
-// Our own scrolls are ignored, so a layout change landing in the same frame cannot unpin it.
-let pinned = true, autoTop = -1;
-function toBottom() { pinned = true; log.scrollTop = log.scrollHeight; autoTop = log.scrollTop; }
-log.addEventListener('scroll', () => { if (log.scrollTop !== autoTop) pinned = log.scrollHeight - log.scrollTop - log.clientHeight < 120; });
-new ResizeObserver(() => { if (pinned) toBottom(); }).observe(items);
+const chatList = makeList({ log, items, noHover, onClick: chatClick, onSpeak: (key, clips) => speech.toggle(speakKey(key), clips) });
+function append(el, force) { chatList.append(el, { force, rise: !drawingHistory }); }
+const toBottom = () => chatList.toBottom();
 
 // ---- what Jarvis did in a turn: one "Worked for" row above the reply, its steps read from the daemon when it first opens ----
 function addFold(f) {
@@ -273,7 +271,7 @@ function addFold(f) {
 async function toggleFold(b) {
   const open = b.getAttribute('aria-expanded') !== 'true', body = b.nextElementSibling;
   // What opens grows downward from where the owner is reading, so the view must not jump to the newest line.
-  pinned = false;
+  chatList.unpin();
   b.setAttribute('aria-expanded', String(open));
   body.hidden = !open;
   if (!open || !b.dataset.fold || body.dataset.loaded) return;
@@ -320,31 +318,21 @@ function handedRow(r) {
   handed.set(r.id, b);
   append(b);
 }
-items.addEventListener('click', e => {
+// What a click in the chat does beyond the shared list's copy, read aloud and tap (makeList). True when it handled it.
+function chatClick(e) {
   const fold = e.target.closest('.fold-toggle');
-  if (fold) return toggleFold(fold);
-  const copy = e.target.closest('.msg-copy');
-  if (copy) return copyMessage(copy);
+  if (fold) return toggleFold(fold), true;
   const reply = e.target.closest('.msg-reply');
-  if (reply) return startReply(reply.closest('.line'));
+  if (reply) return startReply(reply.closest('.line')), true;
   const quote = e.target.closest('.quote');
-  if (quote) return goToQuote(quote);
-  const speaker = e.target.closest('.msg-speak');
-  if (speaker) return speech.toggle(Number(speaker.dataset.turn), Number(speaker.dataset.clips));
+  if (quote) return goToQuote(quote), true;
+  const choice = e.target.closest('.chat-yes, .chat-no');
+  if (choice) return decide(Number(choice.closest('[data-approval]').dataset.approval), choice.classList.contains('chat-yes')), true;
   const b = e.target.closest('.hand');
-  if (!b) return tapLine(e);
-  if (b.disabled) return;
-  const r = requests.find(x => handed.get(x.id) === b);
+  if (!b) return false;
+  const r = !b.disabled && requests.find(x => handed.get(x.id) === b);
   if (r) openPane(openIdOf(r));
-});
-// A touch screen has no hover: a tap on a message shows its row, and a tap anywhere else in the chat hides it.
-const noHover = matchMedia('(hover: none)');
-function tapLine(e) {
-  if (!noHover.matches || e.target.closest('a, button') || !getSelection().isCollapsed) return;
-  const line = e.target.closest('.line');
-  const was = line?.classList.contains('shown');
-  items.querySelectorAll('.line.shown').forEach(x => x.classList.remove('shown'));
-  if (line && !was) line.classList.add('shown');
+  return true;
 }
 
 // ---- a reply to one message: the reply button under it, or a swipe to the left on a phone ----
@@ -355,7 +343,7 @@ function startReply(line) {
   if (!id) return;
   replyTo = { id, role: line.classList.contains('line-owner') ? 'owner' : 'jarvis' };
   $('reply-who').textContent = quoteWho(replyTo.role);
-  $('reply-line').textContent = quoteSnippet(lineText.get(line)) || 'Message';
+  $('reply-line').textContent = quoteSnippet(rowText(line)) || 'Message';
   $('reply-strip').hidden = false;
   if (bar.dataset.mode === 'voice') $('keys').click(); else t.focus();
 }
@@ -367,7 +355,7 @@ t.addEventListener('keydown', e => { if (e.key === 'Escape' && replyTo) { e.prev
 function goToQuote(q) {
   const target = items.querySelector(`.line[data-turn="${Number(q.dataset.quote)}"]`);
   if (!target) { q.title = 'That message is older than the chat on this page'; return; }
-  pinned = false;
+  chatList.unpin();
   target.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   target.classList.remove('flash'); void target.offsetWidth; target.classList.add('flash');
   clearTimeout(target.flashTimer);
@@ -430,7 +418,9 @@ function openItems() {
 }
 function approvalHtml(a, tag, withButtons) {
   const err = approvalErrors.get(a.id);
-  return `<div class="ask-tag"><div class="ask-title">${esc(tag)}</div><span class="ago">${ago(dbTime(a.created_at), Date.now())}</span></div>`
+  // A card the owner's answer changed in place says so, so a new spec is never read as the old one.
+  const changed = a.revised_at ? `<span class="pill changed">Changed ${ago(dbTime(a.revised_at), Date.now())}</span>` : '';
+  return `<div class="ask-tag"><div class="ask-title">${esc(tag)}</div>${changed}<span class="ago">${ago(dbTime(a.created_at), Date.now())}</span></div>`
     + approvalBodyHtml(a, parseArgs(a))
     + (withButtons ? approvalPairHtml(a.id, a.action) : '')
     + (err ? `<div class="outcome"><span class="pill failed">not sent</span>${esc(err)}</div>` : '');
@@ -453,8 +443,8 @@ function renderRequests() {
     }
     drawnKey = current; drawnHtml = html;
   }
-  // Only a key answers a terminal menu. Words sent from a box would go to the worker as a message while it sits there.
-  free.hidden = !item?.ask || !!item.ask.prompt;
+  // The free-text box shows under a worker ask only.
+  free.hidden = !item?.ask;
   box.disabled = item?.ask?.status === 'sending';
   const rest = list.filter(x => x !== item);
   if (!rest.length) othersOpen = false;
@@ -497,6 +487,9 @@ function askUpdate(card) {
   renderRequests();
 }
 $('req-card').addEventListener('click', e => {
+  // The report button follows its link to the report viewer. The popup closes, and comes back on this ask when the report closes.
+  const doc = e.target.closest('.ask-report');
+  if (doc) { askAfterReport = doc.closest('.ask').dataset.ask; setPop(null); return; }
   const opt = e.target.closest('.ask-opt');
   if (opt && !opt.disabled) {
     const id = opt.closest('.ask').dataset.ask, option = askData.get(id)?.options[Number(opt.dataset.i)];
@@ -520,8 +513,51 @@ function decideClick(e) {
   const id = b && Number(b.closest('[data-approval]').dataset.approval);
   if (id) decide(id, b.classList.contains('yes'));
 }
+// ---- a worker Jarvis started at once on the owner's own words: a line with Stop for 60 seconds, not a card ----
+const started = new Map(), stopOf = new Map(), stoppedText = new Map();
+function startedLine(a) {
+  let el = started.get(a.id);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'line started';
+    started.set(a.id, el);
+    append(el);
+  }
+  el.innerHTML = startedNoticeHtml(a, parseArgs(a), Date.now(), stoppedText.get(a.id));
+  // Redraw once when Stop runs out, so the button goes away by itself.
+  const left = undoDeadline(a) - Date.now();
+  clearTimeout(el.timer);
+  if (left > 0 && left < Infinity) el.timer = setTimeout(() => startedLine(approvals.get(a.id) ?? a), left + 50);
+}
+async function undoStart(id) {
+  stoppedText.set(id, 'Stopping');
+  startedLine(approvals.get(id));
+  try {
+    const r = await fetch('/api/approval/undo', { method: 'POST', body: JSON.stringify({ id }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) stoppedText.set(id, `Not stopped: ${j.error || `error ${r.status}`}`);
+    else if (j.id !== id) { stopOf.set(j.id, id); stoppedText.set(id, j.status === 'done' ? 'Stopped' : j.status === 'failed' ? `Not stopped: ${j.result ?? ''}` : 'Stopping'); }
+  } catch (err) { stoppedText.set(id, 'No answer from Jarvis: ' + err.message); }
+  startedLine(approvals.get(id));
+}
+items.addEventListener('click', e => { const b = e.target.closest('[data-undo]'); if (b) { b.disabled = true; undoStart(Number(b.dataset.undo)); } });
+/** Redraws the Approve and Reject on the chat message linked to this approval. Empty once it is tapped or decided. */
+function chatDecision(a) {
+  const c = a?.chat_turn && items.querySelector(`.line[data-turn="${Number(a.chat_turn)}"] > .chat-decide`);
+  if (c) c.innerHTML = chatDecisionHtml(approvals.values(), a.chat_turn, tapped);
+}
 function setApproval(a) {
   approvals.set(a.id, a);
+  chatDecision(a);
+  if (a.decided_by === 'owner-asked') return startedLine(a);
+  if (a.decided_by === 'undo') {
+    // The stop that Stop made: its outcome goes on the started line, not on a line of its own.
+    // A Stop pressed while the start ran gets no stop id back, so the worker id finds its line.
+    const worker = parseArgs(a).dispatch;
+    const start = stopOf.get(a.id) ?? [...started.keys()].find(k => { try { const r = JSON.parse(approvals.get(k)?.result ?? '{}'); return worker && (r.worker === worker || r.dispatchId === worker); } catch { return false; } });
+    if (start && a.status !== 'approved') { stoppedText.set(start, a.status === 'done' ? 'Stopped' : `Not stopped: ${a.result ?? a.status}`); startedLine(approvals.get(start)); }
+    return;
+  }
   if (a.status !== 'pending' && a.decided_by !== 'automatic') {
     const outcome = approvalOutcomeText(a);
     if (outcome) answerLine(`approval:${a.id}`, { tag: approvalTag(a.action, parseArgs(a)), answer: outcome, at: a.decided_at ? dbTime(a.decided_at) : new Date().toISOString(), failed: a.status === 'failed' || a.status === 'unknown' });
@@ -534,7 +570,8 @@ async function decide(id, approve) {
   approvalErrors.delete(id);
   renderRequests(); // the next item takes its place at once; the outcome arrives as a line in the chat
   paneCard(approvals.get(id));
-  const fail = msg => { tapped.delete(id); approvalErrors.set(id, msg); current = `approval:${id}`; renderRequests(); if (!paneCards.has(id)) setPop('requests'); paneCard(approvals.get(id)); };
+  chatDecision(approvals.get(id));
+  const fail = msg => { tapped.delete(id); approvalErrors.set(id, msg); current = `approval:${id}`; renderRequests(); if (!paneCards.has(id)) setPop('requests'); paneCard(approvals.get(id)); chatDecision(approvals.get(id)); };
   try {
     const r = await fetch('/api/approval', { method: 'POST', body: JSON.stringify({ id, approve }) });
     const j = await r.json().catch(() => ({}));
@@ -637,7 +674,8 @@ $('msg-handled').onclick = () => {
   if (m) messageAction('/api/message/handled', { id: m.id }, () => answerLine(`handled:${m.id}`, m.copyOnly ? { tag: `Message to ${m.from}`, answer: 'Done', at: new Date().toISOString() } : { tag: `${m.label} from ${m.from}`, answer: 'You will handle it', at: new Date().toISOString() }));
 };
 
-// ---- the buttons (option H of the top area). All four are always there, so they never move; a count shows only above zero. ----
+// ---- the buttons (option H of the top area). Today and Leads are always there, and a count shows only above zero.
+// Requests and Messages show only while something is open behind them. ----
 const POPS = { requests: { el: $('pop-requests'), btn: $('req-btn') }, messages: { el: $('pop-messages'), btn: $('msg-btn') }, today: { el: $('pop-today'), btn: $('today-btn') }, migration: { el: $('pop-migration'), btn: $('mig-btn') } };
 let popOpen = null;
 function paintCount(btn, n, aria) {
@@ -685,7 +723,11 @@ function paintNeedbar() {
   paintCount($('req-btn'), n, n ? `Requests, ${n} open` : 'Requests, nothing open');
   paintCount(msg, b?.count ?? 0, b?.aria ?? 'Messages, nothing open');
   msg.classList.toggle('need-urgent', !!b?.urgent);
+  $('req-btn').hidden = !n;
+  msg.hidden = !b;
   paintToday();
+  // A popup never stays open under a button that is gone.
+  if (POPS[popOpen]?.btn.hidden) setPop(null);
 }
 function setPop(next) {
   const was = popOpen;
@@ -699,7 +741,7 @@ function setPop(next) {
     p.btn.classList.toggle('is-open', name === next);
   }
   // Tab stays in the buttons and the popup while the page behind them is dimmed.
-  for (const el of [$('work'), $('chat'), $('pane'), $('doneline'), $('mtoast'), document.querySelector('.h-left'), document.querySelector('.c-head .tools')]) el.inert = !!next;
+  for (const el of [$('work'), $('chat'), $('pane'), $('mtoast'), document.querySelector('.h-left'), document.querySelector('.c-head .tools')]) el.inert = !!next;
   if (next) {
     panel(false); showMenu(false);
     if (next === 'messages') fitDraft();
@@ -723,7 +765,7 @@ $('mig-btn').onclick = () => togglePop('migration');
 const migration = makeMigrationPop({ $, fetch: (...a) => window.fetch(...a), paint: paintMigration });
 const today = makeTodayPop({
   $, fetch: (...a) => window.fetch(...a), paint: paintToday, closePop: () => setPop(null),
-  holdMic: on => { holding = on; if (on) bargeIn(); },
+  holdMic: on => { todayHolding = on; if (on) bargeIn(); },
   // The request's listed conversation if it has one, else what Jarvis recorded about it.
   openConversation: id => { const r = requests.find(x => x.id === id); setPop(null); openPane(r ? openIdOf(r) : `req:${id}`); },
 });
@@ -733,12 +775,12 @@ const modelPicker = makeModelPicker({
   pill: $('model-pill'), sheet: $('model-sheet'), body: $('model-body'), err: $('model-err'), closeBtn: $('model-close'),
   post: next => fetch('/api/brain/model', { method: 'POST', body: JSON.stringify(next) }),
 });
-const overlayOpen = () => modelPicker.isOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('shell').hidden || !$('newpick').hidden || !$('menu').hidden;
+const overlayOpen = () => modelPicker.isOpen || viewer.classList.contains('open') || !$('tasks').hidden || !$('audit').hidden || !$('newpick').hidden || !$('menu').hidden;
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (viewer.classList.contains('open')) return viewer.onclick();
+    if (viewer.classList.contains('open')) return closeViewer();
     if (modelPicker.isOpen) return modelPicker.open(false);
-    if (!$('shell').hidden) { $('shell').hidden = true; return; }
+    if (!$('tasks').hidden) return closeTasks();
     if (!$('audit').hidden) return closeAudit();
     if (!$('newpick').hidden) return showPick(false);
     if (!$('menu').hidden) { showMenu(false); return moreBtn.focus(); }
@@ -762,89 +804,75 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// ---- the shell pane: a real shell on the Mac, the owner's phone only. The daemon refuses every other device (access.ts). ----
-const shellEl = $('shell'), shellOut = $('shell-out'), shellText = $('shell-text'), shellEnded = $('shell-ended');
-let shellScreen = makeScreen(), shellAt = 0, shellStream = null, shellOver = false;
-function shellDraw() {
-  const bottom = shellOut.scrollHeight - shellOut.scrollTop - shellOut.clientHeight < 40;
-  shellOut.textContent = screenText(shellScreen);
-  if (bottom) shellOut.scrollTop = shellOut.scrollHeight;
-}
-function shellEnd(text) {
-  shellOver = true;
-  shellEnded.textContent = text;
-  shellEnded.hidden = false;
-  $('shell-form').hidden = true;
-  $('shell-close').textContent = 'Start a new shell';
-}
-async function shellPost(path, body) {
-  const r = await fetch(`/api/shell/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
-  if (r.ok) return r;
-  const { error } = await r.json().catch(() => ({}));
-  throw new Error(error || `The shell answered ${r.status}.`);
-}
-// Output streams on its own request, never through /api/events. A dropped connection (phone locked, app switched) comes back from where it stopped.
-async function shellFollow() {
-  if (shellStream) return;
-  const stop = shellStream = new AbortController();
-  try {
-    while (!shellOver && shellStream === stop) {
-      const r = await rawFetch(`/api/shell/stream?from=${shellAt}`, { signal: stop.signal, headers: { 'x-jarvis-session': uiSession } });
-      if (!r.ok) {
-        const { error } = await r.json().catch(() => ({}));
-        if (r.status === 403 && !/no open app page/.test(error || '')) return shellEnd(error);
-        await new Promise(done => setTimeout(done, 2000));
-        continue;
-      }
-      const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
-      let held = '';
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        const lines = (held + value).split('\n');
-        held = lines.pop();
-        for (const line of lines) {
-          const e = line ? JSON.parse(line) : {};
-          if (e.out) { feedScreen(shellScreen, e.out); shellAt = e.at; }
-          if (e.ended) shellEnd(e.ended);
-        }
-        shellDraw();
-      }
-      if (!shellOver) await new Promise(done => setTimeout(done, 1000));
-    }
-  } catch (err) {
-    if (err.name !== 'AbortError' && !shellOver) { shellStream = null; await new Promise(done => setTimeout(done, 2000)); return shellFollow(); }
-  } finally { if (shellStream === stop) shellStream = null; }
-}
-async function shellStart() {
-  shellOver = false;
-  shellEnded.hidden = true;
-  $('shell-form').hidden = false;
-  $('shell-close').textContent = 'Close';
-  try {
-    const { started } = await (await shellPost('open')).json();
-    if (started) { shellScreen = makeScreen(); shellAt = 0; shellOut.textContent = ''; }
-    shellFollow();
-    shellText.focus();
-  } catch (err) { shellEnd(err.message); $('shell-close').hidden = true; }
-}
-$('shellbtn').onclick = () => { showMenu(false); shellEl.hidden = false; $('shell-close').hidden = false; shellStart(); };
-$('shell-hide').onclick = () => { shellEl.hidden = true; };
-$('shell-close').onclick = async () => {
-  if (shellOver) return shellStart();
-  try { await shellPost('close'); } catch (err) { shellEnd(err.message); return; }
-  shellEl.hidden = true;
+// ---- Scheduled tasks: read fresh from launchd and jarvisd on every open (daemon/tasks.ts, web/tasks.js) ----
+const tasksEl = $('tasks'), tasksBody = $('tasks-body');
+let taskList = [], taskOpen = null, taskShowHidden = false;
+const closeTasks = () => { tasksEl.hidden = true; moreBtn.focus(); };
+const paintTasks = () => {
+  tasksBody.innerHTML = tasksHtml(taskList, taskOpen, Date.now(), taskShowHidden);
+  $('tasks-count').textContent = taskCount(taskList, taskShowHidden);
 };
-$('shell-ctrlc').onclick = () => shellPost('interrupt').catch(err => shellEnd(err.message));
-$('shell-form').onsubmit = async e => {
+async function loadTasks() {
+  const r = await fetch('/api/tasks');
+  if (!r.ok) throw new Error(`error ${r.status}`);
+  const b = await r.json();
+  taskList = b.tasks;
+  $('tasks-read').textContent = ` Read at ${taskWhen(b.at)} from launchd and jarvisd.`;
+  paintTasks();
+}
+$('tasks-close').onclick = closeTasks;
+$('tasksbtn').onclick = async () => {
+  showMenu(false);
+  taskOpen = null; taskShowHidden = false;
+  tasksBody.innerHTML = '<p class="tk-empty">Reading launchd and jarvisd…</p>';
+  $('tasks-count').textContent = '';
+  tasksEl.hidden = false;
+  try { await loadTasks(); } catch (err) { tasksBody.innerHTML = `<p class="tk-empty">Could not read the tasks: ${esc(err.message)}</p>`; }
+};
+tasksBody.addEventListener('click', async e => {
+  if (e.target.closest('[data-showhidden]')) { taskShowHidden = !taskShowHidden; paintTasks(); tasksBody.querySelector('[data-showhidden]')?.focus({ focusVisible: e.detail === 0 }); return; }
+  const hideBtn = e.target.closest('[data-hide-task]');
+  if (hideBtn) {
+    // Hide or show changes only jarvisd's list of hidden ids. The row moves at once, and moves back if the save fails.
+    const id = hideBtn.dataset.hideTask, hide = !('unhide' in hideBtn.dataset);
+    const set = h => { taskList = taskList.map(x => x.id === id ? { ...x, hidden: h } : x); paintTasks(); };
+    if (hide && taskOpen === id) taskOpen = null;
+    set(hide);
+    const r = await fetch('/api/tasks/hide', { method: 'POST', body: JSON.stringify({ id, hidden: hide }) }).catch(() => null);
+    if (!r?.ok) { set(!hide); add('event', 'Hide: not saved, try again.'); return; }
+    (tasksBody.querySelector(`[data-hide-task="${CSS.escape(id)}"]`) ?? tasksBody.querySelector('[data-showhidden]'))?.focus({ focusVisible: e.detail === 0 });
+    return;
+  }
+  const fix = e.target.closest('.tk-fix');
+  if (fix) {
+    const t = taskList.find(x => x.id === fix.dataset.id);
+    if (!t || fix.disabled) return;
+    fix.disabled = true; fix.textContent = 'Sending…';
+    // Its own route, not /api/send: the daemon builds the message from a fresh read, and it never takes pictures attached in the box.
+    const r = await fetch('/api/tasks/ask-fix', { method: 'POST', body: JSON.stringify({ id: t.id }) }).catch(() => null);
+    const err = r && !r.ok ? (await r.json().catch(() => ({}))).error : '';
+    for (const b of tasksBody.querySelectorAll(`.tk-fix[data-id="${CSS.escape(t.id)}"]`)) { b.textContent = r?.ok ? 'Sent to Jarvis' : 'Not sent. Try again'; b.title = err || ''; b.disabled = !!r?.ok; }
+    return;
+  }
+  if (e.target.closest('.tk-open')) return;
+  const row = e.target.closest('.tk-row');
+  if (!row) return;
+  taskOpen = taskOpen === row.dataset.id ? null : row.dataset.id;
+  paintTasks();
+  tasksBody.querySelector(`.tk-row[data-id="${CSS.escape(row.dataset.id)}"] .tk-head`)?.focus({ focusVisible: e.detail === 0 });
+});
+tasksBody.addEventListener('submit', async e => {
   e.preventDefault();
-  const text = shellText.value;
-  if (!text.trim()) return;
-  try { await shellPost('input', { text }); shellText.value = ''; shellOut.scrollTop = shellOut.scrollHeight; }
-  catch (err) { shellEnded.textContent = err.message; shellEnded.hidden = false; }
-};
-// Enter is a line break on a phone, so a pasted block stays whole until Run.
-shellText.addEventListener('keydown', e => { if (enterSends(e)) { e.preventDefault(); $('shell-form').requestSubmit(); } });
+  const form = e.target, msg = form.closest('.tk-open').querySelector('.tk-msg'), btn = form.querySelector('.tk-save');
+  btn.disabled = true; btn.textContent = 'Saving…'; msg.hidden = true;
+  const r = await fetch('/api/tasks/save', { method: 'POST', body: JSON.stringify({ id: form.dataset.id, cron: form.cron.value, description: form.description.value }) }).catch(err => ({ ok: false, json: async () => ({ error: err.message }) }));
+  const b = await r.json().catch(() => ({}));
+  if (b.task) taskList = taskList.map(x => x.id === b.task.id ? b.task : x);
+  if (r.ok) paintTasks();
+  const box = tasksBody.querySelector(`.tk-row[data-id="${CSS.escape(form.dataset.id)}"] .tk-msg`);
+  if (box) { box.hidden = false; box.className = `tk-msg${r.ok ? '' : ' bad'}`; box.textContent = r.ok ? (b.task?.status === 'Off' ? 'Saved in the plist, and it reads back the same. The job stays off.' : 'Saved. launchd reloaded the job, and the plist reads back the same.') :(b.error || `Save failed (error ${r.status}).`); }
+  if (!r.ok) { btn.disabled = false; btn.textContent = 'Save'; }
+});
 
 // ---- audit log: answered questions and decided approvals, read from the store when the panel opens ----
 const auditEl = $('audit'), auditBody = $('audit-body');
@@ -867,10 +895,24 @@ $('auditbtn').onclick = async () => {
 let soundOn = localStorage.getItem('sound') !== 'off';
 const player = new Audio();
 // The speaker buttons and voice mode play through this one controller (web/speech.js).
-const speech = makeSpeech({ audio: player, clipUrl: (turn, i) => `/api/speech/${turn}/${i}`, warm: url => rawFetch(url).catch(() => {}), onChange: paintSpeakers });
+// Each clip's play, stall, end and error goes to the jarvisd log in small batches, so a glitch has a record.
+const playLog = [];
+let playLogTimer = 0;
+function reportPlay(e) {
+  playLog.push({ ...e, at: Date.now() });
+  if (!playLogTimer) playLogTimer = setTimeout(() => {
+    playLogTimer = 0;
+    fetch('/api/speech/log', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ events: playLog.splice(0) }) }).catch(() => {});
+  }, 2000);
+}
+// A brain message is keyed by its turn number. A worker's message in its pane has no turn: its key is the row id and
+// the line id, each URL-encoded ("n%3Aab12/f%3A4096"), which /api/speech/worker reads (daemon/voice.ts).
+const speakKey = v => /^\d+$/.test(v) ? Number(v) : v;
+const clipUrl = (key, i) => typeof key === 'number' ? `/api/speech/${key}/${i}` : `/api/speech/worker/${key}/${i}`;
+const speech = makeSpeech({ audio: player, clipUrl, warm: url => rawFetch(url).catch(() => {}), onChange: paintSpeakers, report: reportPlay });
 function paintSpeakers() {
-  for (const b of items.querySelectorAll('.msg-speak')) {
-    const state = speech.state(Number(b.dataset.turn));
+  for (const b of [...items.querySelectorAll('.msg-speak'), ...$('pane-lines').querySelectorAll('.msg-speak')]) {
+    const state = speech.state(speakKey(b.dataset.turn));
     if (b.dataset.state === state) continue;
     b.dataset.state = state; b.innerHTML = SPEAK[state].html; b.title = SPEAK[state].title; b.setAttribute('aria-label', SPEAK[state].title);
   }
@@ -918,6 +960,7 @@ function connect() {
     else if (e.type === 'stories') showQueue(e.stories);
     else if (e.type === 'migration') migration.show(e.migration);
     else if (e.type === 'brain') modelPicker.show(e.brain);
+    else if (e.type === 'version') reloader.seen(e.version);
     else if (e.type === 'audio') {
       lastAudioTurn = e.turnId; lastAudioTotal = e.total; lastAudioAt = Date.now();
       if (soundOn) speech.live(e.turnId, e.total, e.i);
@@ -970,17 +1013,16 @@ function showHistory(e) {
 const onMac = matchMedia('(pointer: fine)').matches;
 const worklist = $('worklist'), railbtn = $('railbtn');
 const STATE = { waiting: 'Waiting on you', idle: 'Idle', working: 'Working', exited: 'Exited' };
-let work = { rows: [], done: [] };
+let work = { rows: [] };
 let requests = [];
 const handedSeen = new Set();
-// Rows the owner hid. The daemon keeps the ids; hiding never stops or deletes anything in Orca.
+// Rows the owner hid. The daemon keeps the ids; hiding never stops or deletes anything.
 let hidden = new Set(), showHidden = false;
 const readSet = k => { try { return new Set(JSON.parse(localStorage.getItem(k) || '[]')); } catch { return new Set(); } };
 const shutGroups = readSet('workGroupsShut');
 // A group closed by hand while something in it waits. Forgotten once nothing waits there.
 const closedWaiting = new Set();
 const reqFolders = { review: false, done: false, prs: new Set() }; // both folders and every PR row start closed on each page load
-const doneOpen = new Set(); // the groups whose Done fold the owner opened; every Done fold starts closed on each page load
 function togglePr(pr) { reqFolders.prs.has(pr) ? reqFolders.prs.delete(pr) : reqFolders.prs.add(pr); renderWork(); }
 function renderWork() {
   const seen = work.rows.filter(r => !hidden.has(r.id));
@@ -989,11 +1031,9 @@ function renderWork() {
   $('workcount').textContent = working ? `${working} working` : '';
   railbtn.setAttribute('aria-label', seen.length ? `Work list, ${seen.length}${waiting ? `, ${waiting} waiting on you` : ''}` : 'Work list');
   railbtn.toggleAttribute('data-busy', waiting > 0);
-  $('workerr').hidden = !work.error;
-  $('workerr').textContent = work.error ? `${work.error}. Showing the last list.` : '';
   const merged = mergeWork(work.rows, requests, hidden, showHidden);
   lastMerged = merged;
-  worklist.innerHTML = workListHtml(merged, { hidden, shut: shutGroups, closedWaiting, folders: reqFolders, reading: term ? `t:${term.name}` : pane.id, now: Date.now(), doneOpen })
+  worklist.innerHTML = workListHtml(merged, { hidden, shut: shutGroups, closedWaiting, folders: reqFolders, reading: term ? `t:${term.name}` : pane.id, now: Date.now() })
     + (merged.hiddenCount ? `<button type="button" class="showhidden" data-showhidden>${showHidden ? 'Leave out' : 'Show'} ${merged.hiddenCount} hidden</button>` : '');
   $('doneinfo').textContent = doneLine(requests, Date.now());
   $('tojarvis').classList.toggle('here', !pane.id && !report.id);
@@ -1002,7 +1042,6 @@ let lastMerged = null;
 function showWork(w) {
   work = w;
   renderWork();
-  showDone();
   if (pane.id) paneHead();
   if (term) termHead();
 }
@@ -1039,22 +1078,12 @@ worklist.addEventListener('click', async e => {
   if (e.target.closest('a')) return;
   const g = e.target.closest('.group[data-group]');
   if (g) return toggleGroup(g.dataset.group);
-  const d = e.target.closest('.dfold[data-done-fold]');
-  if (d) { const k = d.dataset.doneFold; doneOpen.has(k) ? doneOpen.delete(k) : doneOpen.add(k); return renderWork(); }
   const f = e.target.closest('.folder');
   if (f) { reqFolders[f.dataset.folder] = f.getAttribute('aria-expanded') !== 'true'; return renderWork(); }
   const p = e.target.closest('[data-pr]');
   if (p) return togglePr(p.dataset.pr);
   const b = e.target.closest('button');
   if (!b) { const w = e.target.closest('[data-id], [data-row]'); if (w) openRow(w.dataset.id ?? w.dataset.row); return; }
-  if (b.dataset.close) {
-    b.disabled = true;
-    try {
-      const r = await fetch('/api/work/close', { method: 'POST', body: JSON.stringify({ dispatch: b.dataset.close }) });
-      if (!r.ok) { const j = await r.json().catch(() => ({})); add('event', 'Close: ' + (j.error || j.result || r.status)); }
-    } finally { b.disabled = false; }
-    return;
-  }
   if (b.classList.contains('hide')) {
     // A merged row is one thing to the owner: Hide takes the conversation and the request off together.
     const { hideRow, hide } = b.dataset, unhide = 'unhide' in b.dataset;
@@ -1074,8 +1103,63 @@ worklist.addEventListener('keydown', e => {
 // ---- an open worker: replaces the conversation in the center, polled about every 3 s from the cursor the daemon returns ----
 const paneEl = $('pane'), paneLines = $('pane-lines'), paneLog = $('pane-log');
 const report = { id: null, gen: 0, fromApp: false, drawer: false }; // the report page, further down
-const pane = { id: null, cursor: null, timer: 0, gen: 0, error: '', warning: '', busy: false };
+/** The ask to show again when the report page closes: its report was opened from its card or its push. */
+let askAfterReport = null;
+const pane = { id: null, cursor: null, timer: 0, gen: 0, error: '', warning: '', busy: false, phone: null };
 const PANE_MAX = 400;
+// The pane is the same chat as the brain chat (web/chatview.js makeChat). Only its feed and its send target differ.
+// A message goes straight to the open worker. It shows as a faded bubble until the transcript has it, and the box
+// clears only once jarvisd took it. The tray is kept per worker (switchTo in openPane and closePane), as the typed
+// drafts are. A dictation goes to /api/voice with the worker as its target, with the typed text in front and the
+// tray's pictures after the words, as the chat's mic sends to the brain. Leaving the pane drops a clip still recording.
+let paneStream = null;
+const paneChat = makeChat({
+  parts: paneEls, upload: uploadPicture, pasteText, openViewer: (src, item) => openViewer(src, item), canSend: () => !!pane.id,
+  notify: text => { pane.warning = text; paneHead(); },
+  onError: text => { pane.error = text; paneHead(); },
+  send: async (message, { key, clear }) => {
+    const { ok, j } = await workPost('/api/work/steer', { id: key, text: message });
+    if (!ok) { pane.error = j.error || 'Not sent'; paneHead(); return false; }
+    clear();
+    if (key !== pane.id) return true;
+    pane.error = '';
+    pane.warning = '';
+    // Shown until the same words come back from the session, which takes a few seconds.
+    if (!j.approval) paneAppend([{ role: 'user pending', text: message }]);
+    paneHead();
+    clearTimeout(pane.timer);
+    pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
+    return true;
+  },
+  getStream: async () => (paneStream ??= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })),
+  onStart: () => bargeIn(), // talking over Jarvis stops it
+  onHint: hint => { pane.micHint = hint; paneHead(); },
+  onClip: async blob => {
+    const id = pane.id, box = paneEls.box, typed = box.value;
+    let j = {};
+    try {
+      const went = await sendOut({ tray: steerBox.items(), upload: uploadPicture, post: async lines => {
+        const q = imageParams(new URLSearchParams({ target: id }), lines);
+        if (typed.trim()) q.set('typed', typed);
+        const r = await fetch(`/api/voice?${q}`, { method: 'POST', body: blob });
+        j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || r.status);
+        return !!j.sent;
+      } });
+      went.forEach(steerBox.unattach);
+      if (id !== pane.id) return;
+      if (!j.text) { pane.warning = "Didn't catch that."; return paneHead(); }
+      if (typed.trim()) { box.value = boxAfterSend(box.value, typed); paneChat.fit(); paneChat.changed(); }
+      pane.error = pane.warning = '';
+      paneAppend([{ role: 'user pending', text: j.message }]);
+      paneHead();
+      clearTimeout(pane.timer);
+      pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
+    } catch (err) { if (id === pane.id) { pane.error = 'Voice not sent: ' + err.message; paneHead(); } }
+  },
+});
+const steerBox = paneChat.composer, paneMic = paneChat.mic;
+const paneList = makeList({ log: paneLog, items: paneLines, noHover, onClick: paneClick, onSpeak: (key, clips) => speech.toggle(speakKey(key), clips) });
 function openPane(id) {
   closeTerm();
   closePane();
@@ -1083,6 +1167,10 @@ function openPane(id) {
   paneLines.innerHTML = '<div class="empty">Reading…</div>';
   paneEl.hidden = false;
   document.body.classList.add('pane-open');
+  $('steer-text').value = steerDrafts.take(id);
+  steerBox.switchTo(id); // this worker's pictures, kept while another worker was open
+  paneChat.fit();
+  backNav.opened();
   paneHead();
   renderWork();
   readPane(pane.gen, true);
@@ -1092,37 +1180,47 @@ function closePane() {
   clearTimeout(pane.timer);
   paneCards.clear();
   $('steer-cards').innerHTML = '';
+  // An unsent message waits for the owner's return to this pane (Back, Escape or the mouse's back button).
+  steerDrafts.keep(pane.id, $('steer-text').value);
   $('steer-text').value = '';
+  steerBox.switchTo('');
+  paneMic.stop(false);
+  paneStream?.getTracks().forEach(x => x.stop()); paneStream = null; // the Mac's mic light goes off with the pane
   pane.id = null; pane.gen++;
   paneEl.hidden = true;
   document.body.classList.remove('pane-open');
   renderWork();
-  if (pinned) toBottom();
+  if (chatList.pinned()) toBottom();
 }
 function paneHead() {
   const r = work.rows.find(x => x.id === pane.id);
   if (r) $('pane-title').textContent = r.title;
   if (pane.detail) $('pane-title').textContent = pane.detail.title;
-  const native = r?.native; // a background Claude Code session (daemon/native.ts), not an Orca worker
+  const native = r?.native; // a background Claude Code session (daemon/native.ts)
   const bits = r ? [r.label, r.pr, r.state === 'idle' && r.note ? r.note : STATE[r.state], r.worktree].filter(Boolean).map(esc) : pane.record ? ['Read-only'] : ['Not in the work list any more'];
-  // A question shows above the steer box instead; any other note (a prompt in Orca) stays here.
+  // A question shows above the steer box instead; any other note stays here.
   if (r && r.note && r.state !== 'idle' && !(r.steer === 'auto' && r.state === 'waiting')) bits.push(esc(r.note));
   // A native worker also says what claude reports: its state, and what it waits for.
   if (native) bits.push(...[native.state, native.waitingFor].filter(Boolean).map(esc));
   $('pane-sub').innerHTML = bits.map(b => `<span>${b}</span>`).join('') + (pane.error ? `<span class="err">${esc(pane.error)}</span>` : '');
   const stopBtn = $('pane-stop');
   stopBtn.hidden = !r || r.kind !== 'worker' || r.state === 'exited';
-  $('pane-stop-label').textContent = r?.sideChat ? 'Close' : 'Stop';
   // Open (`claude attach`) cannot reach an interactive session's own terminal; Desktop can take it over.
   const interactive = native?.kind === 'interactive';
-  $('pane-open').hidden = !(onMac && (r?.terminal || (native && !interactive)));
-  $('pane-open').title = $('pane-open').ariaLabel = native ? 'Open in Terminal' : 'Open in Orca';
+  $('pane-open').hidden = !(onMac && native && !interactive);
   $('pane-desktop').hidden = !(onMac && native);
-  // The message box: straight to the session, except another Run's chat-tab worker, which needs an Approve card.
+  // Continue on phone: any native worker in the list, on the Mac or the phone.
+  // Hidden while it already runs in the Claude app.
+  const onPhone = native?.remote && !['stopped', 'failed', 'abandoned'].includes(native.state);
+  $('pane-phone').hidden = !r || !!r.tmux || !!onPhone;
+  // The refusal when another process holds the session: what it is, and one tap to end it and continue.
+  const hold = pane.phone && pane.phone.id === pane.id ? pane.phone : null;
+  $('phone-box').hidden = !hold;
+  if (hold) $('phone-what').textContent = hold.holders.length === 1 ? `Another process has this session open: ${hold.holders[0].what} (pid ${hold.holders[0].pid}).` : `${hold.holders.length} other processes have this session open: ${hold.holders.map(h => `pid ${h.pid}`).join(', ')}.`;
+  // The message box: straight to the session.
   const steer = r ? r.steer : 'none';
-  $('steer-row').hidden = steer === 'none';
-  $('steer-text').placeholder = steer === 'card' ? 'Message (needs Approve)' : r?.state === 'waiting' && r.note && !native ? 'Answer it' : native ? 'Message' : 'Steer this session';
-  // A native worker's pending permission card shows inside the pane too, with its Allow and Deny.
+  $('steer-row').hidden = $('steer-pending').hidden = steer === 'none';
+  $('steer-text').placeholder = pane.micHint || (r?.state === 'waiting' && r.note && !native ? 'Answer it' : native ? 'Message' : 'Steer this session');  // A native worker's pending permission card shows inside the pane too, with its Allow and Deny.
   const pc = native && permissionCard(r);
   if (pc?.approval) { paneCards.add(pc.approval.id); paneCard(pc.approval); }
   $('steer-hint').innerHTML = !r ? ''
@@ -1130,9 +1228,8 @@ function paneHead() {
     : native?.state === 'blocked' ? 'Waiting on a permission prompt. Answer it on the card.'
     : native?.waitingFor === 'Open in the Claude desktop app' ? 'This session is open in the Claude desktop app. A message here takes it back into Jarvis.'
     : native?.waitingFor === 'Idle, resumes on a message' ? 'Idle for an hour, so its process was ended. A message here resumes it.'
-    : (steer === 'auto' || steer === 'type') && r.state === 'waiting' && r.note && r.note !== 'Waiting at a prompt in Orca' ? `<b>Asks:</b> ${esc(r.note)}`
-    : r.note === 'Waiting at a prompt in Orca' && steer !== 'none' ? 'It is showing a permission prompt. Send the option number to answer it.'
-    : steer === 'card' ? 'Goes out only after you tap Approve on the card.'
+    : onPhone ? `Open it in the Claude app on your phone: it is named "${esc(native.remote)}". A message here goes to it too.`
+    : steer === 'auto' && r.state === 'waiting' && r.note ? `<b>Asks:</b> ${esc(r.note)}`
     : steer === 'none' ? 'This worker has exited.' : '';
   $('pane-working').hidden = !(pane.busy || r?.state === 'working');
   // Waiting on the owner, with a question to answer: a tinted line links to it. A native worker waits on its permission card.
@@ -1182,28 +1279,24 @@ $('pane-desktop').onclick = async () => {
     if (!r.ok) { const j = await r.json().catch(() => ({})); pane.error = 'Open in the Claude desktop app: ' + (j.error || j.result || r.status); paneHead(); }
   } finally { b.disabled = false; }
 };
-$('steer').onsubmit = async e => {
-  e.preventDefault();
-  const box = $('steer-text'), go = $('steer').querySelector('.go'), text = box.value.trim();
-  if (!text || !pane.id) return box.focus();
-  go.disabled = true;
+// Continue on phone: jarvisd resumes this same session (never a copy) with Remote Control on (native.phone). When another
+// process holds it, the box names that process and offers to stop it; that second tap sends its pids as `stop`.
+async function continueOnPhone(stop) {
+  const b = $('pane-phone'), id = pane.id;
+  b.disabled = $('phone-stop').disabled = true;
   try {
-    const { ok, j } = await workPost('/api/work/steer', { id: pane.id, text });
-    if (!ok) { pane.error = j.error || 'Not sent'; return paneHead(); }
-    box.value = ''; box.style.height = '';
-    pane.error = '';
-    pane.warning = j.warning || '';
-    // Shown until the same words come back from the session, which takes a few seconds.
-    if (!j.approval) paneAppend([{ role: 'user pending', text }]);
-    if (j.done === 'resumed') pane.busy = true;
+    const r = await fetch('/api/work/phone', { method: 'POST', body: JSON.stringify({ id, ...(stop ? { stop } : {}) }) });
+    const j = await r.json().catch(() => ({}));
+    pane.phone = null; pane.error = '';
+    // The pane moves to the row the daemon names, and the hint says where to find it.
+    if (r.ok) { if (j.id && j.id !== id) openPane(j.id); pane.warning = `On your phone: open the Claude app and pick "${j.remote}".`; }
+    else if (j.holders?.length) pane.phone = { id, holders: j.holders };
+    else pane.error = 'Continue on phone: ' + (j.error || r.status);
     paneHead();
-    clearTimeout(pane.timer);
-    pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
-  } catch (err) { pane.error = 'Not sent: ' + err.message; paneHead(); }
-  finally { go.disabled = false; }
-};
-$('steer-text').addEventListener('keydown', e => { if (enterSends(e)) { e.preventDefault(); $('steer').requestSubmit(); } });
-$('steer-text').addEventListener('input', e => { const b = e.target; b.style.height = 'auto'; b.style.height = Math.min(b.scrollHeight, innerHeight * 0.3) + 'px'; });
+  } finally { b.disabled = $('phone-stop').disabled = false; }
+}
+$('pane-phone').onclick = () => continueOnPhone();
+$('phone-stop').onclick = () => { if (pane.phone) continueOnPhone(pane.phone.holders.map(h => h.pid)); };
 $('pane-stop').onclick = async () => {
   const r = work.rows.find(x => x.id === pane.id);
   if (!r) return;
@@ -1222,13 +1315,13 @@ async function readPane(gen, first) {
     if (r.status === 404) { pane.error = j.error || 'Gone'; paneHead(); return; } // finished: stop polling
     if (j.reset) { pane.cursor = null; paneLines.innerHTML = ''; again = 0; }
     else {
-      pane.error = j.error || j.failure || '';
+      pane.error = j.error || '';
       pane.busy = !!j.busy;
       if (first) paneLines.innerHTML = '';
       if (j.detail) { pane.detail = j.detail; paneLines.querySelector('.rdetail')?.remove(); paneLines.querySelector('.empty')?.remove(); paneLines.insertAdjacentHTML('afterbegin', requestDetailHtml(j.detail)); }
-      paneAppend(j.lines || []);
+      paneAppend(j.lines || [], !first);
       // A record reads from its top, and a closed conversation has nothing new to wait for.
-      if (first && pane.record) paneLog.scrollTop = 0;
+      if (first && pane.record) paneList.toTop();
       if (pane.record && !j.more) { paneHead(); return; }
       if (j.cursor) pane.cursor = j.cursor;
       if (j.more) again = 0;
@@ -1238,27 +1331,36 @@ async function readPane(gen, first) {
   paneHead();
   pane.timer = setTimeout(() => readPane(gen, false), again);
 }
-function paneAppend(lines) {
+function paneAppend(lines, rise = true) {
   if (!lines.length) return;
   paneLines.querySelector('.empty')?.remove();
-  const atBottom = paneLog.scrollHeight - paneLog.scrollTop - paneLog.clientHeight < 120;
   for (const l of lines) {
-    if (l.role === 'user') for (const p of paneLines.querySelectorAll('.pending')) if (p.textContent === l.text) p.remove();
+    // The faded bubble goes when the transcript has the same message. It is compared as sent, not as drawn, because a
+    // picture draws as a thumbnail and jarvisd adds the read line (withReadLine in web/compose.js).
+    if (l.role === 'user') for (const p of paneLines.querySelectorAll('.line[data-sent]')) if (p.dataset.sent === withoutReadLine(l.text)) p.remove();
     if (l.role === 'tool') { addToolRow(l.text); continue; }
-    const d = document.createElement('div');
-    d.className = 'pl ' + l.role;
-    if (l.kind === 'preamble') { d.className = 'pl fold brief'; d.innerHTML = briefFoldHtml(l.text); }
-    else if (l.kind === 'wake') { d.className = 'pl wake'; d.textContent = 'Jarvis sent a message'; }
-    else if (l.kind === 'event') { d.className = 'pl wake'; d.textContent = l.text; } // what jarvisd did to the session, such as a resume
-    else if (l.role === 'agent') { d.classList.add('md'); d.innerHTML = markdown(l.text, shot); }
-    else d.textContent = l.text;
-    const tag = paneTag(l);
-    if (tag) { d.classList.add('said'); if (l.failed) d.classList.add('failed'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
-    if (l.clipped) d.insertAdjacentHTML('beforeend', '<span class="clipped" title="Orca or Jarvis shortened this text">clipped</span>');
-    paneLines.appendChild(d);
+    paneList.append(paneRow(l), { force: l.role === 'user pending', rise });
   }
   while (paneLines.children.length > PANE_MAX) (paneLines.firstChild.matches('.rdetail') ? paneLines.children[1] : paneLines.firstChild).remove();
-  if (atBottom) paneLog.scrollTop = paneLog.scrollHeight;
+  paintSpeakers(); // a message read aloud before the pane closed shows its place again
+}
+// One pane line. A message from the owner or the worker is the chat's own row (web/chatview.js chatLine): his bubble
+// with its pictures on the right, the worker's markdown on the left, copy and read aloud under it. The read line stays
+// hidden. Any other line (a terminal screen) keeps its own look.
+function paneRow(l) {
+  if (l.kind === 'event') { const d = document.createElement('div'); d.className = 'pl wake'; d.textContent = l.text; return d; } // what jarvisd did to the session, such as a resume
+  const agent = l.role === 'agent', own = l.role.startsWith('user');
+  const text = own ? withoutReadLine(l.text) : l.text;
+  // A worker's message with words to read has the speaker button. Its key names the row and the line (speakKey).
+  const speak = agent && l.clips && pane.id ? { id: `${encodeURIComponent(pane.id)}/${encodeURIComponent(l.id)}`, clips: l.clips } : null;
+  const line = agent || own
+    ? chatLine({ role: own ? 'owner' : 'agent', text, bodyHtml: agent ? markdown(l.text, shot) : '', esc, render, speak, pending: l.role === 'user pending' })
+    : messageRow({ lineClass: 'line', bodyClass: `pl ${l.role}`, bodyHtml: esc(l.text), text });
+  if (l.role === 'user pending') line.dataset.sent = text;
+  const d = line.firstElementChild, tag = paneTag(l);
+  if (tag) { d.classList.add('said'); d.insertAdjacentHTML('afterbegin', `<div class="pl-tag">${esc(tag)}</div>`); }
+  if (l.clipped) d.insertAdjacentHTML('beforeend', '<span class="clipped" title="Jarvis shortened this text">clipped</span>');
+  return line;
 }
 // Tool rows between two messages share one fold, which keeps growing while the worker keeps working.
 function addToolRow(text) {
@@ -1267,20 +1369,22 @@ function addToolRow(text) {
     run = document.createElement('div');
     run.className = 'fold tool-run';
     run.innerHTML = toolRunHtml();
-    paneLines.appendChild(run);
+    paneList.append(run, { rise: false });
   }
   const calls = run.querySelector('.fold-calls'), row = document.createElement('div');
   row.className = 'pl tool'; row.textContent = text; row.title = text;
   calls.appendChild(row);
   run.querySelector('.t').textContent = toolRunSummary([...calls.children].map(c => c.textContent));
 }
-paneLines.addEventListener('click', e => {
+// What a click in the pane does beyond the shared list's copy, read aloud and tap: a tool run folds open or shut.
+function paneClick(e) {
   const b = e.target.closest('.fold-toggle');
-  if (!b) return;
+  if (!b) return false;
   const open = b.getAttribute('aria-expanded') !== 'true';
   b.setAttribute('aria-expanded', String(open));
   b.nextElementSibling.hidden = !open;
-});
+  return true;
+}
 $('pane-back').onclick = () => {
   if (term) return closeTerm();
   if (!report.id) return closePane();
@@ -1343,6 +1447,8 @@ function reportRoute(fromApp) {
   const drawer = report.drawer;
   hideReport();
   closePane();
+  // A report opened from an ask card or its push: closing it shows that ask again.
+  if (askAfterReport) { const id = askAfterReport; askAfterReport = null; return showItem(id); }
   if (drawer && !wide.matches) panel(true); // on a phone the list is a drawer, and Back from a worker's report means back to it
 }
 $('reportsbtn').onclick = () => { showMenu(false); location.hash = docHref(''); };
@@ -1383,7 +1489,7 @@ try { if (localStorage.getItem('workCollapsed')) document.body.classList.add('ra
 railbtn.onclick = () => wide.matches ? collapse(!document.body.classList.contains('rail-closed')) : panel(!document.body.classList.contains('panel-open'));
 // On a phone a sideways swipe does the same. touchcancel forgets it: iOS sends that when its own back gesture takes over.
 let swipeFrom = null;
-const swipeBlocked = () => popOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('shell').hidden || !$('newpick').hidden || !getSelection().isCollapsed;
+const swipeBlocked = () => popOpen || viewer.classList.contains('open') || !$('audit').hidden || !$('newpick').hidden || !getSelection().isCollapsed;
 document.addEventListener('touchstart', e => {
   swipeFrom = e.touches.length === 1 && !wide.matches && !swipeBlocked() && !e.target.closest?.(SWIPE_IGNORE) ? { startX: e.touches[0].clientX, startY: e.touches[0].clientY } : null;
 }, { passive: true });
@@ -1396,7 +1502,6 @@ document.addEventListener('touchend', e => {
 document.addEventListener('touchcancel', () => { swipeFrom = null; }, { passive: true });
 // Back to the main conversation from a worker, from anywhere in the list.
 $('tojarvis').onclick = () => { closePane(); panel(false); };
-reportRoute(false);
 $('scrim').onclick = () => { panel(false); setPop(null); if (modelPicker.isOpen) modelPicker.open(false); };
 // ---- a project terminal (web/terminal.js, daemon/terminal.ts): fills the center. Back leaves it running, End kills it. ----
 const termEl = $('term'), termHost = $('term-host'), termIn = $('term-input');
@@ -1419,6 +1524,7 @@ function openTerm(o) {
   termEl.hidden = false;
   termEl.classList.toggle('mac', onMac);
   document.body.classList.add('pane-open', 'term-open');
+  backNav.opened();
   $('pane-open').hidden = $('pane-desktop').hidden = $('pane-stop').hidden = true;
   $('pane-back-label').textContent = 'Jarvis';
   $('term-status').innerHTML = '';
@@ -1603,98 +1709,148 @@ np.onsubmit = async e => {
     if (row) openRow(row);
   } finally { npBusy = false; if (!np.hidden) npRender(); }
 };
-// The newest finished worker, until dismissed. Quiet: no sound, no push, nothing to the brain.
-const doneline = $('doneline');
-const dismissed = new Set(JSON.parse(localStorage.getItem('doneDismissed') || '[]'));
-function showDone() {
-  const d = (work.done || []).find(x => !dismissed.has(x.dispatch));
-  doneline.hidden = !d;
-  if (!d) return;
-  const pr = d.url ? ` · <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.pr)}</a>` : d.pr && !d.subject.includes(d.pr) ? ` · ${esc(d.pr)}` : '';
-  doneline.querySelector('.txt').innerHTML = `<b>Done:</b> ${esc(d.subject)}${pr}`;
-  doneline.querySelector('.txt').title = d.subject;
-  doneline.querySelector('button').onclick = () => { dismissed.add(d.dispatch); localStorage.setItem('doneDismissed', JSON.stringify([...dismissed].slice(-50))); showDone(); };
-}
-
-// ---- attached pictures: uploaded on send, then passed to Jarvis as one [image: path] line each ----
-const IMAGE_OK = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], IMAGE_MAX = 10 * 1024 * 1024;
-const fileIn = $('file'), pending = $('pending');
-let attached = []; // { file, el } in the order the owner added them
-// The plus button. Today it only opens the photo picker; later this becomes the popover with more actions.
-function openAddMenu() { fileIn.click(); }
-$('add').onclick = openAddMenu;
-fileIn.onchange = () => {
-  const files = [...fileIn.files];
-  fileIn.value = '';
-  files.forEach(attach);
-};
-// A picture pasted into the box takes the same path as the picker. Text on the clipboard wins,
-// so a copy that carries both (a spreadsheet range, a rich-text snippet) still pastes as text.
-t.addEventListener('paste', e => {
-  if (pasteText(e, t)) return;
-  const cb = e.clipboardData;
-  if (!cb) return;
-  // items rather than files: some phone browsers expose a pasted photo only as a file item
-  const files = [...cb.items].filter(i => i.kind === 'file' && i.type.startsWith('image/')).map(i => i.getAsFile()).filter(Boolean);
-  if (!files.length) return;
-  e.preventDefault();
-  files.forEach(attach);
-});
-for (const box of [$('steer-text')]) box.addEventListener('paste', e => pasteText(e, box));
-function attach(f) {
-  const name = f.name || 'the pasted picture';
-  if (!IMAGE_OK.includes(f.type)) return add('event', `Can't attach ${name}: only png, jpg, webp and gif.`);
-  if (f.size > IMAGE_MAX) return add('event', `Can't attach ${name}: larger than 10 MB.`);
-  const el = document.createElement('div');
-  el.className = 'thumb';
-  el.innerHTML = '<img alt=""><button type="button" aria-label="Remove picture"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>';
-  el.querySelector('img').src = URL.createObjectURL(f);
-  const item = { file: f, el };
-  el.querySelector('button').onclick = () => unattach(item);
-  attached.push(item);
-  pending.append(el);
-  idleLabel();
-}
-function unattach(item) {
-  URL.revokeObjectURL(item.el.querySelector('img').src);
-  item.el.remove();
-  attached = attached.filter(a => a !== item);
-  idleLabel();
-}
-
-// ---- text ----
-let sending = false;
-async function sendText() {
-  const text = t.value.trim();
-  if ((!text && !attached.length) || sending) return;
-  sending = true;
-  try {
-    // Upload all of them before sending anything, so a failed upload keeps the text and every picture in the box.
-    const lines = [];
-    for (const { file } of attached) {
-      const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type }, body: file });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) return add('event', `Picture not sent: ${j.error || r.status}`);
-      lines.push(`[image: ${j.path}]`);
-    }
-    t.value = '';
-    [...attached].forEach(unattach);
+// ---- the chat's box: the same chat as a worker's pane (web/chatview.js makeChat), with its own send target ----
+// Its send clears the box at once, then posts to the brain, with the message it answers. A dictation goes to
+// /api/voice: the text in the box goes in front of the words and the attached pictures after them (web/dictate.js,
+// web/compose.js). The box and the tray clear only once the daemon has sent it. Hands-free shares the mic's stream.
+const MIC = { audio: { echoCancellation: true, noiseSuppression: true } };
+let stream, micHint = '';
+const chat = makeChat({
+  parts: chatEls, handsFree: true, upload: uploadPicture, pasteText, openViewer: (src, item) => openViewer(src, item),
+  notify: text => add('event', text), onError: text => add('event', text), onChange: () => idleLabel(),
+  send: async (message, { clear }) => {
+    clear();
     const reply = replyTo?.id;
     cancelReply();
-    await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: [text, ...lines].filter(Boolean).join('\n'), replyTo: reply }) });
-  } catch (err) { add('event', 'Send failed: ' + err.message); }
-  finally { sending = false; idleLabel(); fit(); }
+    await fetch('/api/send', { method: 'POST', body: JSON.stringify({ text: message, replyTo: reply }) });
+    return true;
+  },
+  getStream: async () => (stream ||= await navigator.mediaDevices.getUserMedia(MIC)),
+  onStart: () => bargeIn(), // talking over Jarvis stops it
+  onHint: hint => { micHint = hint; showHands(); },
+  onClip: async blob => {
+    try {
+      // A dictation while the reply strip is open answers that message.
+      const reply = replyTo?.id, typed = t.value;
+      let j = {};
+      const went = await sendOut({ tray: chatBox.items(), upload: uploadPicture, post: async lines => {
+        const q = imageParams(new URLSearchParams(), lines);
+        if (reply) q.set('replyTo', reply);
+        if (typed.trim()) q.set('typed', typed);
+        const r = await fetch(String(q) ? `/api/voice?${q}` : '/api/voice', { method: 'POST', body: blob });
+        j = await r.json();
+        if (!r.ok) throw new Error(j.error || r.status);
+        return !!j.sent;
+      } });
+      went.forEach(chatBox.unattach);
+      if (!j.text) add('event', "Didn't catch that.");
+      else {
+        if (typed.trim()) { t.value = boxAfterSend(t.value, typed); chat.changed(); fit(); }
+        if (replyTo?.id === reply) cancelReply();
+      }
+    } catch (err) { add('event', 'Voice upload failed: ' + err.message); }
+  },
+});
+const chatBox = chat.composer, chatMic = chat.mic, fit = chat.fit;
+
+// ---- the big viewer. For a picture in the box it also has a pen: the marks go into the picture that is sent ----
+const vImg = viewer.querySelector('img'), vCanvas = viewer.querySelector('canvas'), inkBar = viewer.querySelector('.ink-bar');
+let editing = null, ink = null, inkColor = INK[0], drawingWith = null;
+inkBar.querySelector('.ink-colors').innerHTML = INK.map((c, i) =>
+  `<button type="button" class="ink-color" data-color="${c}" style="--c:${c}" aria-label="${i ? 'Yellow' : 'Red'} pen" aria-pressed="${!i}" title="${i ? 'Yellow' : 'Red'}"></button>`).join('');
+function openViewer(src, item) {
+  editing = item ?? null;
+  viewer.classList.toggle('edit', !!editing);
+  inkBar.hidden = !editing;
+  vCanvas.hidden = !editing;
+  if (editing) {
+    ink = makeInk(editing.strokes);
+    const ready = () => { vCanvas.width = vImg.naturalWidth; vCanvas.height = vImg.naturalHeight; redraw(); };
+    vImg.onload = ready;
+  } else vImg.onload = null;
+  vImg.src = src;
+  viewer.classList.add('open');
+  viewer.querySelector(editing ? '.ink-done' : '.v-close').focus({ preventScroll: true });
 }
-$('f').onsubmit = e => { e.preventDefault(); sendText(); };
-t.onkeydown = e => { if (enterSends(e)) { e.preventDefault(); sendText().then(idleLabel); } };
+function redraw() {
+  const ctx = vCanvas.getContext('2d');
+  ctx.clearRect(0, 0, vCanvas.width, vCanvas.height);
+  paint(ctx, ink.strokes);
+  inkBar.querySelector('.ink-undo').disabled = !ink.canUndo;
+  inkBar.querySelector('.ink-clear').disabled = !ink.strokes.length;
+}
+// Closing saves: a picture with marks is replaced, in the box and for the send, by one with the marks drawn in.
+function closeViewer() {
+  if (editing) saveMarks(editing, ink.strokes);
+  editing = ink = drawingWith = null;
+  viewer.classList.remove('open', 'edit');
+  vImg.onload = null;
+  vImg.removeAttribute('src');
+}
+function saveMarks(item, strokes) {
+  if (strokes === item.strokes) return;
+  item.strokes = strokes;
+  const img = new Image();
+  img.src = item.baseUrl;
+  item.ready = img.decode()
+    .then(() => strokes.length ? exportMarked(img, strokes, IMAGE_MAX) : item.base)
+    .then(file => {
+      if (item.markedUrl) URL.revokeObjectURL(item.markedUrl);
+      item.markedUrl = file === item.base ? null : URL.createObjectURL(file);
+      item.file = file;
+      delete item.path; // a path from an earlier upload holds the picture without these marks
+      item.el.querySelector('img').src = item.markedUrl ?? item.baseUrl;
+      item.el.classList.toggle('marked', !!item.markedUrl);
+    })
+    .catch(err => add('event', 'Marks not saved: ' + err.message));
+}
+// A tap on the dark area closes. On a picture in the box only the buttons close, so a stroke that ends off the picture cannot.
+viewer.addEventListener('click', e => {
+  if (e.target.closest('.v-close, .ink-done') || (!editing && !e.target.closest('.ink-bar'))) closeViewer();
+});
+inkBar.addEventListener('click', e => {
+  const c = e.target.closest('.ink-color');
+  if (c) { inkColor = c.dataset.color; for (const b of inkBar.querySelectorAll('.ink-color')) b.setAttribute('aria-pressed', b === c); }
+  if (e.target.closest('.ink-undo')) { ink.undo(); redraw(); }
+  if (e.target.closest('.ink-clear')) { ink.clear(); redraw(); }
+});
+// Pointer events cover a mouse, a finger and a pen. The line is about 4 screen pixels wide at any picture size.
+const inkPoint = e => toImagePoint(e.clientX, e.clientY, vCanvas.getBoundingClientRect(), vCanvas.width, vCanvas.height);
+vCanvas.addEventListener('pointerdown', e => {
+  if (!ink || drawingWith !== null || !vCanvas.width) return;
+  e.preventDefault();
+  drawingWith = e.pointerId;
+  vCanvas.setPointerCapture(e.pointerId);
+  ink.begin(inkPoint(e), inkColor, Math.max(2, 4 * vCanvas.width / vCanvas.getBoundingClientRect().width));
+  redraw();
+});
+vCanvas.addEventListener('pointermove', e => {
+  if (e.pointerId !== drawingWith) return;
+  const all = e.getCoalescedEvents?.(); // can be empty, for example for an event a script sends
+  for (const p of all?.length ? all : [e]) ink.move(inkPoint(p));
+  redraw();
+});
+const endStroke = e => { if (e.pointerId === drawingWith) drawingWith = null; };
+vCanvas.addEventListener('pointerup', endStroke);
+vCanvas.addEventListener('pointercancel', endStroke);
+
+// ---- text ----
+// One attached picture to the daemon. The path it returns goes in the message as an `[image: path]` line.
+async function uploadPicture(file) {
+  const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type }, body: file });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`picture not uploaded (${j.error || r.status})`);
+  return j.path;
+}
+// Every send takes the attached pictures through sendOut (web/compose.js): Send and Enter (chat.send, web/chatview.js),
+// the mic dictation (onClip above) and a hands-free clip (sendClip). `settle` is for a tap on Send (settleBox).
+const sendText = settle => chat.send(settle);
 
 // ---- the pill's two right-hand buttons: the mic dictates, the wave starts hands-free or, with something to send, sends ----
-const HOLD_MS = 300;
-const MIC = { audio: { echoCancellation: true, noiseSuppression: true } };
 const bar = $('bar'), wave = $('wave');
-const DICTATE = 'Dictate: hold to talk, or tap to start and tap again to send';
-let rec, chunks = [], stream, pressedAt = 0, holding = false, latched = false;
-const hasSend = () => !!(t.value.trim() || attached.length || hands?.utt); // while hands-free hears the owner, a tap sends what it heard
+let todayHolding = false; // the Today popup's mic has the microphone (makeTodayPop holdMic)
+const dictating = () => chatMic.held() || todayHolding;
+const hasSend = () => !!(t.value.trim() || chatBox.items().length || hands?.utt); // while hands-free hears the owner, a tap sends what it heard
 const idleLabel = () => {
   const send = hasSend();
   wave.classList.toggle('send', send);
@@ -1702,83 +1858,8 @@ const idleLabel = () => {
   wave.setAttribute('aria-label', send ? 'Send' : hands ? 'Back to the voice bar' : 'Start hands-free');
   wave.title = send ? 'Send' : 'Hands-free';
 };
-t.addEventListener('input', idleLabel);
-// The box grows with what is typed (up to its max-height), since the pill's buttons leave it narrow on a phone.
-const fit = () => { t.style.height = 'auto'; if (t.value) t.style.height = t.scrollHeight + 'px'; };
-t.addEventListener('input', fit);
-function showRec(hint) { mic.classList.add('rec'); mic.setAttribute('aria-label', 'Listening, tap to send'); t.placeholder = hint; }
-// Stops a dictation. `keep` sends the clip to /api/voice; false drops it.
-function stopRec(keep) {
-  latched = false;
-  if (rec && rec.state === 'recording') { rec.keep = keep; rec.stop(); }
-  mic.classList.remove('rec');
-  mic.setAttribute('aria-label', DICTATE);
-  showHands();
-}
-async function startRec() {
-  bargeIn(); // talking over Jarvis stops it
-  try {
-    stream = stream || await navigator.mediaDevices.getUserMedia(MIC);
-  } catch (err) { latched = false; holding = false; mic.classList.remove('rec'); showHands(); add('event', 'Microphone unavailable: ' + err.message); return; }
-  if (!holding && !latched) return; // released, or cancelled, while the permission prompt was open
-  chunks = [];
-  rec = new MediaRecorder(stream);
-  rec.ondataavailable = ev => ev.data.size && chunks.push(ev.data);
-  rec.onstop = () => { if (rec.keep) upload(); };
-  rec.start();
-}
-// Hold the mic to talk and release to send, as before. A short tap starts a dictation that the next tap sends.
-async function press(e) {
-  e.preventDefault();
-  if (latched) { stopRec(true); return; }
-  mic.setPointerCapture(e.pointerId); // a drifting thumb keeps recording until it lifts
-  pressedAt = Date.now();
-  holding = true;
-  setTimeout(() => { if (holding) showRec('Listening… release to send'); }, HOLD_MS);
-  await startRec();
-}
-function release(e) {
-  e && e.preventDefault();
-  if (!holding) return;
-  holding = false;
-  if (Date.now() - pressedAt < HOLD_MS) { latched = true; showRec('Listening… tap the mic to send'); return; }
-  stopRec(true);
-}
-async function upload() {
-  const blob = new Blob(chunks, { type: rec.mimeType });
-  if (blob.size < 2000) return;
-  mic.classList.add('busy');
-  try {
-    // A dictation while the reply strip is open answers that message. Text in the box goes in front of the words
-    // (web/dictate.js), and the box clears only once the daemon has sent the message.
-    const reply = replyTo?.id, typed = t.value;
-    const q = new URLSearchParams();
-    if (reply) q.set('replyTo', reply);
-    if (typed.trim()) q.set('typed', typed);
-    const r = await fetch(String(q) ? `/api/voice?${q}` : '/api/voice', { method: 'POST', body: blob });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.status);
-    if (!j.text) add('event', "Didn't catch that.");
-    else {
-      if (typed.trim()) { t.value = boxAfterSend(t.value, typed); idleLabel(); fit(); }
-      if (replyTo?.id === reply) cancelReply();
-    }
-  } catch (err) { add('event', 'Voice upload failed: ' + err.message); }
-  mic.classList.remove('busy');
-}
-mic.addEventListener('pointerdown', press);
-mic.addEventListener('pointerup', release);
-mic.addEventListener('pointercancel', release);
-mic.addEventListener('contextmenu', e => e.preventDefault());
-// Keyboard Enter or Space on the mic: the first starts a dictation, the second sends it.
-mic.addEventListener('click', e => {
-  if (e.detail !== 0) return;
-  if (latched) return stopRec(true);
-  latched = true; showRec('Listening… press again to send'); startRec();
-});
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && latched) stopRec(false); }); // Escape drops a dictation
 wave.addEventListener('click', () => {
-  if (hasSend()) { if (hands?.utt) finishClip(hands); sendText().then(idleLabel); return; }
+  if (hasSend()) { if (hands?.utt) finishClip(hands); sendText(true).then(idleLabel); return; }
   keyboardView = false;
   if (!handsWanted) { handsWanted = true; localStorage.setItem('hands', 'on'); handsOn(); }
   showHands();
@@ -1813,7 +1894,7 @@ function showHands() {
   voiceLabel.textContent = voiceNote || state;
   voiceState.dataset.state = !hands ? 'idle' : hands.utt ? 'heard' : speaking() ? 'speaking' : 'listening';
   t.placeholder = voiceNote || (!hands ? 'Message Jarvis' : hands.ctx.state === 'running' ? 'Listening… or type' : 'Tap anywhere to start listening');
-  if (mic.classList.contains('rec')) t.placeholder = latched ? 'Listening… tap the mic to send' : 'Listening… release to send';
+  if (micHint) t.placeholder = micHint; // a dictation says what the mic does now (web/mic.js)
   idleLabel();
 }
 async function handsOn() {
@@ -1850,7 +1931,7 @@ function handsOff(why) {
     hands.lock?.release().catch(() => {});
     hands = null;
   }
-  if (stream && !holding) { stream.getTracks().forEach(x => x.stop()); stream = null; }
+  if (stream && !dictating()) { stream.getTracks().forEach(x => x.stop()); stream = null; }
   if (why) { add('event', why); handsWanted = false; localStorage.setItem('hands', 'off'); }
   showHands();
 }
@@ -1863,7 +1944,7 @@ function feed(h, block) {
   }
 }
 function frame(h, f) {
-  if (holding || latched) { h.seg.reset(); h.utt = null; h.ring.length = 0; return; } // a dictation has the mic
+  if (dictating() || paneMic.active()) { h.seg.reset(); h.utt = null; h.ring.length = 0; return; } // a dictation has the mic
   const playing = !player.paused;
   const ev = h.seg.push(levelDb(f), { playing });
   if (h.utt) h.utt.push(f);
@@ -1888,9 +1969,16 @@ async function sendClip(frames, rate, barge) {
   frames.reduce((o, f) => (all.set(f, o), o + f.length), 0);
   mic.classList.add('busy');
   try {
-    const r = await fetch(`/api/voice?mode=listen&barge=${barge ? 1 : 0}`, { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: encodeWav(all, rate) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.status);
+    // A clip Jarvis keeps takes the attached pictures. A clip it drops (no wake word) leaves them in the tray.
+    let j = {};
+    const went = await sendOut({ tray: chatBox.items(), upload: uploadPicture, post: async lines => {
+      const q = imageParams(new URLSearchParams({ mode: 'listen', barge: barge ? '1' : '0' }), lines);
+      const r = await fetch(`/api/voice?${q}`, { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: encodeWav(all, rate) });
+      j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.status);
+      return !!j.kept;
+    } });
+    went.forEach(chatBox.unattach);
     // Clips not meant for Jarvis leave no trace in the chat; the placeholder says why for a moment.
     if (!j.kept && hands && j.why === 'no wake word') { voiceNote = 'Not for Jarvis (no wake word)'; showHands(); clearTimeout(voiceNoteTimer); voiceNoteTimer = setTimeout(() => { voiceNote = ''; showHands(); }, 2000); }
   } catch (err) { add('event', 'Voice upload failed: ' + err.message); }
@@ -1915,6 +2003,30 @@ document.addEventListener('visibilitychange', async () => {
 showHands();
 if (handsWanted) handsOn();
 
+// ---- new web code: reload when the owner is idle (web/reload.js) ----
+const typed = makeTyped();
+let lastInput = 0;
+document.addEventListener('input', e => { if (e.isTrusted && e.target.matches?.('input, textarea, [contenteditable]')) typed.input(e.target); }, true);
+for (const ev of ['keydown', 'pointerdown']) document.addEventListener(ev, () => { lastInput = Date.now(); }, true);
+const reloader = makeReloader({
+  // reload() keeps the address, so the open report (the hash) comes back.
+  reload: () => location.reload(),
+  busy: () => busyReason({
+    active: document.activeElement, typed,
+    recording: chatMic.active() || todayHolding || !!hands?.utt || paneMic.active(),
+    overlay: !!popOpen || overlayOpen(),
+    quietFor: Date.now() - lastInput,
+  }),
+  button: show => { $('reload-btn').hidden = !show; },
+});
+$('reload-btn').onclick = () => location.reload();
+// The phone app can sleep in the background with its stream dead. On resume it asks for the version itself.
+async function checkVersion() {
+  try { const r = await fetch('/api/version'); if (r.ok) reloader.seen((await r.json()).version); } catch { /* offline: the stream's reconnect sends it */ }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkVersion(); });
+addEventListener('pageshow', e => { if (e.persisted) checkVersion(); });
+
 renderRequests();
 renderMessages();
 connect();
@@ -1922,7 +2034,13 @@ connect();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 // ---- push alerts: Jarvis notifies this device about unanswered asks and urgent news when the app is closed ----
 let wantItem = new URLSearchParams(location.search).get('item');
-if (wantItem) history.replaceState(null, '', '/');
+// An ask's push with a report opens /?item=<id>#reports/<path>: the report shows first, and the ask when it closes.
+if (wantItem && docRoute(location.hash)) { askAfterReport = wantItem; wantItem = null; }
+if (wantItem || askAfterReport) {
+  const at = new URL(location.href);
+  at.searchParams.delete('item');
+  history.replaceState(null, '', at.pathname + at.search + at.hash);
+}
 // A tapped notification opens /?item=<message id>. An open ask or email opens in its popup; an event line is scrolled to and marked.
 function showItem(id) {
   if (id.startsWith('gmail:')) {
@@ -1942,7 +2060,7 @@ function showItem(id) {
   el.classList.add('focus');
   const head = el.closest('.fold')?.querySelector('.fold-head');
   if (head?.getAttribute('aria-expanded') === 'false') toggleFold(head);
-  pinned = false;
+  chatList.unpin();
   setPop(null);
   el.scrollIntoView({ block: 'center' });
 }
@@ -1977,8 +2095,17 @@ if (pushReady) {
   alertsBtn.hidden = false;
   // Re-send an existing subscription on every load, so the daemon has it even after its database was reset.
   showAlerts().then(sub => sub && postSub(sub)).catch(() => {});
-  navigator.serviceWorker.addEventListener('message', e => { if (e.data?.type === 'item') showItem(e.data.id); });
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type !== 'item') return;
+    if (docRoute(e.data.hash) === undefined) return showItem(e.data.id);
+    setPop(null);
+    askAfterReport = e.data.id;
+    location.hash = e.data.hash;
+  });
 }
+// A page opened at a report's address (#report/<id>, #reports/<path>) shows it. Last, so every `let` it reaches exists:
+// above the terminal's `let term`, a report opened by its address threw and stopped the rest of this script.
+reportRoute(false);
 </script>
 </body>
 </html>

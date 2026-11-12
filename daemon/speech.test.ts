@@ -134,3 +134,19 @@ test('two requests for one clip share a render, and a failed render is tried aga
   assert.equal(await onceAtATime(running, 'k', work), 'x.m4a');
   assert.equal(renders, 2);
 });
+
+test('each clip reports play, a stall, end and error, so a glitch on the phone has a record', () => {
+  const audio: any = { src: '', currentTime: 0, duration: 2.5, play() { return Promise.resolve(); }, pause() {} };
+  const events: any[] = [];
+  const speech = makeSpeech({ audio, clipUrl: (t: number, i: number) => `${t}/${i}`, report: (e: any) => events.push(e) });
+  speech.live(4, 3, 0);
+  audio.onloadedmetadata(); audio.onplaying();
+  audio.currentTime = 1.2; audio.onwaiting();
+  audio.onended();
+  audio.error = { code: 4 }; audio.onerror();
+  audio.onloadedmetadata(); audio.onplaying();
+  speech.toggle(4, 3);
+  assert.deepEqual(events.map(e => [e.ev, e.turn, e.i]), [['play', 4, 0], ['wait', 4, 0], ['end', 4, 0], ['error', 4, 1], ['play', 4, 2], ['stop', 4, 2]]);
+  assert.equal(events[0].dur, 2.5);
+  assert.equal(events[3].code, 4);
+});

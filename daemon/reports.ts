@@ -1,5 +1,6 @@
 import { realpathSync, statSync, readFileSync, readdirSync, mkdirSync } from 'node:fs';
-import { join, extname, sep, basename } from 'node:path';
+import { join, extname, sep, basename, dirname, resolve } from 'node:path';
+import type { RouteResult } from './route.ts';
 
 // Long documents for the owner to read in the app: story drafts, worker reports, research. The brain and workers write
 // markdown files here, and the chat links one with a `[report: /abs/path.md]` line. Only this folder is served.
@@ -64,4 +65,47 @@ export function readReport(path: string, dir: string): (ReportEntry & { body: st
     const body = readFileSync(real, 'utf8');
     return { path, title: reportTitle(body, real), at: statSync(real).mtime.toISOString(), body };
   } catch { return; }
+}
+
+// A picture a report shows: `![alt](path)` (with an optional "title"), or an `[image: /abs/path]` line.
+const PICTURE = /!\[[^\]\n]*\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"\n]*")?\s*\)|\[image:\s*([^\]\n]+?)\s*\]/g;
+
+/** What an ask card and a request row show of a report: its title, its first picture and how many it has. */
+export type ReportSummary = { path: string; title: string; image?: string; pictures: number };
+
+/**
+ * The summary of one report in `dir`, or undefined when the path is outside it or not a .md file. A relative picture
+ * path is read against the report's folder, as the report page does. `shown` says whether /image serves a picture,
+ * and only those count.
+ */
+export function reportSummary(path: string, dir: string, shown: (path: string) => boolean): ReportSummary | undefined {
+  const r = readReport(path, dir);
+  if (!r) return;
+  const folder = dirname(path);
+  const lines = r.body.split(/\r?\n/);
+  let fence: string | null = null;
+  const pictures: string[] = [];
+  for (const line of lines) {
+    const f = FENCE.exec(line);
+    if (fence) { if (line.trimStart().startsWith(fence)) fence = null; continue; }
+    if (f) { fence = f[1]; continue; }
+    for (const m of line.matchAll(PICTURE)) {
+      const p = (m[1] ?? m[2]).trim();
+      if (/^[a-z][a-z0-9+.-]*:/i.test(p)) continue; // a web address or another scheme is not a file here
+      const abs = resolve(folder, p);
+      if (shown(abs) && !pictures.includes(abs)) pictures.push(abs);
+    }
+  }
+  return { path, title: r.title, ...(pictures[0] ? { image: pictures[0] } : {}), pictures: pictures.length };
+}
+
+/** Long documents in data/reports, read-only. A path outside that folder, or not a .md file, is refused. */
+export function reportsRoute(dir: string, method: string, url: string, query: URLSearchParams): RouteResult | undefined {
+  if (method !== 'GET') return undefined;
+  if (url === '/api/reports') return { status: 200, body: listReports(dir) };
+  if (url === '/api/reports/file') {
+    const r = readReport(query.get('path') ?? '', dir);
+    return r ? { status: 200, body: r } : { status: 404, body: { error: 'Only .md files in data/reports can be opened.' } };
+  }
+  return undefined;
 }
