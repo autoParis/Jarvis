@@ -59,6 +59,8 @@ import { quoteOf, quoteLine, replyIdOf, type TurnRow } from '../daemon/quote.ts'
 const CLOSED = process.env.PREVIEW_CLOSED ? JSON.parse(readFileSync(process.env.PREVIEW_CLOSED, 'utf8')) : undefined;
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const PORT = Number(process.env.PREVIEW_PORT ?? 7718);
+/** The story queue the Today scene shows above its list (stories.ts view). */
+const SAMPLE_QUEUE = { stories: [{ number: 4890, topic: 'Extension: photos missing on publish' }, { number: 4871, topic: 'Muse reply language' }, { number: 4866, topic: 'Marketplace price sync' }], running: [{ number: 4812, worker: 'a' }, { number: 4840, worker: 'b' }, { number: 4855, worker: 'c' }], max: 3, hours: { zone: 'America/Toronto', start: 8, end: 16, open: true } };
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 /** A database time, `min` minutes ago. */
@@ -357,7 +359,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET') {
     if (url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-      res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows), done: scene.done }, hidden: scene.hidden, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows), done: scene.done }, hidden: scene.hidden, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), stories: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'today' ? SAMPLE_QUEUE : undefined, migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
       clients.add(res);
       req.on('close', () => clients.delete(res));
       return;

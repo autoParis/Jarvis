@@ -38,3 +38,11 @@ export const CLIENT_WORD = env.JARVIS_CLIENT_WORD?.trim() || 'client';
 export const CLIENTS_WORD = env.JARVIS_CLIENTS_WORD?.trim() || 'clients';
 /** Refs whose merged branches count as delivered, besides master, such as an archived history kept only on this Mac. */
 export const DONE_REFS = list(env.JARVIS_DONE_REFS).filter(r => /^[\w./-]+$/.test(r) && !r.startsWith('-'));
+/** The story queue (stories.ts): jarvisd starts queued stories only from STORY_START_HOUR to STORY_END_HOUR (end not
+ * included) on the clock of STORY_ZONE, and only while fewer than STORY_MAX story workers run. */
+const hour = (v: string | undefined, d: number) => { const n = Number(v); return v?.trim() && Number.isInteger(n) && n >= 0 && n <= 24 ? n : d; };
+export const STORY_ZONE = env.JARVIS_STORY_ZONE?.trim() || 'America/Toronto';
+export const STORY_START_HOUR = hour(env.JARVIS_STORY_START_HOUR, 8);
+export const STORY_END_HOUR = hour(env.JARVIS_STORY_END_HOUR, 16);
+const max = Number(env.JARVIS_STORY_MAX);
+export const STORY_MAX = env.JARVIS_STORY_MAX?.trim() && Number.isInteger(max) && max >= 0 ? max : 3;

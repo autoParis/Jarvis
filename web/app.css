@@ -227,6 +227,13 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 #today-go[aria-pressed="true"] { background: var(--need); border-color: var(--need); color: var(--on-need); }
 #today-err { flex: none; padding: 8px 14px; font-size: 13px; color: var(--bad); }
 #today-list { padding: 4px 6px 12px; gap: 4px; }
+#today-queue { flex: none; padding: 8px 16px 10px; border-bottom: 1px solid var(--pop-line); font-size: 13px; }
+.tq-head { margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.tq-head span, .tq-empty { color: var(--muted); }
+.tq-list { margin: 0; padding-left: 20px; max-height: 7.5em; overflow-y: auto; }
+.tq-list li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+.tq-n { font-variant-numeric: tabular-nums; font-weight: 600; }
+.tq-empty { margin: 0; }
 .t-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .t-item { border-radius: var(--r-s); }
 .t-item.open { background: var(--raised); margin: 2px 0; }

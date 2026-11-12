@@ -81,6 +81,7 @@
       <button type="button" id="today-go" aria-pressed="false" title="Run this on its own when Jarvis can write the spec without guessing. Nothing outward runs without your tap.">Go</button>
     </form>
     <p id="today-err" role="alert" hidden></p>
+    <div id="today-queue" aria-label="Story queue" hidden></div>
     <div class="pop-body" id="today-list"></div>
   </section>
   <div id="chat">
@@ -177,7 +178,7 @@ import { makeSpeech } from '/speech.js';
 import { enterSends } from '/enterkey.js';
 import { makeScreen, feed as feedScreen, screenText } from '/shell.js';
 import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
-import { todayButton, makeTodayPop } from '/today.js';
+import { todayButton, makeTodayPop, queueHtml } from '/today.js';
 import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
 import { boxAfterSend } from '/dictate.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
@@ -914,6 +915,7 @@ function connect() {
     else if (e.type === 'requests') showRequests(e.requests);
     else if (e.type === 'messages') showMessages(e.messages);
     else if (e.type === 'today') today.show(e.today);
+    else if (e.type === 'stories') showQueue(e.stories);
     else if (e.type === 'migration') migration.show(e.migration);
     else if (e.type === 'brain') modelPicker.show(e.brain);
     else if (e.type === 'audio') {
@@ -922,9 +924,16 @@ function connect() {
     }
   };
 }
+/** The story queue above the Today list (stories.ts). Hidden when empty and nothing runs. */
+function showQueue(v) {
+  const html = queueHtml(v);
+  $('today-queue').innerHTML = html;
+  $('today-queue').hidden = !html;
+}
 function showHistory(e) {
   uiSession = e.session || '';
   today.show(e.today || []);
+  showQueue(e.stories);
   migration.show(e.migration || { people: [], dealers: [] });
   modelPicker.show(e.brain);
   $('chat-working').hidden = !e.busy;

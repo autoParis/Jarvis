@@ -82,6 +82,15 @@ export function todayListHtml(list, s = {}, now = Date.now()) {
   return moved + rows + history;
 }
 
+const hourWords = h => h === 0 || h === 24 ? 'midnight' : h === 12 ? 'noon' : h < 12 ? `${h} AM` : `${h - 12} PM`;
+/** The story queue from daemon/stories.ts, above the list: the next stories in order and the slots in use. Nothing when it is empty and no story runs. */
+export function queueHtml(v) {
+  if (!v || (!v.stories?.length && !v.running?.length)) return '';
+  const head = `<p class="tq-head"><b>Story queue</b><span>${esc(v.running.length)} of ${esc(v.max)} running · starts ${esc(hourWords(v.hours.start))} to ${esc(hourWords(v.hours.end))}${v.hours.open ? '' : ', closed now'}</span></p>`;
+  const rows = v.stories.length ? `<ol class="tq-list">${v.stories.map(q => `<li><span class="tq-n">#${esc(q.number)}</span> ${esc(q.topic)}</li>`).join('')}</ol>` : '<p class="tq-empty">Nothing queued.</p>';
+  return head + rows;
+}
+
 /**
  * The popup's behavior. `d` holds what the page owns: `fetch` carries the page's secret, `paint` redraws the buttons, `openConversation`
  * opens a request's worker. Typing stays through a redraw, because the capture box sits outside the list and a note is kept here.

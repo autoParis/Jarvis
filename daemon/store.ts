@@ -155,6 +155,10 @@ export function openStore(path: string) {
       state TEXT NOT NULL DEFAULT 'starting', waiting_for TEXT, report TEXT, report_at TEXT, outcome TEXT, transcript TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
+    -- The story queue (stories.ts): product issue numbers in the order jarvisd starts them. The brain fills it with jarvis-stories.
+    CREATE TABLE IF NOT EXISTS story_queue (
+      number INTEGER PRIMARY KEY CHECK (number > 0), topic TEXT NOT NULL, position INTEGER NOT NULL, added_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
   // Interactive (pseudo-terminal) native workers, added 2026-11-06 for artifact work.
   const nativeCols = (db.prepare('PRAGMA table_info(native_workers)').all() as { name: string }[]).map(c => c.name);
@@ -181,6 +185,22 @@ export function openStore(path: string) {
     (db.prepare('SELECT value FROM state WHERE key = ?').get(key) as { value: string } | undefined)?.value;
   const setState = (key: string, value: string) =>
     db.prepare('INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+
+  const storyQueue = () => db.prepare('SELECT number, topic, added_at FROM story_queue ORDER BY position, added_at').all() as QueuedStory[];
+  const renumber = (order: number[]) => {
+    const set = db.prepare('UPDATE story_queue SET position = ? WHERE number = ?');
+    db.exec('BEGIN');
+    try { order.forEach((n, i) => set.run(i + 1, n)); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; }
+  };
+  const moveStory = (number: number, at: number): boolean => {
+    const order = storyQueue().map(q => q.number);
+    const from = order.indexOf(number);
+    if (from < 0) return false;
+    order.splice(from, 1);
+    order.splice(Math.max(0, Math.min(order.length, at - 1)), 0, number);
+    renumber(order);
+    return true;
+  };
 
   return {
     db,
@@ -495,6 +515,24 @@ export function openStore(path: string) {
     nativeWorker(id: string): NativeWorkerRow | undefined {
       return db.prepare('SELECT * FROM native_workers WHERE id = ?').get(id) as NativeWorkerRow | undefined;
     },
+    /** The story queue, first to start first. */
+    storyQueue,
+    /** Adds a story at the end, or at `at` (1 is first). False when it is already queued. */
+    queueStory(number: number, topic: string, at?: number): boolean {
+      const list = storyQueue();
+      if (list.some(q => q.number === number)) return false;
+      db.prepare('INSERT INTO story_queue (number, topic, position) VALUES (?, ?, ?)').run(number, topic, list.length + 1);
+      if (at !== undefined) moveStory(number, at);
+      return true;
+    },
+    /** False when the story was not queued. */
+    unqueueStory(number: number): boolean {
+      const r = db.prepare('DELETE FROM story_queue WHERE number = ?').run(number);
+      renumber(storyQueue().map(q => q.number));
+      return r.changes > 0;
+    },
+    /** Moves a queued story to `at` (1 is first; past the end means last). False when it is not queued. */
+    moveStory,
     /** Every background worker ever started, newest first. */
     nativeWorkers(): NativeWorkerRow[] {
       return db.prepare('SELECT * FROM native_workers ORDER BY created_at DESC, rowid DESC').all() as NativeWorkerRow[];
@@ -503,3 +541,5 @@ export function openStore(path: string) {
 }
 
 export type Store = ReturnType<typeof openStore>;
+/** One story on the queue. */
+export type QueuedStory = { number: number; topic: string; added_at: string };

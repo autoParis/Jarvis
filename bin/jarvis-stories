@@ -1,0 +1,27 @@
+#!/usr/bin/env node
+// The story queue. jarvisd holds it and starts the next story itself in the day hours (daemon/stories.ts); this only relays.
+//   jarvis-stories list                                  the queue in order, the running story workers, the hours
+//   jarvis-stories add <n> --topic "<topic>" [--at <p>]  queue issue #<n>, last or at position <p> (1 is first)
+//   jarvis-stories remove <n>                            take #<n> off the queue
+//   jarvis-stories move <n> --to <p>                     put #<n> at position <p>
+const [cmd, n, ...rest] = process.argv.slice(2);
+const flag = f => { const i = rest.indexOf(`--${f}`); return i >= 0 ? rest[i + 1] : undefined; };
+const base = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/stories`;
+const usage = 'usage: jarvis-stories list | add <n> --topic <topic> [--at <position>] | remove <n> | move <n> --to <position>';
+const num = /^\d+$/.test(n ?? '') ? Number(n) : undefined;
+const post = (op, body) => [`${base}/${op}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }];
+let req;
+if (cmd === 'list' && n === undefined) req = [base];
+else if (cmd === 'add' && num && flag('topic')) req = post('add', { number: num, topic: flag('topic'), at: flag('at') });
+else if (cmd === 'remove' && num && !rest.length) req = post('remove', { number: num });
+else if (cmd === 'move' && num && flag('to')) req = post('move', { number: num, at: flag('to') });
+else { console.error(usage); process.exit(2); }
+try {
+  const res = await fetch(...req);
+  const text = await res.text();
+  if (res.ok) console.log(text); else console.error(text);
+  process.exit(res.ok ? 0 : 1);
+} catch (e) {
+  console.error(`jarvisd unreachable: ${e.cause?.code ?? e}`);
+  process.exit(1);
+}

@@ -33,6 +33,7 @@ import { makeCheck, readDelivery, masterHead, CHECK_MS } from './check.ts';
 import { reminderRoute } from './reminders.ts';
 import { makeMessages, emailPush, outboxLine } from './messages.ts';
 import { makeToday, todayRoute, todayBrief, BACKSTOP_MS } from './today.ts';
+import { makeStories, storyRoute, FILL_MS } from './stories.ts';
 import { makeReplies, replyRoute, repliesBrief, gh } from './replies.ts';
 import { makeTicketWorker } from './replyworker.ts';
 import { makeMigration, migrationRoute, migrationBrief, readDealerFile } from './migration.ts';
@@ -130,6 +131,8 @@ const backfilled = backfillRequests(store);
 if (backfilled) log(`requests: backfilled ${backfilled} from earlier worker starts`);
 requests.backfill().catch(e => log(`requests: backfill failed: ${e}`));
 
+/** Set once the story queue exists, further down: a report at startup comes before it. */
+let fillQueue = () => {};
 // ---- Native workers: Claude background sessions jarvisd starts itself, beside the Orca path (native.ts, nativeroutes.ts) ----
 const native = makeNative({
   store, log, jarvisUrl: `http://127.0.0.1:${PORT}`, dataDir: join(ROOT, 'data'),
@@ -139,6 +142,7 @@ const native = makeNative({
     const line = `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) reported ${w.outcome}:\n${text}`;
     store.addTurn({ role: 'event', text: line });
     broadcast({ type: 'event', text: line, at: new Date().toISOString() });
+    fillQueue(); // its slot is free now
     if (!existsSync(KILL_FILE)) brain.send(`${line}\n\nThis is its report, word for word. Speak it to ${OWNER} if it is an answer or a problem; a plain success is SILENT unless he asked for it. It needs no release.`);
   },
   onCard: a => {
@@ -168,7 +172,8 @@ const gate = makeGate(store, { run, handle }, a => {
   if (a.status === 'done') requests.started(a);
   // A stopped worker can drop out of a later list, so its session and worktree are recorded now.
   if (a.action === 'worker-stop' && a.status === 'done') { try { requests.capture(JSON.parse(a.args).dispatch); } catch {} }
-  if (!PRESSED.has(a.action)) broadcast({ type: 'approval', approval: a });
+  // A queue start has no card; its chat line comes from stories.ts.
+  if (!PRESSED.has(a.action) && a.decided_by !== 'queue') broadcast({ type: 'approval', approval: a });
   if (a.action === 'gmail-send') messagesChanged();
   // Only the gate's start check writes this, minutes after Approve, so nothing else would tell the owner.
   if (a.status === 'failed' && a.result?.startsWith(NO_TASK) && !existsSync(KILL_FILE)) {
@@ -451,6 +456,21 @@ const today = makeToday({
   released: i => { if (i.dispatch && !existsSync(KILL_FILE)) brain.send(`[today] ${OWNER} released item ${i.id}, dispatch ${i.dispatch}. Close the loop on its worker and branch ("Today list" in CLAUDE.md). Reply SILENT unless something needs him.`); },
 });
 setInterval(() => { today.tick().catch(e => log(`today timer: ${e}`)); }, BACKSTOP_MS);
+
+// ---- Story queue: from 8 AM to 4 PM Eastern, jarvisd starts the next queued story while fewer than 3 run, with no card (rules in stories.ts) ----
+const stories = makeStories({
+  store, gate, log,
+  repo: () => repos().find(r => r.name === PRODUCT_KEY)?.path,
+  paused: () => existsSync(KILL_FILE),
+  told: (line, notice) => {
+    store.addTurn({ role: 'event', text: line });
+    broadcast({ type: 'event', text: line, at: new Date().toISOString() });
+    if (!existsSync(KILL_FILE)) brain.send(notice);
+  },
+  onChange: () => broadcast({ type: 'stories', stories: stories.view() }),
+});
+fillQueue = () => { stories.fill().catch(e => log(`story queue: ${e}`)); };
+setInterval(fillQueue, FILL_MS);
 today.pass('daemon started').catch(e => log(`today pass: ${e}`));
 
 // ---- HTTP ----
@@ -602,7 +622,7 @@ http.createServer(async (req, res) => {
           : t.role === 'jarvis' ? { ...t, clips: spokenSentences(t.text).length }
           : t.reply_to ? { ...t, quote: quoteOf(store.turn(t.reply_to)) } : t);
       const secret = ui.open();
-      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), stories: stories.view(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); ui.close(secret); termGate.dropPage(secret); });
@@ -930,6 +950,11 @@ http.createServer(async (req, res) => {
     }
     if (url.startsWith('/api/internal/replies')) {
       const r = replyRoute(store, log, req.method ?? '', url, req.method === 'POST' ? await json(req) : {}, { fromOwner: () => brain.answeringOwner });
+      if (r) return send(res, r.status, r.body);
+    }
+    if (url === '/api/stories' && req.method === 'GET') return send(res, 200, stories.view());
+    if (url.startsWith('/api/internal/stories')) {
+      const r = storyRoute(store, stories, log, req.method ?? '', url, req.method === 'POST' ? await json(req) : {}, () => broadcast({ type: 'stories', stories: stories.view() }));
       if (r) return send(res, r.status, r.body);
     }
     if (url.startsWith('/api/internal/reminders')) {
