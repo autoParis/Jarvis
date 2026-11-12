@@ -44,15 +44,14 @@ test('segments are radios with one tab stop, and arrows wrap', () => {
 });
 
 test('a side chat from the picker starts with no first message, in a worktree only when asked', async () => {
-  const id = { run: 'run_x', handle: 'term_x' };
-  const sc = buildCommand('side-chat', { repo: '/r/jarvis', text: '' }, id);
+  const sc = buildCommand('side-chat', { repo: '/r/jarvis', text: '' });
   assert.equal(sc[0], 'native'); assert.match(sc[3], /He has not written yet/); assert.doesNotMatch(sc[3], /His first message/);
-  assert.match(buildCommand('side-chat', { repo: '/r/jarvis', text: 'hi' }, id)[3], /His first message:\n\nhi/);
-  assert.throws(() => buildCommand('side-chat', { repo: '/r/jarvis', orca: true, text: '' }, id), /text is required/);
+  assert.match(buildCommand('side-chat', { repo: '/r/jarvis', text: 'hi' })[3], /His first message:\n\nhi/);
+  assert.throws(() => buildCommand('side-chat', { repo: 'r/jarvis', text: '' }), /absolute path/);
 
   const starts: any[] = [];
   const native = { start: async (a: any) => { starts.push(a); return { id: `w${starts.length}`, session_id: 's', name: a.name, state: 'starting' } as any; }, stop: async () => {}, abandon: async () => {} };
-  const gate = makeGate(openStore(':memory:'), id, () => {}, () => {}, undefined, undefined, {}, native);
+  const gate = makeGate(openStore(':memory:'), () => {}, () => {}, undefined, undefined, native);
   const plain = await gate.pressed('side-chat', { repo: '/r/jarvis', text: '' }, 'Side chat: new in jarvis');
   assert.equal(plain.status, 'done'); assert.equal(JSON.parse(plain.result!).worker, 'n:w1');
   assert.equal(starts[0].worktree, false); assert.match(starts[0].name, /^side-chat-new-in-jarvis-\d+$/);

@@ -10,7 +10,7 @@ Do the steps in this order. Ask the owner for each value you cannot find on the 
 
 Jarvis needs these before `bin/setup` runs:
 
-- macOS, Node 22.18 or later (`node --version`), the Claude Code CLI (`claude --version`) and Orca at `/Applications/Orca.app`.
+- macOS, Node 22.18 or later (`node --version`), and the Claude Code CLI (`claude --version`).
 - ffmpeg (`brew install ffmpeg`).
 - Voice: the FluidAudio CLI. Build it at `~/src/FluidAudio` with `swift build -c release --product fluidaudiocli`. If you build it in another place, set `JARVIS_FLUIDAUDIO` in `.env` to the full path of `fluidaudiocli`.
 - Email triage (optional): the `gws` CLI, signed in to the owner's Gmail account.
@@ -43,12 +43,11 @@ brackets. `.env.example` explains each setting. Run `bin/setup` again to change 
 Optional settings, not asked by `bin/setup`:
 
 - `JARVIS_PORT`: the port, `7717` by default.
-- `JARVIS_HOME_WORKTREE`: the Orca worktree for the JARVIS terminal, as an Orca selector. The default is `path:<this folder>`.
 - `JARVIS_TTS_FR`, `JARVIS_TTS_EN`: the voices, for example `say:Amelie` or `supertonic3:M1`.
 - `JARVIS_WAKE_WORD`: the hands-free wake word.
 
-Note on the shell pane: it opens only from the phone, through a userspace tailscaled that answers on
-`JARVIS_TS_SOCKET`. With the Tailscale app alone, the shell pane refuses every request. The rest of the app works.
+Note on the phone checks: a terminal opens on the phone, and Pair the Mac shows its code, only through a userspace
+tailscaled that answers on `JARVIS_TS_SOCKET`. With the Tailscale app alone, both refuse every request from the phone. The rest of the app works.
 
 ## 3. People: vault/people.md
 
@@ -130,9 +129,9 @@ bin/jarvis-migration add --name "Jo Smith" --dealership "Client One" --source em
 ## 8. Start and check
 
 1. `npm test`. All tests must pass.
-2. `npm run preview` shows the app with sample data, without Orca or the brain.
+2. `npm run preview` shows the app with sample data, without the brain.
 3. `npm start`, or `bin/install-service` for a login service plus `tailscale serve`.
-4. Open http://127.0.0.1:7717. The first start makes an idle Orca terminal titled JARVIS. Leave it open.
+4. Open http://127.0.0.1:7717.
 5. Send "hello" in the chat. The brain must answer in the owner's language.
 6. Optional: `set -a; . ./.env; set +a; python3 bin/trust-own-repos.py` tells Claude Code's auto mode that the repos in `JARVIS_TRUSTED_REPOS` are the owner's.
 

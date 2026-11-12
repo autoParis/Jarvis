@@ -7,32 +7,25 @@
 //   row) is its own row in the group its title implies, with its status and its ×.
 // - A request in review or done is in Waiting for merge or Completed. Its row leaves the group only while the row is
 //   idle or exited. A row that is working or waiting stays in its group as well, since the owner kept talking to it.
-// - A row with no request is a plain row.
+// - A row with no request whose worker reported DONE (a side chat, a worker started outside a request) is in Completed
+//   once it is idle or exited and has a finish time, like a done request. A FAILED one, or one with no report, stays in its group.
+// - A row with no request is otherwise a plain row.
 // - The × moves a row to Completed (daemon/workroutes.ts). The row leaves its group for good. A row no request stands
-//   for in a folder shows in Completed itself, for a day from the press, the same purge as a done request.
-// - A row finished (done, failed or stopped) over an hour ago goes under its group's closed Done fold. It stays in view
-//   while its request is open (working, waiting, failed), or while it has no finish time. The fold only hides; it deletes nothing.
-import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, closeButtonHtml, STATE } from './requestlist.js';
+//   for shows in Completed itself, for a day from the press, the same purge as a done request.
+import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, docLinkHtml, closeButtonHtml, STATE } from './requestlist.js';
 import { formatStamp } from './workfold.js';
+import { actionsWith } from './contract.js';
 
 export const GROUPS = [['story', 'Stories'], ['babysit', 'Babysitting'], ['side', 'Side chats'], ['terminal', 'Terminals'], ['other', 'Other']];
 // A project terminal's mark: a small screen with a prompt (daemon/termrows.ts).
 export const TERM_MARK = '<svg class="g-term" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/></svg>';
 const WORK_STATE = { waiting: 'Waiting on you', idle: 'Idle', working: 'Working', exited: 'Exited' };
 const RANK = { waiting: 0, failed: 1, working: 2, idle: 3, exited: 4 };
-export const DONE_FOLD_MS = 60 * 60_000;
-/** How long a row stays in Completed. The same as DONE_KEEP_MS in daemon/requests.ts. */
+/** How long a row the owner moved with × stays in Completed. The same as DONE_KEEP_MS in daemon/requests.ts. */
 export const COMPLETED_KEEP_MS = 24 * 60 * 60_000;
 /** How the detail pane names the owner. jarvisd sends it (`owner` in GET /api/work); the page calls setOwner once at load. */
 let who = { called: 'the owner', cap: 'The owner' };
 export function setOwner(o) { if (typeof o?.called === 'string' && typeof o?.cap === 'string' && o.called) who = { called: o.called, cap: o.cap }; }
-
-/** True when the item goes under the Done fold: its row finished over an hour ago and no open request holds it in view. */
-export function folded(item, now) {
-  const end = Date.parse(item.row?.endedAt ?? '');
-  if (!item.row || Number.isNaN(end) || now - end <= DONE_FOLD_MS) return false;
-  return !item.req || !['waiting', 'working', 'failed'].includes(item.req.status);
-}
 
 /** The group a request with no row belongs in, read from its title as classify in daemon/work.ts reads it. */
 export function groupOf(title) {
@@ -41,11 +34,18 @@ export function groupOf(title) {
 }
 
 /**
- * `completed` maps a row id to the time the owner moved it to Completed. Returns the items per group (in view, and `old`
- * under the Done fold) and the two folders' entries. Completed holds the done requests and the moved rows no request stands for.
+ * A finished row with no request, shaped as a done request for the Completed folder. It has no request id, so its × acts
+ * on the row only. A row that is working or waiting is not finished: the owner kept talking to it.
+ */
+const rowDone = row => ({ title: row.title, status: 'done', at: row.endedAt, row: row.id, ...(row.native?.followUp ? { followUp: row.native.followUp.text } : {}) });
+const finished = row => row.native?.outcome === 'done' && !!row.endedAt && (row.state === 'idle' || row.state === 'exited');
+
+/**
+ * `completed` maps a row id to the time the owner moved it to Completed with ×. Returns the items per group and the two
+ * folders' entries. Completed holds the done requests, the finished rows and the moved rows no request stands for.
  */
 export function mergeWork(rows, requests, completed = {}, now = Date.now()) {
-  const { open, review, done } = requestGroups(requests);
+  const { open, review, done: doneReqs } = requestGroups(requests);
   const listed = new Map(rows.map(r => [r.id, r]));
   const shown = r => !Object.hasOwn(completed, r.id);
   const claimed = new Map(), orphans = [];
@@ -54,10 +54,16 @@ export function mergeWork(rows, requests, completed = {}, now = Date.now()) {
     if (row && shown(row) && !claimed.has(row.id)) claimed.set(row.id, req);
     else orphans.push(req);
   }
-  const inFolder = new Set([...review, ...done].map(r => r.row).filter(Boolean));
+  const inFolder = new Set([...review, ...doneReqs].map(r => r.row).filter(Boolean));
   const active = r => r.state === 'working' || r.state === 'waiting';
+  // A moved row that a request stands for is that request's entry. Any other shows in Completed for a day from the press.
+  const ofRequest = new Set(requests.map(r => r.row).filter(Boolean));
+  const moved = rows.filter(r => !shown(r) && !ofRequest.has(r.id) && now - Date.parse(completed[r.id]) < COMPLETED_KEEP_MS)
+    .map(r => ({ ...rowDone(r), at: completed[r.id] }));
+  const done = [...doneReqs, ...rows.filter(r => shown(r) && !claimed.has(r.id) && !inFolder.has(r.id) && finished(r)).map(rowDone), ...moved];
+  const toFolder = new Set([...inFolder, ...done.map(d => d.row)]);
   const items = [
-    ...rows.filter(r => shown(r) && (claimed.has(r.id) || !inFolder.has(r.id) || active(r))).map(row => {
+    ...rows.filter(r => shown(r) && (claimed.has(r.id) || !toFolder.has(r.id) || active(r))).map(row => {
       const req = claimed.get(row.id);
       // A row still active while its request waits for merge: its × moves that request to Completed as well.
       const merge = !req && review.find(r => r.row === row.id);
@@ -66,15 +72,10 @@ export function mergeWork(rows, requests, completed = {}, now = Date.now()) {
     ...orphans.map(req => ({ group: groupOf(req.title), req, rank: RANK[req.status] ?? RANK.working })),
   ];
   const groups = GROUPS.map(([key, name]) => {
-    const all = items.filter(i => i.group === key).sort((a, b) => a.rank - b.rank);
-    const list = all.filter(i => !folded(i, now)), old = all.filter(i => folded(i, now));
-    return { key, name, items: list, old, waiting: list.filter(i => i.rank === RANK.waiting).length };
+    const list = items.filter(i => i.group === key).sort((a, b) => a.rank - b.rank);
+    return { key, name, items: list, waiting: list.filter(i => i.rank === RANK.waiting).length };
   });
-  // A moved row that a request stands for is that request's entry. Any other shows in Completed for a day.
-  const ofRequest = new Set(requests.map(r => r.row).filter(Boolean));
-  const moved = rows.filter(r => !shown(r) && !ofRequest.has(r.id) && now - Date.parse(completed[r.id]) < COMPLETED_KEEP_MS)
-    .map(r => ({ title: r.title, words: null, status: 'done', at: completed[r.id], startedAt: completed[r.id], row: r.id }));
-  return { groups, review, done: requestGroups([...done, ...moved]).done };
+  return { groups, review, done };
 }
 
 /** A group holding something waiting opens itself. A hand close lasts until nothing in it waits, and only that long. */
@@ -93,32 +94,20 @@ function itemHtml(i, ctx) {
   const age = req ? ago(req.at, ctx.now) : idleNote && idleNote.length <= 14 ? idleNote : '';
   const note = !req && idleNote && idleNote.length > 14 ? idleNote : !row && !req.row ? closedNote(req) : '';
   const openId = row?.id ?? openIdOf(req);
-  // On an idle side chat the × closes the chat. On every other row it moves the row to Completed.
-  const closes = row?.sideChat && row.state === 'idle';
-  const hide = closes
-    ? `<button type="button" class="hide" data-close="${esc(row.dispatch)}" aria-label="Close ${esc(title)}" title="Close this side chat. Its worker stops.">×</button>`
-    : closeButtonHtml({ id: (req ?? i.merge)?.id, title, status: (req ?? i.merge)?.status, row: row?.id });
+  // The × moves the row, and the request it stands for, to Completed.
+  const hide = closeButtonHtml({ id: (req ?? i.merge)?.id, title, status: (req ?? i.merge)?.status, row: row?.id });
   const state = failed ? 'failed' : row?.state ?? req.status;
   return `<div class="wrow s-${esc(state)}${openId && ctx.reading === openId ? ' reading' : ''}"${openId ? ` data-id="${esc(openId)}" role="button" tabindex="0"` : ''} title="${esc(status)}${row?.note && row.state !== 'idle' ? `: ${esc(row.note)}` : ''}">`
-    + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
+    + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? docLinkHtml(req) + reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
     + (note ? `<div class="note">${esc(note)}</div>` : '') + '</div>';
 }
 
-/** The Done fold at the bottom of a group: closed by default, its count on the button. `isOpen` draws its rows. */
-function doneFoldHtml(g, isOpen, ctx) {
-  if (!g.old.length) return '';
-  return `<button type="button" class="dfold" data-done-fold="${g.key}" aria-expanded="${isOpen}">${CHEV}Done (${g.old.length})</button>`
-    + (isOpen ? g.old.map(i => itemHtml(i, ctx)).join('') : '');
-}
-
-const CHEV = '<svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-/** `ctx`: { shut, closedWaiting, folders, reading, now, doneOpen }. `doneOpen` is a Set of the groups whose Done fold is open. */
+/** `ctx`: { shut, closedWaiting, folders, reading, now }. */
 export function workListHtml(merged, ctx) {
-  const groups = merged.groups.filter(g => g.items.length || g.old?.length).map(g => {
+  const groups = merged.groups.filter(g => g.items.length).map(g => {
     const open = groupOpen(g, ctx.shut, ctx.closedWaiting);
-    return `<div class="sec"><button type="button" class="group" data-group="${g.key}" data-waiting="${g.waiting}" aria-expanded="${open}"><svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="name">${g.name}</span>${g.waiting ? `<span class="w">${g.waiting} waiting</span>` : ''}<span class="n">${g.items.length + (g.old?.length ?? 0)}</span></button>`
-      + (open ? g.items.map(i => itemHtml(i, ctx)).join('') + doneFoldHtml(g, !!ctx.doneOpen?.has(g.key), ctx) : '') + '</div>';
+    return `<div class="sec"><button type="button" class="group" data-group="${g.key}" data-waiting="${g.waiting}" aria-expanded="${open}"><svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="name">${g.name}</span>${g.waiting ? `<span class="w">${g.waiting} waiting</span>` : ''}<span class="n">${g.items.length}</span></button>`
+      + (open ? g.items.map(i => itemHtml(i, ctx)).join('') : '') + '</div>';
   }).join('');
   const folders = merged.review.length || merged.done.length ? requestListHtml([...merged.review, ...merged.done], ctx.folders, ctx.now) : '';
   if (!groups && !folders) return '<div class="clear"><div class="clear-t">No work running</div><p>Ask Jarvis to start a story or a task.</p></div>';
@@ -156,7 +145,6 @@ export function approvalTag(action, args) {
   if (action === 'gmail-send') return args?.to ? `Email to ${args.to}${args.cc ? `, cc ${args.cc}` : ''}` : 'Send an email';
   if (action === 'worker-start') return story ? `Story ${story}` : 'Start a worker';
   if (action === 'terminal-send') return 'Send into a session';
-  if (action === 'worker-send') return 'Message a worker';
   if (action === 'worker-stop') return 'Stop a worker';
   if (action === 'gh-pr-close') return `Close PR ${args?.number ?? ''}`.trim();
   if (action === 'fbm-client-pause') return `Pause ${args?.client ?? 'a client'}`;
@@ -167,7 +155,7 @@ export function approvalTag(action, args) {
 }
 
 /** These read back what they did, so their result is worth showing. Other results are ids and raw output. */
-const READS_BACK = new Set(['gh-pr-close', 'fbm-client-pause', 'prod-mcp-call']);
+const READS_BACK = actionsWith('readsBack');
 
 /** The button labels of a pending card. A worker's permission prompt is allowed or denied, not approved. */
 export function approvalButtons(action) {
@@ -221,8 +209,51 @@ export function approvalPairHtml(id, action) {
   return `<div class="pair" data-approval="${Number(id)}"><button type="button" class="no">${esc(no)}</button><button type="button" class="yes">${esc(yes)}</button></div>`;
 }
 
+/**
+ * Approve and Reject under the Jarvis message that asked for a proposal (approvals.chat_turn, set by daemon/chatlink.ts).
+ * Only pending proposals not yet tapped get buttons, so a decision anywhere (here, the Requests card, a spoken yes) removes them.
+ * With more than one proposal on the message, each pair names its proposal.
+ */
+export function chatDecisionHtml(approvals, turn, tapped = new Set()) {
+  const open = [...approvals].filter(a => a.chat_turn === turn && a.status === 'pending' && !tapped.has(a.id));
+  return open.map(a => {
+    const [yes, no] = approvalButtons(a.action);
+    return `<div class="chat-pair" data-approval="${Number(a.id)}">${open.length > 1 ? `<span class="chat-say">${esc(a.say)}</span>` : ''}`
+      // Approve is on the right, where the thumb reaches on a phone.
+      + `<button type="button" class="chat-no">${esc(no)}</button><button type="button" class="chat-yes">${esc(yes)}</button></div>`;
+  }).join('');
+}
+
 /** What the approval will do, in its own stored words. A named action stores the exact command, which says it all. */
 export function approvalDetail(args) {
   if (args.runs) return args.runs;
   return [toolLine(args), args.repo, args.dispatch, args.terminal, args.to && 'To: ' + args.to, args.subject && 'Subject: ' + args.subject, args.title, args.text, args.spec && args.spec.slice(0, 300)].filter(Boolean).join('\n');
+}
+
+/** How long Stop on a started notice works after the start ended. The same number as UNDO_MS in daemon/gate.ts. */
+export const UNDO_MS = 60_000;
+const dbMs = t => Date.parse(`${String(t).replace(' ', 'T')}Z`);
+
+/**
+ * When Stop on a worker Jarvis started at once stops working, in ms since 1970. Infinity while the start still runs:
+ * a press then stops the worker as soon as the start ends. 0 when there is nothing to stop.
+ */
+export function undoDeadline(a) {
+  if (a?.decided_by !== 'owner-asked') return 0;
+  if (a.status === 'approved') return Infinity;
+  if (a.status !== 'done' && a.status !== 'unknown') return 0;
+  return dbMs(a.finished_at ?? a.decided_at) + UNDO_MS;
+}
+
+/**
+ * The chat line for a worker Jarvis started at once because the owner asked for it: Starting or Started, the title,
+ * and Stop while it works. `stopped` is what Stop led to ('Stopping', 'Stopped', or an error), once pressed.
+ */
+export function startedNoticeHtml(a, args, now, stopped) {
+  const title = args?.taskTitle || a.say;
+  const state = a.status === 'approved' ? 'Starting' : a.status === 'failed' ? 'Did not start' : 'Started';
+  const failed = a.status === 'failed' ? `<div class="started-why">${esc(a.result ?? 'no reason given')}</div>` : '';
+  const stop = !stopped && now < undoDeadline(a) ? `<button type="button" class="undo" data-undo="${Number(a.id)}">Stop</button>` : '';
+  return `<span class="pill${a.status === 'failed' ? ' failed' : ''}">${esc(state)}</span><span class="started-t">${esc(title)}</span>`
+    + (stopped ? `<span class="started-stop">${esc(stopped)}</span>` : stop) + failed;
 }

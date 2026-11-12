@@ -159,7 +159,7 @@ export function makeTermGate({ store, log, origin = TERM_ORIGIN, now = Date.now 
       return { token: issue(ui, c.ch.name, 'touch-id') };
     },
 
-    /** The phone: the caller already ran shellRefusal on this request. */
+    /** The phone: the caller already ran phoneRefusal on this request. */
     unlockPhone(name: string | null, ui: string): { token: string } {
       return { token: issue(ui, name, 'phone') };
     },

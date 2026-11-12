@@ -1,11 +1,20 @@
 // Markdown for Jarvis's replies: headers, lists, bold and italic, inline code, code blocks, quotes, links.
 // Every piece of message text is escaped before it lands in the HTML; only the tags written here are emitted.
-// `[image: /path]` markers become thumbnails through the `shot` function the page passes in.
+// `[image: /path]` markers and `![alt](path)` images become thumbnails through the `shot(path, alt)` function the page
+// passes in. A web address in `![alt](https://...)` shows as a plain picture, and any other scheme shows only the alt text.
 // A `[report: /path.md]` line becomes a card that opens that document at #reports/<path>. The daemon decides what it serves.
 // A classic script so the page can call it synchronously; daemon/markdown.test.ts runs it in a vm.
 (() => {
   const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const IMAGE_MARKER = /\[image:\s*([^\]\n]+?)\s*\]/g;
+  // ![alt](path), ![alt](<path with spaces>) and ![alt](path "title").
+  const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"\n]*")?\s*\)/g;
+  const decoded = p => { try { return decodeURI(p); } catch { return p; } };
+  function mdImage(alt, target, shot) {
+    if (/^https?:\/\//i.test(target)) return `<a href="${esc(target)}" target="_blank"><img src="${esc(target)}" alt="${esc(alt)}"></a>`;
+    if (/^[a-z][\w+.-]*:/i.test(target)) return esc(alt);
+    return shot(decoded(target), alt);
+  }
   const REPORT_LINE = /^\s*\[report:\s*([^\]\n]+?)\s*\]\s*$/;
   const ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/></svg>';
   // The file name until the page fills in the document's own title.
@@ -30,6 +39,7 @@
     const keep = html => `\u0000${kept.push(html) - 1}\u0000`;
     const s = text.replace(/\u0000/g, '')
       .replace(/`([^`\n]+)`/g, (_, c) => keep(`<code>${esc(c)}</code>`))
+      .replace(MD_IMAGE, (_, alt, angled, bare) => keep(mdImage(alt.trim(), angled ?? bare, shot)))
       .replace(IMAGE_MARKER, (_, p) => keep(shot(p)))
       .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, u) => keep(`<a href="${esc(u)}" target="_blank" rel="noopener">${emphasis(esc(label))}</a>`))
       .replace(/https?:\/\/[^\s)<\u0000]+/g, u => {

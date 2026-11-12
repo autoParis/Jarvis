@@ -2,13 +2,12 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, chmodSync } from 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-// A stand-in `orca` on PATH for tests: records each call and prints whatever `answer()` last set.
+// A stand-in for a CLI on PATH in tests: records each call and prints whatever `answer()` last set.
 // `answers()` queues one line per call, used up before the `answer()` text.
-// Call before importing orca.ts or gate.ts, which copy the environment when they load.
-export const fakeOrca = () => fakeTool('orca');
+// Call before importing config.ts or gate.ts, which copy the environment when they load.
 
 /**
- * The same stand-in under any name. A queued line starting EXIT1: goes to stderr with exit code 1. A tool that needs its
+ * A queued line starting EXIT1: goes to stderr with exit code 1. A tool that needs its
  * folder (`node`) records it ahead of its arguments.
  */
 export function fakeTool(name: string) {

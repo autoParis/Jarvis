@@ -1,6 +1,6 @@
 import { OWNER } from './config.ts';
 import { execFile } from 'node:child_process';
-import { cleanEnv } from './orca.ts';
+import { cleanEnv } from './config.ts';
 import { eastern } from './reminders.ts';
 import { sqlTime } from './push.ts';
 import type { Store, SupportReply } from './store.ts';
@@ -194,8 +194,12 @@ export function makeReplies(o: {
   };
 }
 
-/** The internal routes jarvis-act calls. Adding, resuming and dropping need the owner's message in the running turn. */
-export function replyRoute(store: Store, log: Log, method: string, url: string, b: any, ctx: { fromOwner: () => boolean }): { status: number; body: unknown } | undefined {
+/**
+ * The internal routes jarvis-act calls. Adding, resuming and dropping need the owner's message in the running turn.
+ * Adding also takes his answer on one of the brain's own ask cards in that turn, when it is not a refusal (`fromOwnerCard`,
+ * Brain.answeringOwnerCard): he approves most drafts with a tap. Resume and drop still need a typed or spoken message.
+ */
+export function replyRoute(store: Store, log: Log, method: string, url: string, b: any, ctx: { fromOwner: () => boolean; fromOwnerCard?: () => boolean }): { status: number; body: unknown } | undefined {
   const refused = (error: string, status = 400) => ({ status, body: { error } });
   const notOwner = `This needs ${OWNER}'s own message in this turn. Ask him first.`;
   if (method === 'GET' && url === '/api/internal/replies') return { status: 200, body: store.openSupportReplies() };
@@ -209,7 +213,7 @@ export function replyRoute(store: Store, log: Log, method: string, url: string, 
     if (typeof b.dealershipId !== 'string' || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(b.dealershipId)) return refused('--dealership-id must be the dealership uuid: the production tools refuse a ticket without it');
     if (b.repo !== LIVE_REPO) return refused(`--repo must be ${LIVE_REPO}: it is the only repo whose production signal is known`);
     if (!text || text.length > 10_000) return refused('--text is required, at most 10000 characters');
-    if (!ctx.fromOwner()) return refused(notOwner, 409);
+    if (!ctx.fromOwner() && !ctx.fromOwnerCard?.()) return refused(`This needs ${OWNER}'s own message, or his answer on your ask card, in this turn. Ask him first.`, 409);
     const open = store.openSupportReplies().find(r => r.reference === b.ref);
     if (open) {
       if (open.text === text && open.pr === pr) return { status: 200, body: open };

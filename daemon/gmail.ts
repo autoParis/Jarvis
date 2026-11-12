@@ -2,7 +2,7 @@ import { OWNER_CAP, OWNER } from './config.ts';
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { cleanEnv } from './orca.ts';
+import { cleanEnv } from './config.ts';
 import type { Store, Item } from './store.ts';
 import type { Log } from './log.ts';
 import { OWNER_NAME, OWNER_ROLE, TEAM, CLIENT_WORD, CLIENTS_WORD, COMPANY, COMPANY_ABOUT, OWNER_EMAILS as CONFIG_OWNER_EMAILS } from './config.ts';
@@ -340,13 +340,14 @@ function handOver(d: PollDeps, item: Item) {
 }
 
 /** Polls forever. A failed poll keeps the history ID, so the next one covers the same messages. */
-export async function watchGmail(d: PollDeps & { killFile: string; onTrouble: (msg: string) => void }) {
+export async function watchGmail(d: PollDeps & { killFile: string; onTrouble: (msg: string) => void; onPoll?: (error?: string) => void }) {
   let failures = 0;
   for (;;) {
     if (!existsSync(d.killFile)) {
-      try { await pollGmail(d); failures = 0; }
+      try { await pollGmail(d); failures = 0; d.onPoll?.(); }
       catch (e) {
         failures++;
+        d.onPoll?.((e as Error).message);
         d.log(`gmail poll failed: ${(e as Error).message}`, { failures });
         if (failures === 3) d.onTrouble(`I can't read Gmail (${(e as Error).message.slice(0, 120)}). I'll keep trying every ${Math.round(POLL_MS / 60_000)} minutes.`);
       }

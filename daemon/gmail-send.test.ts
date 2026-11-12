@@ -16,7 +16,6 @@ const sends = () => existsSync(calls) ? readFileSync(calls, 'utf8').trim().split
 
 const { openStore } = await import('./store.ts');
 const { makeGate } = await import('./gate.ts');
-const id = { run: 'run_x', handle: 'term_x' };
 
 function storeWithEmail() {
   const s = openStore(':memory:');
@@ -30,7 +29,7 @@ function storeWithEmail() {
 test('the Approve button sends once, records the Gmail id, marks the email answered, and refuses a second send', async () => {
   const s = storeWithEmail();
   const lines: string[] = [];
-  const gate = makeGate(s, id, () => {}, (m, f) => lines.push(`${m} ${JSON.stringify(f)}`));
+  const gate = makeGate(s, () => {}, (m, f) => lines.push(`${m} ${JSON.stringify(f)}`));
   writeFileSync(out, JSON.stringify({ id: 'sent_1', threadId: 't_a', labelIds: ['SENT'] }));
   const p = await gate.propose('gmail-send', { item: 'gmail:a', text: 'Ok, go.\nOwner' }, 'Send the reply to Sam?');
   const a = await gate.button(p.id, true);
@@ -47,7 +46,7 @@ test('the Approve button sends once, records the Gmail id, marks the email answe
 
 test('a send with no answer from gws is unknown, never retried, and blocks another send', async () => {
   const s = storeWithEmail();
-  const gate = makeGate(s, id, () => {});
+  const gate = makeGate(s, () => {});
   writeFileSync(out, '');
   const p = await gate.propose('gmail-send', { item: 'gmail:a', text: 'Ok.\nOwner' }, 'Send?');
   const a = await gate.button(p.id, true);
@@ -57,7 +56,7 @@ test('a send with no answer from gws is unknown, never retried, and blocks anoth
 
 test('Gmail refusing the send is a failure and the email stays open', async () => {
   const s = storeWithEmail();
-  const gate = makeGate(s, id, () => {});
+  const gate = makeGate(s, () => {});
   writeFileSync(out, JSON.stringify({ error: { code: 400, message: 'Invalid To header' } }));
   const p = await gate.propose('gmail-send', { item: 'gmail:a', text: 'Ok.\nOwner' }, 'Send?');
   const a = await gate.button(p.id, true);
@@ -68,7 +67,7 @@ test('Gmail refusing the send is a failure and the email stays open', async () =
 
 test('the sent message is a reply all: the sender in To, everyone else in Cc, never the owner', async () => {
   const s = storeWithEmail();
-  const gate = makeGate(s, id, () => {});
+  const gate = makeGate(s, () => {});
   writeFileSync(join(dir, 'gws'), `#!/bin/bash\n${SETTINGS}printf '%s\\n' "$@" > "${join(dir, 'argv')}"\ncat "${out}"\n`);
   writeFileSync(out, JSON.stringify({ id: 'sent_2', threadId: 't_a' }));
   const p = await gate.propose('gmail-send', { item: 'gmail:a', to: 'outsider@evil.test', cc: 'x@evil.test', text: 'Ok.\nOwner' }, 'Send?');
@@ -91,7 +90,7 @@ function parts(raw: string) {
 
 test('the sent reply ends with the Gmail signature, as HTML, once, with no "The owner" line above it', async () => {
   const s = storeWithEmail();
-  const gate = makeGate(s, id, () => {});
+  const gate = makeGate(s, () => {});
   writeFileSync(join(dir, 'gws'), `#!/bin/bash\n${SETTINGS}printf '%s\\n' "$@" > "${join(dir, 'argv')}"\ncat "${out}"\n`);
   writeFileSync(out, JSON.stringify({ id: 'sent_3', threadId: 't_a' }));
   const p = await gate.propose('gmail-send', { item: 'gmail:a', text: 'Ok, go.\n\nMerci,\nOwner\n' }, 'Send?');
@@ -109,7 +108,7 @@ test('the sent reply ends with the Gmail signature, as HTML, once, with no "The 
 test('when Gmail does not return the signature, nothing is sent and the email stays open', async () => {
   const s = storeWithEmail();
   const lines: string[] = [];
-  const gate = makeGate(s, id, () => {}, m => lines.push(m));
+  const gate = makeGate(s, () => {}, m => lines.push(m));
   writeFileSync(join(dir, 'gws'), `#!/bin/bash\necho "$1 $2 $3 $4 $5" >> "${calls}"\nif [ "$3" = settings ]; then echo '{"error":{"code":403,"message":"insufficient scope"}}'; exit 0; fi\ncat "${out}"\n`);
   writeFileSync(out, JSON.stringify({ id: 'sent_4', threadId: 't_a' }));
   const before = sends();

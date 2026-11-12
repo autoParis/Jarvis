@@ -17,10 +17,9 @@ const md = (t: string) => vm.markdown!(t, p => `<SHOT ${p}>`);
 const html = (c: any) => vm.askCardHtml!(c, md);
 
 const item = (extra: Partial<Item>): Item => ({
-  id: 1, source: 'orca', external_id: 'msg_1', kind: 'question', dispatch_id: 'd_1', subject: '', body: '', options: null,
+  id: 1, source: 'native', external_id: 'msg_1', kind: 'question', dispatch_id: 'd_1', subject: '', body: '', options: null,
   status: 'spoken', answer: null, created_at: '2026-11-06 12:00:00', pushes: 0, pushed_at: null, meta: null, ...extra,
 });
-const id = { run: 'run_x', handle: 'term_x' };
 
 const ASK = `STORY: 4688 Marketplace photo order
 WHERE: Fixing the photo order sync for paused accounts.
@@ -113,7 +112,7 @@ test('Approve sits on the right of Reject, and Allow on the right of Deny', () =
 
 test('the gate stores the two lines with the proposal, and older callers store none', async () => {
   const s = openStore(':memory:');
-  const gate = makeGate(s, id, () => {});
+  const gate = makeGate(s, () => {});
   const a = await gate.propose('worker-stop', { dispatch: 'ctx_1' }, 'Stop 4412?', { approves: ' The worker stops. ', restsOn: 'The owner asked for it.' });
   assert.deepEqual(JSON.parse(s.approval(a.id)!.card!), { approves: 'The worker stops.', restsOn: 'The owner asked for it.' });
   const b = await gate.propose('worker-stop', { dispatch: 'ctx_2' }, 'Stop 4415?');
@@ -156,18 +155,16 @@ test('an old report with no result line splits as before', () => {
 
 const specOf = (argv: string[]) => argv.includes('--spec') ? argv[argv.indexOf('--spec') + 1] : argv.at(-1)!;
 
-test('every worker spec ends with the card rule: Orca and native, story, question, draft and side chat', () => {
+test('every worker spec ends with the card rule: story, question, draft and side chat', () => {
   const specs = {
-    orcaStart: specOf(buildCommand('worker-start', { repo: '/r', orca: true, spec: 'Do #1' }, id)),
-    nativeStart: specOf(buildCommand('worker-start', { repo: '/r', spec: 'Do #1' }, id)),
-    orcaQuestion: specOf(buildCommand('question', { repo: '/r', orca: true, question: 'Why?' }, id)),
-    nativeQuestion: specOf(buildCommand('question', { repo: '/r', question: 'Why?' }, id)),
-    draft: specOf(buildCommand('today-draft', { repo: '/r', spec: 'Draft it', taskTitle: 'Draft: x' }, id)),
-    nativeSide: specOf(buildCommand('side-chat', { repo: '/r', text: 'hi' }, id)),
+    nativeStart: specOf(buildCommand('worker-start', { repo: '/r', spec: 'Do #1' })),
+    nativeQuestion: specOf(buildCommand('question', { repo: '/r', question: 'Why?' })),
+    draft: specOf(buildCommand('today-draft', { repo: '/r', spec: 'Draft it', taskTitle: 'Draft: x' })),
+    nativeSide: specOf(buildCommand('side-chat', { repo: '/r', text: 'hi' })),
   };
   for (const [name, spec] of Object.entries(specs)) assert.ok(spec.endsWith(CARD_RULE), `${name} ends with the card rule`);
   // The issue rule still sits before the footer on a story worker.
-  assert.ok(specs.orcaStart.indexOf(ISSUE_RULE.trim().slice(0, 30)) < specs.orcaStart.indexOf(CARD_RULE.trim()));
+  assert.ok(specs.nativeStart.indexOf(ISSUE_RULE.trim().slice(0, 30)) < specs.nativeStart.indexOf(CARD_RULE.trim()));
 });
 
 test('the card rule names the skill and each heading the app draws', () => {

@@ -9,8 +9,7 @@ import type { makeTerminals } from './terminal.ts';
 import type { Log } from './log.ts';
 
 // The project terminal's routes, /api/term/*. Every route but the list needs a live UI secret, and every route that
-// opens, reads, types into or ends a terminal needs a token from termgate.ts. The old Shell pane (/api/shell/*) is
-// separate and unchanged.
+// opens, reads, types into or ends a terminal needs a token from termgate.ts.
 
 export type TermCtx = {
   terms: ReturnType<typeof makeTerminals>; gate: TermGate; log: Log;
