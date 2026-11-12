@@ -43,10 +43,11 @@ import { makeNative, ROW_PREFIX, type NativeWorker } from './native.ts';
 import { nativeRoute } from './nativeroutes.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
-import { DEALERS_FILE, MIGRATION_SHEET_SYNC, PRODUCT_KEY } from './config.ts';
+import { DEALERS_FILE, MIGRATION_SHEET_SYNC, PRODUCT_KEY, WORKTREE_CLEANUP } from './config.ts';
+import { cleanWorktrees, projectRepos, summarize, execIn, type Worker } from './worktrees.ts';
 import { makeChatLinks } from './chatlink.ts';
 import { wireBrain, turnAskNote } from './brainevents.ts';
-import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, startSheetSync, startStoryQueue } from './timers.ts';
+import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, startSheetSync, startStoryQueue, startWorktreeCleanup } from './timers.ts';
 import { syncDue, runSyncChild } from './sheetsync.ts';
 import { SHEET_ID } from './sheet-edit.ts';
 
@@ -286,6 +287,7 @@ function fromOwner(text: string, replyTo?: number) {
 // ---- Scheduled tasks screen: launchd jobs and jarvisd's own timers, read fresh each time (tasks.ts) ----
 // The migration sheet sync needs a real sheet id (sheet-edit.ts reads JARVIS_MIGRATION_SHEET_ID) and a mode that is not off.
 const SHEET_SYNC_ON = MIGRATION_SHEET_SYNC !== 'off' && SHEET_ID !== 'EXAMPLE_SHEET_ID';
+const WORKTREE_TASK = 'jarvisd:worktree-cleanup';
 const tasks = makeTasks({
   db: store.db, run: execRun(cleanEnv), uid: process.getuid?.() ?? 501, log, getState: store.getState, setState: store.setState,
   agentsDir: join(homedir(), 'Library', 'LaunchAgents'),
@@ -295,6 +297,7 @@ const tasks = makeTasks({
     { id: 'jarvisd:check', name: 'Ten-minute check', schedule: 'Every 10 minutes, 8 AM to 4 PM', everyMs: CHECK_MS, description: 'Wakes the brain on a new finding or a due reminder, and sends approved support replies.' },
     { id: 'jarvisd:today', name: 'Today list backstop', schedule: `Every ${BACKSTOP_MS / 60_000} minutes`, everyMs: BACKSTOP_MS, description: 'Catches Today items that an event missed.' },
     ...(SHEET_SYNC_ON ? [{ id: 'jarvisd:sheet-sync', name: 'Migration sheet sync', schedule: 'Every day at 7:30 AM Eastern', everyMs: 24 * 3600_000, description: `Copies the Leads list to the migration sheet through bin/sheet-edit (${MIGRATION_SHEET_SYNC === 'write' ? 'writes' : 'dry run only, writes nothing'}). Each run keeps a report in data/migration-sheet-sync/runs.` }] : []),
+    ...(WORKTREE_CLEANUP !== 'off' ? [{ id: WORKTREE_TASK, name: 'Worktree cleanup', schedule: 'Every day at 6 AM', cron: '0 6 * * *', everyMs: 24 * 3600_000, description: `Removes the old worktrees in .claude/worktrees of each project repo: merged or PR closed, clean, no worker or process on it, unchanged for 2 days. Never deletes a branch.${WORKTREE_CLEANUP === 'dry-run' ? ' Dry run: it removes nothing.' : ''}` }] : []),
     ...(process.env.JARVIS_GMAIL !== 'off' ? [{ id: 'jarvisd:gmail', name: 'Gmail watcher', schedule: `Every ${GMAIL_POLL_MS / 60_000} minutes`, everyMs: GMAIL_POLL_MS, description: 'Reads new mail from the people in vault/people.md and stores it.' }] : []),
   ],
 });
@@ -356,6 +359,17 @@ if (SHEET_SYNC_ON) startSheetSync({
   due: () => syncDue(new Date(), store.getState('migrationSheetSyncDay')), markDay: day => store.setState('migrationSheetSyncDay', day),
   run: mode => runSyncChild(ROOT, mode, cleanEnv),
   killed: () => existsSync(KILL_FILE), record: tasks.record, wake: text => brain.send(text), log,
+});
+
+// ---- Worktree cleanup: every day at 6 AM by default, schedule editable on the Scheduled tasks screen (rules in worktrees.ts) ----
+startWorktreeCleanup({
+  id: WORKTREE_TASK, mode: WORKTREE_CLEANUP, due: () => tasks.claimDue(WORKTREE_TASK),
+  run: async mode => summarize(await cleanWorktrees({
+    repos: () => projectRepos(join(ROOT, 'vault', 'projects')),
+    workers: () => store.db.prepare('SELECT id, name, cwd, state, outcome FROM native_workers').all() as Worker[],
+    exec: execIn(cleanEnv), log,
+  }, mode)),
+  killed: () => existsSync(KILL_FILE), record: (id, outcome, note, detail) => tasks.record(id, outcome, note, undefined, detail), log,
 });
 
 // ---- Story queue: from 8 AM to 4 PM Eastern, jarvisd starts the next queued story while fewer than 3 run, with no card (rules in stories.ts) ----
