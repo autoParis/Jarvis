@@ -38,3 +38,12 @@ export const CLIENT_WORD = env.JARVIS_CLIENT_WORD?.trim() || 'client';
 export const CLIENTS_WORD = env.JARVIS_CLIENTS_WORD?.trim() || 'clients';
 /** Refs whose merged branches count as delivered, besides master, such as an archived history kept only on this Mac. */
 export const DONE_REFS = list(env.JARVIS_DONE_REFS).filter(r => /^[\w./-]+$/.test(r) && !r.startsWith('-'));
+/** Slack, read only (slack.ts): the owner's user token (xoxp) and the app-level token (xapp) for Socket Mode.
+ * Empty means Slack is off. JARVIS_SLACK=off turns it off with the tokens set. */
+export const SLACK_USER_TOKEN = env.JARVIS_SLACK_USER_TOKEN?.trim() || '';
+export const SLACK_APP_TOKEN = env.JARVIS_SLACK_APP_TOKEN?.trim() || '';
+/** Why Slack is off, or empty when it runs. */
+export const SLACK_OFF = env.JARVIS_SLACK === 'off' ? 'JARVIS_SLACK=off'
+  : !SLACK_USER_TOKEN || !SLACK_APP_TOKEN ? 'no tokens in .env'
+  : !SLACK_USER_TOKEN.startsWith('xoxp-') || !SLACK_APP_TOKEN.startsWith('xapp-') ? 'JARVIS_SLACK_USER_TOKEN must start with xoxp- and JARVIS_SLACK_APP_TOKEN with xapp-'
+  : '';

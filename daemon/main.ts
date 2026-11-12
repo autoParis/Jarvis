@@ -42,7 +42,8 @@ import { readChatFile, withEvents, fileCursor } from './transcript.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { withTyped } from '../web/dictate.js';
-import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE } from './config.ts';
+import { PRODUCT_KEY, PRODUCT_LABEL, DEALERS_FILE, SLACK_OFF, SLACK_USER_TOKEN, SLACK_APP_TOKEN } from './config.ts';
+import { makeSlack, slackRoute, type SlackStatus } from './slack.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OWNER_NOTE = join(ROOT, 'vault', 'owner.md');
@@ -424,6 +425,20 @@ if (process.env.JARVIS_GMAIL !== 'off') (async () => {
   }
   messagesChanged();
 })();
+
+// ---- Slack, read only: messages that match the owner's rules (rules in slack.ts, edited with bin/jarvis-slack). No tokens means off. ----
+const slack = SLACK_OFF ? undefined : makeSlack({
+  store, log, userToken: SLACK_USER_TOKEN, appToken: SLACK_APP_TOKEN,
+  onMatch: (line, r, v, summary) => {
+    store.addTurn({ role: 'event', text: line });
+    broadcast({ type: 'event', text: line, at: new Date().toISOString() });
+    if (v.urgent) notify({ title: `Slack: ${r.who} (${r.where})`, body: summary, url: '/', tag: `slack-${r.msg.channel}-${r.msg.ts}` }, { urgent: true })
+      .catch(e => log(`push: ${e}`));
+    if (!existsSync(KILL_FILE)) brain.send(`[slack event] New Slack message:\n${line}`);
+  },
+});
+if (slack) slack.start(); else log(`slack: off (${SLACK_OFF})`);
+const slackStatus = (): SlackStatus => slack?.status() ?? { state: 'off', detail: SLACK_OFF, at: new Date().toISOString() };
 
 // ---- Push: pushes held for quiet hours, then open asks and escalations the owner has not answered (rules in push.ts) ----
 let sweeping = false;
@@ -934,6 +949,10 @@ http.createServer(async (req, res) => {
     }
     if (url.startsWith('/api/internal/reminders')) {
       const r = reminderRoute(store, log, req.method ?? '', url, req.method === 'POST' ? await json(req) : {});
+      if (r) return send(res, r.status, r.body);
+    }
+    if (url.startsWith('/api/internal/slack/')) {
+      const r = slackRoute(store, log, slackStatus, req.method ?? '', url, req.method === 'POST' ? await json(req) : {});
       if (r) return send(res, r.status, r.body);
     }
     if (url.startsWith('/api/internal/gate/')) {

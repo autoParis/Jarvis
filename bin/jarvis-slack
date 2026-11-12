@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+// The owner's Slack rules: which conversations and people reach him. jarvisd holds the rules; this only relays.
+//   jarvis-slack list                                   the rules, the connection state, and the matched and dropped counts
+//   jarvis-slack add notify|mute channel|dm|person <target> [--urgent]
+//       channel <name or id>   a channel ("support", "#support", "C0123")
+//       dm <person or *>       the DM with that person, or * for every DM and group DM
+//       person <name or id>    any message that person writes, anywhere
+//       --urgent               matches also go to the phone (notify only)
+//   jarvis-slack remove <id>
+const [cmd, ...rest] = process.argv.slice(2);
+const url = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/slack/rules`;
+const usage = 'usage: jarvis-slack list | add <notify|mute> <channel|dm|person> <target> [--urgent] | remove <id>';
+const args = rest.filter(a => a !== '--urgent');
+let req;
+if (cmd === 'list' && !rest.length) req = [url];
+else if (cmd === 'add' && args.length === 3) {
+  const [action, kind, target] = args;
+  req = [url, { method: 'POST', body: JSON.stringify({ action, kind, target, urgent: rest.includes('--urgent') }) }];
+}
+else if (cmd === 'remove' && rest.length === 1 && /^\d+$/.test(rest[0])) req = [`${url}/${rest[0]}/remove`, { method: 'POST' }];
+else { console.error(usage); process.exit(2); }
+try {
+  const res = await fetch(...req);
+  const text = await res.text();
+  if (res.ok) console.log(text); else console.error(text);
+  process.exit(res.ok ? 0 : 1);
+} catch (e) {
+  console.error(`jarvisd unreachable: ${e.cause?.code ?? e}`);
+  process.exit(1);
+}

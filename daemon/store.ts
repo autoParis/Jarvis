@@ -58,6 +58,11 @@ export type SupportReply = {
   created_at: string; status_at: string; attempted_at: string | null; finished_at: string | null;
 };
 
+/** One of the owner's Slack rules (slack.ts): which conversations and people reach him. `target` is lower case, or `*` for every DM. */
+export type SlackRule = {
+  id: number; kind: 'channel' | 'dm' | 'person'; target: string; action: 'notify' | 'mute'; urgent: number; created_at: string;
+};
+
 /** A message from the owner the brain has not answered yet. */
 export type OwnerTurn = { id: number; text: string; created_at: string };
 
@@ -149,6 +154,12 @@ export function openStore(path: string) {
     CREATE TRIGGER IF NOT EXISTS support_reply_once BEFORE UPDATE OF status ON support_replies
       WHEN OLD.status IN ('sending', 'sent', 'unknown') AND NEW.status IN ('waiting', 'sending')
       BEGIN SELECT RAISE(ABORT, 'a send that was attempted never goes out again'); END;
+    -- The owner's Slack rules (slack.ts), edited by bin/jarvis-slack.
+    CREATE TABLE IF NOT EXISTS slack_rules (
+      id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('channel', 'dm', 'person')), target TEXT NOT NULL,
+      action TEXT NOT NULL CHECK (action IN ('notify', 'mute')), urgent INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE (kind, target)
+    );
     -- Background Claude Code sessions jarvisd started (native.ts). id is the short id claude --bg printed.
     CREATE TABLE IF NOT EXISTS native_workers (
       id TEXT PRIMARY KEY, session_id TEXT, name TEXT NOT NULL, cwd TEXT NOT NULL, approval_id INTEGER,
@@ -419,6 +430,19 @@ export function openStore(path: string) {
     doneReminder(id: number, now: string): Reminder | undefined {
       db.prepare(`UPDATE reminders SET status = 'done', done_at = ? WHERE id = ? AND status != 'done'`).run(now, id);
       return this.reminder(id);
+    },
+    slackRules(): SlackRule[] {
+      return db.prepare('SELECT * FROM slack_rules ORDER BY id').all() as SlackRule[];
+    },
+    addSlackRule(kind: SlackRule['kind'], target: string, action: SlackRule['action'], urgent: boolean): SlackRule {
+      const r = db.prepare('INSERT INTO slack_rules (kind, target, action, urgent) VALUES (?, ?, ?, ?)').run(kind, target, action, urgent ? 1 : 0);
+      return db.prepare('SELECT * FROM slack_rules WHERE id = ?').get(r.lastInsertRowid) as SlackRule;
+    },
+    /** Deletes a rule and returns it. Undefined for an unknown id. */
+    removeSlackRule(id: number): SlackRule | undefined {
+      const r = db.prepare('SELECT * FROM slack_rules WHERE id = ?').get(id) as SlackRule | undefined;
+      if (r) db.prepare('DELETE FROM slack_rules WHERE id = ?').run(id);
+      return r;
     },
     addSupportReply(r: Pick<SupportReply, 'reference' | 'dealership' | 'dealership_id' | 'text' | 'repo' | 'pr'>): SupportReply {
       const row = db.prepare('INSERT INTO support_replies (reference, dealership, dealership_id, text, repo, pr) VALUES (?, ?, ?, ?, ?, ?)')
