@@ -1,18 +1,24 @@
 import { OWNER_CAP, OWNER } from './config.ts';
+import { WAITING_LINE, REPORT_NUDGE, STALL_MS, outcomeOf, fields, STORY_ADVISOR, isStoryStart } from './workercontract.ts';
+export { NATIVE_FOOTER, REPORT_NUDGE, WAITING_LINE, STALL_MS } from './workercontract.ts';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { closeSync, constants, existsSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { cleanEnv } from './orca.ts';
+import { cleanEnv } from './config.ts';
 import { classify, type NativeState, type WorkRow } from './work.ts';
-import type { Approval, NativeWorkerRow, Store } from './store.ts';
+import type { Approval, Item, NativeWorkerRow, Store } from './store.ts';
 import type { Log } from './log.ts';
-import { lastAssistantText } from './transcript.ts';
+import { lastAssistantText, lastTurnMessages } from './transcript.ts';
+import { workerMessageKind } from './asks.ts';
+import { FRESH_WRITE_MS, holdersIn, lastModel, processTable, sessionName, tailOf, type Holder } from './resume.ts';
 
-// Claude Code background sessions (`claude --bg`) as Jarvis's own workers, with no Orca in the loop (Jarvis 2.0, stage B).
+// Claude Code background sessions (`claude --bg`) as Jarvis's own workers (Jarvis 2.0, stage B).
 // jarvisd starts one, the session's hooks post back here over http (a permission prompt becomes an Approve card, each
 // turn's last message becomes the report), `claude agents` tells us whether it lives, and a reply goes in through a
 // short-lived Claude session, because SendMessage from another session is the only way into a running background one.
-// Claude Code 2.1.316, research preview: the output shapes parsed here were checked live on 2026-11-06.
+// Background sessions are a research preview. The output shapes parsed here were checked live on 2026-11-06 (2.1.316).
+// No version is pinned: the first start checks that `claude` has every command and option the driver runs
+// (missingFeatures), and each parse below fails with its own message when a shape changes.
 
 export type { NativeState } from './work.ts';
 export type NativeWorker = {
@@ -46,24 +52,85 @@ export type NativeWorker = {
   resumes: number; last_resume_at: string | null;
   /** Interactive: the named pipe its terminal reads as stdin, so jarvisd can type into it. */
   in_fifo: string | null;
+  /** Continue on phone: the Remote Control name the session runs with. A resume keeps it, and the idle reaper leaves the row alone. */
+  remote: string | null;
 };
+/** What Continue on phone did: the row it runs as, or why not and which processes hold the session. */
+export type PhoneResult = { ok: true; worker: NativeWorker; already?: boolean } | { ok: false; error: string; holders?: Holder[] };
+/** The permission modes an adopted session keeps from its transcript. Anything else (bypassPermissions) becomes default. */
+const KEPT_MODES = new Set(['auto', 'default', 'acceptEdits', 'plan']);
 export type ClaudeRun = { code: number | null; out: string; err: string };
 export type Claude = (args: string[], cwd?: string) => Promise<ClaudeRun>;
 
 /** A work-list row id is `n:<short id>`. */
 export const ROW_PREFIX = 'n:';
-/** Pinned: background sessions are a research preview, so a different `claude --version` gets a warning in the log. */
-export const CLAUDE_CODE_VERSION = '2.1.316';
+/** The `claude` options the driver passes: starts, resumes, the relay, Continue on phone and the Desktop button. */
+export const NEEDED_OPTIONS = ['--bg', '--name', '--settings', '--permission-mode', '--model', '--worktree', '--resume', '--remote-control', '--desktop',
+  '--print', '--output-format', '--tools', '--strict-mcp-config', '--mcp-config'];
+/** The `claude` commands the driver runs on background sessions. */
+export const NEEDED_COMMANDS = ['agents', 'attach', 'respawn', 'rm', 'stop'];
+/** `claude agents --json --all` is the liveness listing every poll reads. */
+export const NEEDED_AGENT_OPTIONS = ['--json', '--all'];
+
+/** True when `help` defines `flag` on an option line ("  -n, --name <name>", "  --bg, --background"), not only names it in a description. */
+const hasOption = (help: string, flag: string) => new RegExp(`^\\s+(?:-\\w,\\s+)?(?:--[\\w-]+,\\s+)*${flag}(?![\\w-])`, 'm').test(help);
+/** True when the Commands section of `help` lists `cmd`, alone or as one of its names ("  stop|kill <id>"). */
+const hasCommand = (help: string, cmd: string) => {
+  const at = help.search(/^Commands:/m);
+  return at >= 0 && new RegExp(`^\\s+(?:[\\w-]+\\|)*${cmd}(?:\\|[\\w-]+)*(?:\\s|$)`, 'm').test(help.slice(at));
+};
+/**
+ * What the driver needs and this Claude Code lacks, from `claude --help` and `claude agents --help`. Empty when it has
+ * everything. A check of what is used, not of a version number, so an update that keeps these passes with no warning.
+ */
+export function missingFeatures(help: string, agentsHelp: string): string[] {
+  return [
+    ...NEEDED_OPTIONS.filter(f => !hasOption(help, f)).map(f => `the ${f} option`),
+    ...NEEDED_COMMANDS.filter(c => !hasCommand(help, c)).map(c => `the claude ${c} command`),
+    ...(hasCommand(help, 'agents') ? NEEDED_AGENT_OPTIONS.filter(f => !hasOption(agentsHelp, f)).map(f => `the claude agents ${f} option`) : []),
+  ];
+}
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const RELAY_MODEL = 'claude-haiku-5-5';
 /** The short-lived session that carries a reply in. The worker sees its messages as coming from this name. */
 export const RELAY_NAME = 'jarvis-brain-relay';
 export const DENY_MESSAGE = `${OWNER_CAP} denied it from the Jarvis app`;
-/** A done turn without a DONE or FAILED line is reported to the brain once the report is this old. */
+/**
+ * The backstop for a turn whose Stop hook never reached jarvisd (a restart): a done turn without a DONE or FAILED line is
+ * reported to the brain once the report is this old. A Stop hook that arrives settles the turn at once (stopHook).
+ */
 export const SILENT_DONE_MS = 2 * 60_000;
+/** The state key that says a worker's report at this time needs no silent-turn notice: it was a pause, or the notice went out. */
+const quietKey = (id: string) => `nativeQuiet:${id}`;
+/**
+ * The state key that holds the report time of a WAITING line that waits on the owner: no background task, no scheduled
+ * wake-up and no ask to the brain in that turn. Worker 5361 (2026-11-11): its ask was answered "you sign in later", it
+ * ended on WAITING, and its row showed a spinner for 4 hours.
+ */
+const ownerWaitKey = (id: string) => `nativeOwnerWait:${id}`;
+/** The state key that holds a follow-up turn's FAILED report on a worker that already reported DONE: `{ text, at, outcome }`. */
+const followUpKey = (id: string) => `nativeFollowUp:${id}`;
+/** The follow-up result kept beside a done story, or undefined. */
+export function followUpOf(store: Pick<Store, 'getState'>, id: string): { text: string; at: string; outcome: 'failed' } | undefined {
+  try { const v = JSON.parse(store.getState(followUpKey(id)) || 'null'); return v && typeof v.text === 'string' ? v : undefined; } catch { return undefined; }
+}
+/** The first line of a report, for a one-line note. */
+const firstLine = (s: string) => (s.trim().split('\n')[0] ?? '').slice(0, 200);
+/** The words after "WAITING:" on the report's first line, for the row's note and the check's finding. */
+export const waitingText = (report: string) => (report.trim().split('\n')[0] ?? '').replace(WAITING_LINE, '').trim().slice(0, 200) || 'Waiting';
+/** At most this many REPORT_NUDGE blocks per worker in this window, whatever Claude Code says about the chain. */
+const NUDGE_MAX = 3, NUDGE_WINDOW_MS = 10 * 60_000;
+/** The state key that holds the activity time of the last stall told, so a jarvisd restart does not tell the same stall twice. */
+const stallKey = (id: string) => `nativeStall:${id}`;
+/** What the brain hears about a stuck worker (stalledFrom). It names the next step, so a night notice is not answered SILENT. */
+export const stalledText = (w: Pick<NativeWorker, 'name' | 'report'>, idleMs: number) => `Worker ${w.name} is stuck: its task is unfinished and it wrote nothing for ${Math.round(idleMs / 60_000)} min. Its last report: ${JSON.stringify((w.report ?? '(none)').slice(0, 300))}. It may wait on something that never comes, such as a helper session it started. Nudge it now: tell it to stop waiting, check what it waits on, then finish the task or report FAILED. Tell ${OWNER} in one sentence.`;
+/** What the brain hears about a turn that ended with no DONE or FAILED line. vault/CLAUDE.md matches its start. */
+const silentText = (w: Pick<NativeWorker, 'name' | 'report'>) => `Worker ${w.name} ended its turn without a DONE or FAILED line. Its last words: ${(w.report ?? '').slice(0, 300)}`;
 /** Finished workers leave the work list after this. */
 export const ROW_MAX_AGE_MS = 24 * 3_600_000;
 const SESSION_WAIT_MS = 15_000, RESPAWN_WAIT_MS = 60_000, TICK_MS = 500;
+/** Claude Code writes its end-of-turn lines to the transcript just after the Stop hook (about 0.1 s in 609's). */
+const REPORT_WRITE_SLACK_MS = 10_000;
 /** An interactive session that died by accident is resumed at most this many times in this window, then the row fails until a message asks again. */
 export const RESUME_MAX = 3, RESUME_WINDOW_MS = 10 * 60_000;
 /** An interactive session that reported DONE or FAILED, or waits on an ask, and sat idle this long has its process ended; a message resumes it. */
@@ -73,30 +140,18 @@ export const DESKTOP_WAITING = 'Open in the Claude desktop app';
 /** The first message of a resumed session whose task was unfinished when its terminal died. */
 export const NUDGE = 'Your terminal was restarted by Jarvis. Continue the task from where you stopped. Check the result of your last action before repeating it. Report DONE or FAILED as before.';
 
-/** What gate.ts appends to every background worker's brief. */
-export const NATIVE_FOOTER = `
 
-## You are a Jarvis worker
-You are a Claude Code session started by Jarvis, ${OWNER}'s assistant. Your coordinator is the Claude Code session named \`jarvis-brain\`; reach it with SendMessage (ListAgents shows it). AskUserQuestion is blocked.
-
-Ask only what needs a human decision, with SendMessage to jarvis-brain, in this shape:
-STORY: <number and topic, at most 8 words>
-WHERE: <what you are doing, one or two short sentences>
-QUESTION: <one sentence>
-CONTEXT: <optional, at most 3 sentences>
-OPTIONS: recommended first, at most 3, each "<choice> because <reason under 10 words>"
-Then end your turn. The answer arrives as a message from jarvis-brain or jarvis-brain-relay (${OWNER}'s words, carried by jarvisd) and starts a new turn.
-
-When the work is finished, your last message of the final turn must start with a line \`DONE: <one sentence>\` (or \`FAILED: <one sentence>\`), followed by the report: what changed, the branch and commit, the PR link if any, what was not proven. That exact text reaches ${OWNER} word for word.
-
-If a permission prompt appears, wait; ${OWNER} answers it from his app. If the permission layer refuses a command, do not retry or route around it; say so in your report.
-
-Before each batch of tool calls, write one plain sentence saying what you are about to do.`;
-
-/** The settings file every background worker starts with: its hooks point at jarvisd. */
-export function workerSettings(jarvisUrl: string): object {
+/**
+ * The settings file every background worker starts with: its hooks point at jarvisd. `advisor` sets Claude Code's
+ * `advisorModel` on top of the owner's own settings: a model name turns the advisor on, '' turns it off, and leaving it
+ * out keeps whatever his settings say. Claude Code reads `advisorModel: ""` as unset and falls back to the owner's global
+ * model, so '' also sets CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1, which removes the tool whatever `advisorModel` says.
+ */
+export function workerSettings(jarvisUrl: string, advisor?: string): object {
   const hook = (path: string, timeout: number) => ({ hooks: [{ type: 'http', url: `${jarvisUrl}/api/hooks/${path}`, timeout }] });
   return {
+    ...(advisor === undefined ? {} : { advisorModel: advisor }),
+    ...(advisor === '' ? { env: { CLAUDE_CODE_DISABLE_ADVISOR_TOOL: '1' } } : {}),
     crossSessionInbound: 'accept',
     dialogExpiry: 'never',
     permissions: { deny: ['AskUserQuestion'] },
@@ -121,10 +176,30 @@ export function summarize(tool: string, input: any): string {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const ago = (ms: number) => ms < 3_600_000 ? `${Math.max(1, Math.round(ms / 60_000))} min ago` : ms < 172_800_000 ? `${Math.round(ms / 3_600_000)} h ago` : `${Math.round(ms / 86_400_000)} d ago`;
-const outcomeOf = (report: string): 'done' | 'failed' | null => {
-  const m = report.match(/^\s*(DONE|FAILED)\b/i);
-  return m ? (m[1].toUpperCase() === 'DONE' ? 'done' : 'failed') : null;
-};
+
+/**
+ * When a finished row finished, in ms: its DONE or FAILED report, else its last change. The report time does not move when
+ * the reaper stops the session an hour later, so the row leaves the list a day after the report, no later than its request
+ * (requests.ts DONE_KEEP_MS, counted from the request's done time, which follows the report). Counted from the last change,
+ * the row outlived its request by that hour.
+ */
+export function finishedAt(w: Pick<NativeWorker, 'outcome' | 'report_at' | 'updated_at'>): number {
+  return Date.parse(w.outcome && w.report_at ? w.report_at : w.updated_at);
+}
+
+/**
+ * The work-list state of a native worker. A session Jarvis stopped itself (the idle reaper, the desktop handoff) did not
+ * exit: it waits on the owner when an ask is open, and is idle otherwise. As `exited` the request layer read it as failed
+ * (requests.ts statusOf), so a worker waiting on an ask was reported failed. Only a stop or a death keeps `exited`.
+ */
+export function rowState(w: Pick<NativeWorker, 'state' | 'waiting_for'>, asking: boolean): WorkRow['state'] {
+  if (w.state === 'blocked') return 'waiting';
+  if (w.state === 'working' || w.state === 'starting') return asking ? 'waiting' : 'working';
+  if (asking && (w.state === 'done' || w.state === 'stopped')) return 'waiting';
+  if (w.state === 'done') return 'idle';
+  if (w.state === 'stopped' && (w.waiting_for === IDLE_STOPPED || w.waiting_for === DESKTOP_WAITING)) return 'idle';
+  return 'exited';
+}
 
 export function runClaude(args: string[], cwd?: string): Promise<ClaudeRun> {
   return new Promise(resolve => execFile('claude', args, { cwd, env: { ...cleanEnv, HOME: process.env.HOME }, timeout: 10 * 60_000, maxBuffer: 20 * 1024 * 1024 },
@@ -187,6 +262,33 @@ export function writeFifo(fifo: string, bytes: Buffer): void {
 /** Claude Code's folder under ~/.claude/projects for a cwd: every character outside [A-Za-z0-9] becomes a dash. */
 export const projectDir = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-');
 
+/** The external id of a worker's question item: one per message, from the worker id and the time it arrived. */
+export const askId = (worker: string, at: number) => `ask:${worker}:${at}`;
+
+/**
+ * A worker's ask as a question item: an ask card in the app, `[native question]` in the brief, answered by a tap or
+ * by `jarvis-native reply`. One shape for both ways in: a SendMessage the brain answered (nativeroutes.ts
+ * routeWorkerTurn), and an ask the worker wrote in its turn text when SendMessage failed (stopHook).
+ */
+export function insertWorkerAsk(store: Store, w: Pick<NativeWorker, 'id' | 'name'>, text: string, at: number): Item | undefined {
+  // The same ask again (a resumed worker repeats it, a Stop hook fires twice, a SendMessage after the turn-text card) keeps the one open card.
+  if (openWorkerAsk(store, w.id, text)) return undefined;
+  return store.insertItem({
+    source: 'native', external_id: askId(w.id, at), kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`,
+    subject: `Question from ${w.name}`, body: text, status: 'spoken',
+  });
+}
+
+/** This worker's open question item with exactly this text, if any. */
+export const openWorkerAsk = (store: Store, worker: string, text: string): Item | undefined =>
+  store.openItems().find(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${worker}` && i.body === text);
+
+/** An ask in the worker contract format: labeled QUESTION and OPTIONS fields that read as options. Free prose with "Options: 1) 2)" is not one. */
+const contractAsk = (text: string) => { const f = fields(text); return !!f.QUESTION && !!f.OPTIONS && workerMessageKind(text) === 'ask'; };
+
+/** An ask written in the turn text, without its closing `WAITING:` paragraph: that line is for jarvisd, not for the card. */
+const turnAskText = (text: string) => text.trim().replace(/\n\s*\n\s*WAITING\s*:[^\n]*$/i, '').trim();
+
 type Agent = { id?: string; kind?: string; sessionId?: string; name?: string; pid?: number; status?: string; state?: string; waitingFor?: string; cwd?: string };
 
 export function makeNative(o: {
@@ -195,11 +297,16 @@ export function makeNative(o: {
   dataDir: string;
   onChange: (w: NativeWorker) => void;
   /** A Stop hook was stored; `final` when it set the outcome. */
-  onReport: (w: NativeWorker, text: string, final: boolean) => void;
+  onReport: (w: NativeWorker, text: string, final: boolean, followUp?: boolean) => void;
   /** A worker-permission approval was created or decided. */
   onCard: (a: Approval) => void;
   /** A liveness finding for the brain: failed, blocked with no card, done without a DONE line. */
   onNotice: (w: NativeWorker, text: string) => void;
+  /**
+   * The worker ended its turn on an ask in the worker contract format that no SendMessage delivered (the brain was
+   * unreachable). jarvisd made the ask card `item`; the brain must hear it. Absent in tests that do not care.
+   */
+  onTurnAsk?: (w: NativeWorker, item: Item) => void;
   claude?: Claude; now?: () => number;
   /** Test seams for interactive sessions: start the detached pseudo-terminal (returns its pgid), end a process group, make the stdin pipe. */
   spawnPty?: (argv: string[], cwd: string, fifo?: string) => number;
@@ -210,6 +317,10 @@ export function makeNative(o: {
   killPid?: (pid: number) => void;
   /** Typing into an interactive session's stdin pipe (throws when it cannot). */
   writeFifo?: (fifo: string, bytes: Buffer) => void;
+  /** Continue on phone: `ps -axo pid=,command=` lines, a transcript's last write time and its tail. */
+  processes?: () => Promise<string[]>;
+  written?: (file: string) => number;
+  tail?: (file: string) => string;
 }) {
   const { store, log } = o;
   const claude = o.claude ?? runClaude;
@@ -219,21 +330,51 @@ export function makeNative(o: {
   const alivePgid = o.alivePgid ?? ((pgid: number) => { try { process.kill(pgid, 0); return true; } catch { return false; } });
   const killPid = o.killPid ?? ((pid: number) => { try { process.kill(pid, 'SIGTERM'); } catch {} });
   const typeInto = o.writeFifo ?? writeFifo;
+  const processes = o.processes ?? processTable;
+  const written = o.written ?? ((f: string) => statSync(f).mtimeMs);
+  const tail = o.tail ?? ((f: string) => tailOf(f));
+  // Sessions a Continue on phone press is under way for, so a double tap cannot start two terminals.
+  const phoning = new Set<string>();
   const now = o.now ?? Date.now;
   const iso = () => new Date(now()).toISOString();
-  const settingsPath = join(o.dataDir, 'worker-settings.json');
-  writeFileSync(settingsPath, JSON.stringify(workerSettings(o.jarvisUrl), null, 2) + '\n');
+  // Three settings files, the same but for the advisor. A story worker gets STORY_ADVISOR, any other worker Jarvis
+  // started gets the advisor off, and a session Jarvis did not start (continued on the phone) keeps the owner's setting.
+  const writeSettings = (file: string, advisor?: string) => {
+    const path = join(o.dataDir, file);
+    writeFileSync(path, JSON.stringify(workerSettings(o.jarvisUrl, advisor), null, 2) + '\n');
+    return path;
+  };
+  const settingsPath = writeSettings('worker-settings.json');
+  const storySettingsPath = writeSettings('worker-settings-story.json', STORY_ADVISOR);
+  const plainSettingsPath = writeSettings('worker-settings-no-advisor.json', '');
+  /** The settings file for a worker, from the card that started it. A start and every resume pick the same file. */
+  const settingsFor = (approvalId?: number | null): string => {
+    const a = approvalId ? store.approval(approvalId) : undefined;
+    if (!a) return settingsPath;
+    let args: any;
+    try { args = JSON.parse(a.args); } catch {}
+    return isStoryStart(a.action, String(args?.spec ?? '')) ? storySettingsPath : plainSettingsPath;
+  };
   // One named pipe per interactive terminal, `data/pty/<name>-r<resumes>.in`.
   const ptyDir = join(o.dataDir, 'pty');
   mkdirSync(ptyDir, { recursive: true });
   const fifoFor = (name: string, resumes: number) => { const f = join(ptyDir, `${name}-r${resumes}.in`); mkfifo(f); return f; };
   // Permission prompts held open: approval id to the resolver of the hook's http reply.
   const held = new Map<number, { worker: string; resolve: (reply: object) => void }>();
+  // Workers the last poll found stuck (stalledFrom), and the time their last activity was. rows() shows it; the ten-minute check reports it.
+  const stalled = new Map<string, number>();
   // Liveness findings already told, `<id>:<kind>`, cleared when the condition goes away.
   const noticed = new Set<string>();
+  // Workers sent back with REPORT_NUDGE in the current chain of their turn, and when, for the cap.
+  const nudgedChain = new Set<string>();
+  const nudgeTimes = new Map<string, number[]>();
+  /** The report needs no silent-turn notice: it was a pause, or the brain was told. */
+  const quiet = (w: Pick<NativeWorker, 'id' | 'report_at'>) => !!w.report_at && !!store.getState(quietKey(w.id))?.endsWith(`:${w.report_at}`);
+  /** The last report was a pause (a WAITING line, an ask, a background task): the worker still has its task. */
+  const paused = (w: Pick<NativeWorker, 'id' | 'report_at'>) => !!w.report_at && store.getState(quietKey(w.id)) === `pause:${w.report_at}`;
   // From the last `claude agents` listing: the ids whose process is alive.
   let alive = new Set<string>();
-  let versionChecked = false;
+  let featuresOk = false;
   // Accidental resumes per interactive worker, for the backoff; and when each one was first seen idle, for the reaper.
   const resumeTimes = new Map<string, number[]>();
   // Resumes under way, so an overlapping poll does not start a second one.
@@ -256,6 +397,19 @@ export function makeNative(o: {
     o.onChange(w);
     return w;
   };
+  /**
+   * The words the work list sorts a row by: the task title and spec the owner approved. The name is only their slug, which
+   * drops the "#" of "#4886 Check the price", so classify put every story worker in Other. A row with no start card (a
+   * session continued on the phone) falls back to its name.
+   */
+  const taskOf = (w: NativeWorker): { title: string; spec?: string } => {
+    const a = w.approval_id ? store.approval(w.approval_id) : undefined;
+    let args: any;
+    try { args = a ? JSON.parse(a.args) : undefined; } catch {}
+    return typeof args?.taskTitle === 'string' && args.taskTitle.trim()
+      ? { title: args.taskTitle, spec: typeof args.spec === 'string' ? args.spec : undefined }
+      : { title: w.name };
+  };
   const pendingCard = (id: string) => [...held.values()].some(h => h.worker === id);
   /** A task still under way: the only state a dead terminal is resumed from on its own, and the one that gets the nudge. */
   const unfinished = (w: NativeWorker) => ['starting', 'working', 'blocked'].includes(w.state) && !w.outcome;
@@ -265,6 +419,32 @@ export function makeNative(o: {
     if (!w.outcome && !asks.length) return undefined;
     const times = [w.report_at, w.last_resume_at, ...asks.map(i => i.created_at.replace(' ', 'T') + (i.created_at.includes('Z') ? '' : 'Z'))].filter((t): t is string => !!t).map(t => Date.parse(t)).filter(t => !Number.isNaN(t));
     return times.length ? Math.max(...times) : undefined;
+  };
+  /**
+   * Its last turn ended on a WAITING line that only the owner ends (stopHook: no background task, no scheduled wake-up,
+   * no ask), and no report came since. An open ask shows as the ask instead (rows).
+   */
+  const waitsOnOwner = (w: NativeWorker) => w.state === 'working' && !w.outcome && !!w.report_at
+    && store.getState(ownerWaitKey(w.id)) === w.report_at;
+  /**
+   * When a stuck worker last did anything, or undefined when it is not stuck. Stuck: its task is unfinished, it is not a
+   * conversation (a side chat, a phone session), no ask or permission card of its own waits on the owner, and nothing
+   * happened for STALL_MS: no start, report or resume, and no write to its transcript. A worker idle on a WAITING line counts,
+   * and so does a busy one whose tool hangs. With no transcript to read, a busy worker is never called stuck.
+   * Worker 579 (2026-11-11): "working" for 8 hours on a WAITING line, and nothing told anyone.
+   */
+  const stalledFrom = (w: NativeWorker, a: Agent | undefined): number | undefined => {
+    if (!unfinished(w) || w.state === 'blocked' || w.remote || pendingCard(w.id)) return undefined;
+    // A worker that waits on the owner is not stuck, and nudging it does nothing. The check repeats its finding instead.
+    if (waitsOnOwner(w)) return undefined;
+    if (w.approval_id && store.approval(w.approval_id)?.action === 'side-chat') return undefined;
+    if (store.openItems().some(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${w.id}`)) return undefined;
+    let wrote: number | undefined;
+    const file = api.transcriptFile(w.id);
+    try { if (file) wrote = written(file); } catch {}
+    if (wrote === undefined && a?.status === 'busy') return undefined;
+    const last = Math.max(...[w.created_at, w.report_at, w.last_resume_at].filter((t): t is string => !!t).map(t => Date.parse(t)).filter(t => !Number.isNaN(t)), wrote ?? 0);
+    return now() - last >= STALL_MS ? last : undefined;
   };
   /** Closes the permission cards held for a worker whose process is gone: nothing can answer that hook any more. */
   const failHeld = (id: string, reason: string) => {
@@ -290,9 +470,26 @@ export function makeNative(o: {
       : a.id === w.id || (!!w.session_id && a.sessionId === w.session_id));
     return mine.find(a => !!a.pid) ?? mine[0];
   };
-  /** An interactive session's liveness from `status` (busy, waiting, idle) while its process lives; nothing once it is gone. */
+  /**
+   * True when the session's last report is still its DONE or FAILED and its transcript has not changed since. Claude Code
+   * lists a session as busy while a background command of its runs, with no turn under way: 609 reported DONE at 17:21
+   * with a preview server still running, and its row showed "working" until that server stopped at 17:33 (2026-11-11).
+   * A new turn writes its prompt to the transcript at once. An unreadable transcript counts as a change.
+   */
+  const quietSinceOutcome = (w: NativeWorker): boolean => {
+    if (!w.outcome || !w.report_at || outcomeOf(w.report ?? '') !== w.outcome) return false;
+    const file = api.transcriptFile(w.id);
+    try { return !!file && written(file) <= Date.parse(w.report_at) + REPORT_WRITE_SLACK_MS; } catch { return false; }
+  };
+  /**
+   * An interactive session's liveness from `status` (busy, waiting, idle) while its process lives; nothing once it is gone.
+   * Busy after a DONE or FAILED with no new transcript entry (quietSinceOutcome) is that outcome still.
+   * Idle after a DONE or FAILED that is still its last report is that outcome again: a busy spell with no new turn (a
+   * resume or a compaction) left 5276-keep-the-muse-digest "working" in Stories for good (2026-11-09).
+   */
   const interactiveState = (a: Agent | undefined, w: NativeWorker): NativeState | undefined =>
-    !a?.pid ? undefined : a.status === 'busy' ? 'working' : a.status === 'waiting' ? 'blocked' : w.outcome ? w.state : w.report ? 'done' : 'working';
+    !a?.pid ? undefined : a.status === 'busy' ? (quietSinceOutcome(w) ? w.outcome as NativeState : 'working') : a.status === 'waiting' ? 'blocked' : w.remote && a.status === 'idle' ? 'done'
+      : w.outcome ? (a.status === 'idle' && outcomeOf(w.report ?? '') === w.outcome ? w.outcome : w.state) : w.report && !paused(w) ? 'done' : 'working';
 
   /** Polls `claude agents` until `ok(entry)` holds for the worker, or the time is up. */
   async function waitFor(w: NativeWorker, ok: (a: Agent) => boolean, ms: number): Promise<Agent | undefined> {
@@ -305,19 +502,35 @@ export function makeNative(o: {
     }
   }
 
-  async function checkVersion() {
-    if (versionChecked) return;
-    versionChecked = true;
-    const v = (await claude(['--version'])).out.trim();
-    if (!v.startsWith(CLAUDE_CODE_VERSION)) log('native: claude version differs from the pinned one', { found: v, pinned: CLAUDE_CODE_VERSION });
+  /**
+   * Before the first start: does this `claude` have every command and option the driver runs? Throws with the missing
+   * ones named, so the start fails with that reason instead of a parse error later. Only a pass is remembered, so an
+   * update of Claude Code is picked up at the next start with no jarvisd restart.
+   */
+  async function checkClaude() {
+    if (featuresOk) return;
+    const [v, help, agentsHelp] = await Promise.all([claude(['--version']), claude(['--help']), claude(['agents', '--help'])]);
+    const version = v.out.trim() || 'of unknown version';
+    const text = (r: ClaudeRun) => `${r.out}\n${r.err}`;
+    if (!/^Commands:/m.test(text(help))) {
+      log('native: claude --help unreadable', { version, code: help.code, out: help.out.slice(0, 200), err: help.err.slice(0, 200) });
+      throw new Error(`Jarvis could not read \`claude --help\` (exit ${help.code}), so it cannot check that Claude Code ${version} has what native workers need.`);
+    }
+    const missing = missingFeatures(text(help), text(agentsHelp));
+    if (missing.length) {
+      log('native: claude lacks what the driver needs', { version, missing });
+      throw new Error(`Claude Code ${version} lacks ${missing.join(', ')}, which Jarvis's native workers need. Update Claude Code (claude update), then start the worker again.`);
+    }
+    featuresOk = true;
+    log('native: claude has what the driver needs', { version });
   }
 
   const api = {
     async start(a: { name: string; cwd: string; brief: string; model?: string; permissionMode?: 'auto' | 'default'; approvalId?: number; worktree?: boolean; interactive?: boolean }): Promise<NativeWorker> {
-      await checkVersion();
+      await checkClaude();
       if (a.interactive) return startInteractive(a);
       const args = ['--bg', '--name', a.name, '--permission-mode', a.permissionMode ?? 'auto', '--model', a.model ?? DEFAULT_MODEL,
-        '--settings', settingsPath, ...(a.worktree ? ['-w', a.name] : []), a.brief];
+        '--settings', settingsFor(a.approvalId), ...(a.worktree ? ['-w', a.name] : []), a.brief];
       const r = await claude(args, a.cwd);
       const m = r.out.match(/backgrounded\s*·\s*([\w-]+)\s*·/);
       if (!m) {
@@ -403,8 +616,8 @@ export function makeNative(o: {
         failHeld(w.id, `the worker's terminal died before ${OWNER} answered`);
         const resumes = w.resumes + 1;
         const fifo = fifoFor(w.name, resumes);
-        const pgid = spawnPty(['claude', '--resume', w.session_id, '--name', w.name, '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
-          '--settings', settingsPath, ...(nudge ? [NUDGE] : [])], w.cwd, fifo);
+        const pgid = spawnPty(['claude', '--resume', w.session_id, '--name', w.name, ...(w.remote ? [`--remote-control=${w.remote}`] : []), '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
+          '--settings', settingsFor(w.approval_id), ...(nudge ? [NUDGE] : [])], w.cwd, fifo);
         update(w.id, { pgid, in_fifo: fifo, resumes, last_resume_at: iso(), waiting_for: null });
         const seen = await waitFor(row(w.id)!, a => !!a.pid, RESPAWN_WAIT_MS);
         if (seen) alive.add(w.id);
@@ -416,6 +629,101 @@ export function makeNative(o: {
         if (!opt.quiet) o.onNotice(row(w.id)!, line);
         return true;
       } finally { resuming.delete(w.id); }
+    },
+
+    /**
+     * Continue on phone: the same session, by its own id, in a native interactive terminal with `--remote-control=<title>`,
+     * so the Claude app reaches it and the work list keeps it as an `n:` row. Never `claude --bg --resume` with flags: on a
+     * background session that keeps saved options, that starts a copy under a new id (approval 434, 2026-11-08, reproduced
+     * on 2.1.316). A session jarvisd already runs is ended first and resumed with the flag. Any other process on the session
+     * (a terminal, the desktop app, a background host) refuses it and is named, unless its pid is in `stop`:
+     * then it is ended first, because two writers on one session lose a turn. No message goes in, so no turn starts.
+     */
+    async phone(a: { sessionId: string; cwd: string; title: string; transcript?: string; approvalId?: number; stop?: number[] }): Promise<PhoneResult> {
+      const sid = a.sessionId;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sid)) return { ok: false, error: 'This session has no id Jarvis can resume.' };
+      if (phoning.has(sid)) return { ok: false, error: 'Continue on phone is already under way for this session.' };
+      phoning.add(sid);
+      try {
+        await checkClaude();
+        let mine = find(sid);
+        if (mine && mine.session_id !== sid) mine = undefined;
+        const onSession = (list: Agent[]) => list.filter(x => x.sessionId === sid && !!x.pid);
+        let list = await agents();
+        if (mine?.remote && mine.kind === 'interactive' && !!mine.pgid && alivePgid(mine.pgid) && onSession(list).length) return { ok: true, worker: mine, already: true };
+        if (onSession(list).some(x => x.status === 'busy') && mine) return { ok: false, error: 'It is in the middle of a turn. Try again when it is idle, so the turn is not cut off.' };
+        const file = (mine && api.transcriptFile(mine.id)) || a.transcript;
+        if (mine) {
+          // Our own process on it is ended first; it is not a second writer.
+          if (mine.kind === 'interactive') { if (mine.pgid && alivePgid(mine.pgid)) killGroup(mine.pgid); }
+          else if (onSession(list).length) await claude(['stop', mine.id]);
+          alive.delete(mine.id);
+          await waitGone(mine, 10_000);
+          // Its shell and `script` name the session id too, and leave `ps` a moment after the listing.
+          const until = now() + 5_000;
+          try { while (holdersIn(await processes(), sid).length && now() < until) await sleep(TICK_MS); } catch {}
+          list = await agents();
+        } else if (file) {
+          let age = Infinity;
+          try { age = now() - written(file); } catch {}
+          if (age < FRESH_WRITE_MS) return { ok: false, error: 'This session was written to seconds ago. Try again once it settles.' };
+        }
+        const holders = new Map<number, Holder>();
+        // A background session is stopped through its supervisor (`claude stop <id>`), which a bare kill would not tell.
+        const viaStop = new Map<number, string>();
+        for (const x of onSession(list)) {
+          holders.set(x.pid!, { pid: x.pid!, what: `a ${x.kind ?? 'Claude'} session${x.name ? ` named "${x.name}"` : ''}${x.status ? `, ${x.status}` : ''}` });
+          if (x.kind === 'background' && x.id) viaStop.set(x.pid!, x.id);
+        }
+        let table: string[] = [];
+        try { table = await processes(); } catch (e) { return { ok: false, error: `Not continued: could not check who else has this session open (${(e as Error).message}).` }; }
+        for (const h of holdersIn(table, sid)) if (!holders.has(h.pid)) holders.set(h.pid, h);
+        if (holders.size) {
+          const stop = new Set(a.stop ?? []);
+          const others = [...holders.values()].filter(h => !stop.has(h.pid));
+          if (others.length) {
+            log('native phone: refused, another process holds the session', { session: sid, holders: others.map(h => h.pid) });
+            return { ok: false, error: `Another process has this session open: ${others.map(h => `pid ${h.pid}, ${h.what}`).join('; ')}. Two writers would lose a turn.`, holders: others };
+          }
+          for (const h of holders.values()) { const bg = viaStop.get(h.pid); if (bg) await claude(['stop', bg]); else killPid(h.pid); }
+          log('native phone: ended the processes that held the session', { session: sid, pids: [...holders.keys()] });
+          const until = now() + 10_000;
+          const still = async () => onSession(await agents()).length > 0 || holdersIn(await processes(), sid).length > 0;
+          while (await still()) { if (now() >= until) return { ok: false, error: `The process that held it (pid ${[...holders.keys()].join(', ')}) did not end within 10 s. Nothing was started.` }; await sleep(TICK_MS); }
+        }
+        let jsonl = '';
+        try { if (file) jsonl = tail(file); } catch {}
+        const mode = mine?.permission_mode ?? [...jsonl.matchAll(/"permissionMode":"(\w+)"/g)].map(m => m[1]).filter(m => KEPT_MODES.has(m)).pop() ?? 'default';
+        const model = mine?.model ?? lastModel(jsonl) ?? DEFAULT_MODEL;
+        // The Remote Control name: the caller's title, else the session's own name, else its short id.
+        const remote = mine?.remote ?? ((a.title.trim() || sessionName(jsonl) || '').replace(/\s+/g, ' ').trim().slice(0, 80) || sid.slice(0, 8));
+        const id = mine?.id ?? sid.slice(0, 8);
+        if (!mine && row(id)) return { ok: false, error: `Row ${ROW_PREFIX}${id} already belongs to another session.` };
+        const name = mine?.name ?? `${remote.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session'}-${id}`;
+        const cwd = mine?.cwd ?? a.cwd;
+        const resumes = mine ? mine.resumes + 1 : 0;
+        const fifo = fifoFor(name, resumes);
+        const pgid = spawnPty(['claude', '--resume', sid, '--name', name, `--remote-control=${remote}`, '--permission-mode', mode, '--model', model, '--settings', mine ? settingsFor(mine.approval_id) : settingsPath], cwd, fifo);
+        const t = iso();
+        if (mine) update(id, { kind: 'interactive', pgid, in_fifo: fifo, resumes, last_resume_at: t, remote, model, permission_mode: mode, state: 'done', waiting_for: null });
+        else {
+          store.addNativeWorker({ id, session_id: sid, name, cwd, approval_id: a.approvalId ?? null, state: 'done', waiting_for: null, report: null, report_at: null, outcome: 'done',
+            transcript: file ?? null, created_at: t, updated_at: t, kind: 'interactive', pgid, repo: cwd, model, permission_mode: mode, resumes, last_resume_at: t, in_fifo: fifo, remote });
+          o.onChange(row(id)!);
+        }
+        const seen = await waitFor(row(id)!, x => !!x.pid, RESPAWN_WAIT_MS);
+        if (!seen) {
+          killGroup(pgid);
+          update(id, { state: 'stopped', waiting_for: 'Continue on phone did not start' });
+          log('native phone: the session was not listed alive', { worker: id, session: sid, pgid });
+          return { ok: false, error: `The session did not come up within ${RESPAWN_WAIT_MS / 1000} s. Nothing else holds it now; try again.` };
+        }
+        alive.add(id);
+        const w = update(id, { state: 'done' });
+        store.insertItem({ source: 'native', external_id: `event:${id}:${now()}`, kind: 'event', dispatch_id: `${ROW_PREFIX}${id}`, body: `Continued on the phone: Remote Control as "${remote}"`, status: 'done' });
+        log('native phone: continued on the phone', { worker: id, session: sid, adopted: !mine, pgid, remote, model, mode, cwd, stopped: [...holders.keys()] });
+        return { ok: true, worker: w };
+      } finally { phoning.delete(sid); }
     },
 
     /** The PermissionRequest http hook. Resolves when the owner taps Allow or Deny. */
@@ -444,16 +752,85 @@ export function makeNative(o: {
       return { ok: true };
     },
 
-    /** The Stop http hook: each turn's last message is the report. */
-    stopHook(body: any): void {
-      if (body?.stop_hook_active) return;
+    /**
+     * The Stop http hook: each turn's last message is the report. A turn with no DONE or FAILED line is settled here, at
+     * once, never by the clock: a pause (a WAITING line, an ask to the brain, a background task or a scheduled wake-up
+     * that Claude Code lists in the hook body) is quiet; a side chat or a phone session is a conversation and is quiet;
+     * anything else is sent back once with REPORT_NUDGE (`decision: block`), and if the turn then still ends with no
+     * line, the brain hears it right away. Returns the hook's reply.
+     */
+    stopHook(body: any): object {
       const w = find(String(body?.session_id ?? ''));
-      if (!w) { log('hook from an unknown session', { hook: 'Stop', session: body?.session_id ?? null }); return; }
+      if (!w) { log('hook from an unknown session', { hook: 'Stop', session: body?.session_id ?? null }); return {}; }
       const text = String(body.last_assistant_message ?? '');
       const outcome = outcomeOf(text);
-      const next = update(w.id, { report: text, report_at: iso(), transcript: body.transcript_path ?? w.transcript, ...(outcome ? { outcome, state: outcome } : {}) });
-      log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length });
+      const transcript = body.transcript_path ?? w.transcript;
+      if (outcome === 'failed' && w.outcome === 'done') {
+        // A follow-up turn (a steer from the brain or the owner) ended FAILED on a story that already reported DONE. The
+        // story stays done with its DONE report; the follow-up result is kept beside it. Worker fe594be3 (4967),
+        // 2026-11-11 12:24Z: it refused to change a verdict, correctly, and that FAILED turned the done row red.
+        const t = iso();
+        store.setState(followUpKey(w.id), JSON.stringify({ text, at: t, outcome }));
+        // report_at moves to now: the steer came after the DONE, and requests.ts reopens a request whose report is older
+        // than the last message sent to its worker. The report text stays the DONE report.
+        const next = update(w.id, { state: 'done', report_at: t, transcript, waiting_for: null });
+        log('native follow-up reported failed, the story stays done', { worker: w.id, chars: text.length });
+        o.onReport(next, text, true, true);
+        return {};
+      }
+      if (outcome === 'done') store.setState(followUpKey(w.id), '');
+      // A stop that is not the answer to a block starts a new chain of the turn: it may be sent back once.
+      if (!body.stop_hook_active) nudgedChain.delete(w.id);
+      let pause: string | undefined;
+      let ownerWait = false;
+      let turnAsk = false;
+      if (!outcome) {
+        const action = w.approval_id ? store.approval(w.approval_id)?.action : undefined;
+        const tasks = Array.isArray(body.background_tasks) ? body.background_tasks.filter((t: any) => !t?.status || t.status === 'running' || t.status === 'pending') : [];
+        const crons = Array.isArray(body.session_crons) ? body.session_crons : [];
+        let asked = false;
+        try { asked = !!transcript && lastTurnMessages(transcript, 'jarvis-brain').some(m => !/^\s*(notice|done|failed)\s*:/i.test(m)); }
+        catch (e) { log('native: transcript unreadable at stop', { worker: w.id, error: (e as Error).message }); }
+        // The ask is in the turn text and no SendMessage delivered it: jarvisd makes the card itself. Worker 5361
+        // (2026-11-11 14:47Z) asked this way when jarvis-brain was unreachable after a restart, and nobody saw it.
+        turnAsk = !w.remote && action !== 'side-chat' && !asked && contractAsk(text);
+        pause = w.remote || action === 'side-chat' ? 'conversation'
+          : WAITING_LINE.test(text) ? 'waiting line'
+          : asked ? 'ask to the brain'
+          : turnAsk ? 'ask in the turn text'
+          : tasks.length ? `background task${tasks.length > 1 ? 's' : ''}: ${tasks.map((t: any) => t?.description ?? t?.command ?? t?.id).join('; ').slice(0, 160)}`
+          : crons.length ? 'scheduled wake-up' : undefined;
+        // A WAITING line with nothing that ends by itself (a task, a wake-up, an ask) waits on the owner. rows() shows it.
+        ownerWait = pause === 'waiting line' && !tasks.length && !crons.length && !asked && !turnAsk;
+      }
+      const t = iso();
+      const nudges = (nudgeTimes.get(w.id) ?? []).filter(x => now() - x < NUDGE_WINDOW_MS);
+      const nudge = !outcome && !pause && !nudgedChain.has(w.id) && nudges.length < NUDGE_MAX;
+      const next = update(w.id, { report: text, report_at: t, transcript, ...(outcome ? { outcome, state: outcome } : w.remote ? { state: 'done' } : pause || nudge ? { state: 'working' } : {}) });
+      if (pause) store.setState(quietKey(w.id), `pause:${t}`);
+      store.setState(ownerWaitKey(w.id), ownerWait ? t : '');
+      log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length, ...(pause ? { pause } : {}), ...(nudge ? { sentBack: true } : {}) });
       o.onReport(next, text, !!outcome);
+      if (turnAsk) {
+        const body = turnAskText(text);
+        const open = openWorkerAsk(store, w.id, body);
+        const item = open ? undefined : insertWorkerAsk(store, w, body, now());
+        log(open ? 'native ask in the turn text already has a card' : 'native ask in the turn text made a card', { worker: w.id, item: (open ?? item)?.external_id ?? null, chars: body.length });
+        if (item) o.onTurnAsk?.(next, item);
+      }
+      if (nudge) {
+        nudgedChain.add(w.id);
+        nudgeTimes.set(w.id, [...nudges, now()]);
+        return { decision: 'block', reason: REPORT_NUDGE };
+      }
+      if (!outcome && !pause) {
+        // Sent back once and still no line: the brain hears it now, not two minutes later, and the poll's backstop stays quiet.
+        store.setState(quietKey(w.id), `told:${t}`);
+        noticed.add(`${w.id}:silent`);
+        log('native notice', { worker: w.id, kind: 'silent' });
+        o.onNotice(next, silentText(next));
+      }
+      return {};
     },
 
     preToolUse(body: any): object {
@@ -495,21 +872,71 @@ export function makeNative(o: {
       return true;
     },
 
+    /**
+     * At start, once the brain is up (main.ts): an ask a live worker wrote in its last turn text, in the worker contract
+     * format (QUESTION and OPTIONS), that no SendMessage delivered to jarvis-brain. Its card was never made when the Stop
+     * hook was lost (jarvisd was down) or ran before turn-text asks made cards. The turn goes through stopHook, so the
+     * card, the brain's [native question] note (onTurnAsk) and the row's report and pause are what a hook on time would
+     * have made. Once: an ask item of any status with the same text for that worker (open, answered, closed) makes none.
+     * Only a live worker whose turn has ended counts: a pid, and idle (interactive) or not working (background). A stopped
+     * row is skipped. Returns how many cards it made.
+     */
+    async recoverAsks(): Promise<number> {
+      const list = await agents();
+      let made = 0;
+      for (const r of store.nativeWorkers()) {
+        const w = asWorker(r);
+        if (w.state === 'abandoned' || w.state === 'stopped' || w.outcome || w.remote) continue;
+        const a = listed(list, w);
+        // Live: a pid. `claude stop` leaves a background session listed with none.
+        const ended = !!a?.pid && (w.kind === 'interactive' ? a.status === 'idle' : a.state !== 'working' && a.state !== 'blocked');
+        if (!ended) continue;
+        if (w.approval_id && store.approval(w.approval_id)?.action === 'side-chat') continue;
+        const file = api.transcriptFile(w.id); if (!file) continue;
+        let text: string | undefined, asked = false;
+        try {
+          text = lastAssistantText(file);
+          asked = lastTurnMessages(file, 'jarvis-brain').some(m => !/^\s*(notice|done|failed)\s*:/i.test(m));
+        } catch (e) { log('native: transcript unreadable at ask recovery', { worker: w.id, error: (e as Error).message }); continue; }
+        if (!text || asked || !contractAsk(text)) continue;
+        if (store.workerAskWithBody(`${ROW_PREFIX}${w.id}`, turnAskText(text))) continue;
+        log('native ask recovered from its transcript', { worker: w.id, chars: text.length });
+        api.stopHook({ session_id: w.id, last_assistant_message: text, transcript_path: file });
+        made++;
+      }
+      log('native: asks recovered', { made });
+      return made;
+    },
+
     rows(): WorkRow[] {
-      return api.list().filter(w => w.state !== 'abandoned' && !(['done', 'failed', 'stopped'].includes(w.state) && now() - Date.parse(w.updated_at) > ROW_MAX_AGE_MS)).map(w => {
+      const onPhone = (w: NativeWorker) => !!w.remote && alive.has(w.id) && w.state !== 'stopped';
+      // An open ask holds the row in view as waiting, whatever its process does (rowState).
+      const asks = new Map(store.openItems().filter(i => i.source === 'native' && i.dispatch_id).map(i => [i.dispatch_id!, i.subject || 'A question for you'] as const));
+      const asking = (w: NativeWorker) => asks.has(`${ROW_PREFIX}${w.id}`);
+      // It waits on the owner (waitsOnOwner), with no open ask. It is never stuck, so the row stays Waiting on you.
+      const ownerWait = (w: NativeWorker) => !asking(w) && waitsOnOwner(w);
+      return api.list().filter(w => w.state !== 'abandoned' && !(['done', 'failed', 'stopped'].includes(w.state) && now() - finishedAt(w) > ROW_MAX_AGE_MS && !onPhone(w) && !asking(w))).map(w => {
+        const task = taskOf(w);
         const r: WorkRow = {
-          id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(w.name),
-          state: w.state === 'blocked' ? 'waiting' : w.state === 'working' || w.state === 'starting' ? 'working' : w.state === 'done' ? 'idle' : 'exited',
-          worktree: basename(w.cwd), sideChat: false,
+          id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(task.title, task.spec),
+          state: rowState(w, asking(w) || ownerWait(w)),
+          worktree: basename(w.cwd),
           // An interactive session takes a message in any state: a stopped or failed one is resumed first.
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
-          native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind },
+          native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}),
+            ...(stalled.has(w.id) ? { stalledSince: new Date(stalled.get(w.id)!).toISOString() } : {}),
+            ...(ownerWait(w) ? { waitingOn: { text: waitingText(w.report ?? ''), since: w.report_at! } } : {}),
+            ...(w.outcome === 'done' && followUpOf(store, w.id) ? { followUp: { text: firstLine(followUpOf(store, w.id)!.text), at: followUpOf(store, w.id)!.at, outcome: 'failed' as const } } : {}) },
         };
         if (w.state === 'blocked' && w.waiting_for) r.note = w.waiting_for;
+        else if (asking(w)) r.note = asks.get(`${ROW_PREFIX}${w.id}`);
+        else if (ownerWait(w)) r.note = waitingText(w.report ?? '');
+        else if (stalled.has(w.id)) r.note = `Stuck: nothing for ${ago(now() - stalled.get(w.id)!).replace(' ago', '')}`;
+        else if (w.state === 'done' && onPhone(w)) r.note = `In the Claude app as "${w.remote}"`;
         else if (w.state === 'done') r.note = `Done ${ago(now() - Date.parse(w.report_at ?? w.updated_at))}`;
         else if (w.state === 'stopped') r.note = w.waiting_for ?? 'Stopped';
         else if (w.state === 'failed') r.note = w.waiting_for ?? 'Failed';
-        if (['done', 'failed', 'stopped'].includes(w.state)) r.endedAt = new Date(Date.parse(w.state === 'done' ? w.report_at ?? w.updated_at : w.updated_at)).toISOString();
+        if (['done', 'failed', 'stopped'].includes(w.state) && !onPhone(w) && !asking(w)) r.endedAt = new Date(finishedAt(w)).toISOString();
         return r;
       });
     },
@@ -676,6 +1103,9 @@ export function makeNative(o: {
           next = row(w.id) ?? next;
           // The reaper: finished or waiting on an ask, and idle for an hour since its last report, its last resume or that ask
           // (the row's own timestamps, so a jarvisd restart does not reset the hour).
+          // A session on the phone gets the same hour, counted from its last phone turn or its Continue on phone: left running,
+          // it kept its row open for good (teal-and-mint-app-theme-420, idle from 2026-11-08 to 11-09). A message resumes it with
+          // its Remote Control name, and Continue on phone brings it back to the Claude app.
           if (a?.pid && a.status === 'idle' && next.state !== 'stopped') {
             const since = idleFrom(next);
             if (since !== undefined && now() - since >= IDLE_REAP_MS) { api.reap(next); next = row(w.id) ?? next; }
@@ -690,9 +1120,23 @@ export function makeNative(o: {
           o.onNotice(next, text());
         };
         notice('failed', next.state === 'failed', () => `Worker ${w.name} failed`);
+        // Stuck: at any hour, once per stall, also across a jarvisd restart (the state key holds the activity time told).
+        // New activity clears it, and a later stall is told again.
+        const since = stalledFrom(next, listed(list, next));
+        if (since === undefined) stalled.delete(w.id);
+        else {
+          stalled.set(w.id, since);
+          if (store.getState(stallKey(w.id)) !== String(since)) {
+            store.setState(stallKey(w.id), String(since));
+            log('native notice', { worker: w.id, kind: 'stalled', idleMin: Math.round((now() - since) / 60_000) });
+            o.onNotice(next, stalledText(next, now() - since));
+          }
+        }
         notice('blocked', next.state === 'blocked' && !!next.waiting_for && !pendingCard(w.id), () => `Worker ${w.name} is blocked: ${next.waiting_for}`);
-        notice('silent', next.state === 'done' && !next.outcome && !!next.report && now() - Date.parse(next.report_at!) >= SILENT_DONE_MS,
-          () => `Worker ${w.name} ended its turn without a DONE or FAILED line. Its last words: ${next.report!.slice(0, 300)}`);
+        // The backstop for a Stop hook that never arrived. A pause, or a turn stopHook already told the brain about, stays quiet,
+        // also after a jarvisd restart (the state key holds the report's time).
+        notice('silent', next.state === 'done' && !next.outcome && !!next.report && now() - Date.parse(next.report_at!) >= SILENT_DONE_MS && !quiet(next),
+          () => { store.setState(quietKey(w.id), `told:${next.report_at}`); return silentText(next); });
       }
   }
 
@@ -705,7 +1149,7 @@ export function makeNative(o: {
   async function startInteractive(a: { name: string; cwd: string; brief: string; model?: string; permissionMode?: 'auto' | 'default'; approvalId?: number; worktree?: boolean }): Promise<NativeWorker> {
     const model = a.model ?? DEFAULT_MODEL, mode = a.permissionMode ?? 'auto';
     const fifo = fifoFor(a.name, 0);
-    const pgid = spawnPty(['claude', '--name', a.name, '--permission-mode', mode, '--model', model, '--settings', settingsPath, ...(a.worktree ? ['-w', a.name] : []), a.brief], a.cwd, fifo);
+    const pgid = spawnPty(['claude', '--name', a.name, '--permission-mode', mode, '--model', model, '--settings', settingsFor(a.approvalId), ...(a.worktree ? ['-w', a.name] : []), a.brief], a.cwd, fifo);
     const t = iso();
     const probe: NativeWorker = { id: '', session_id: null, name: a.name, cwd: a.cwd, approval_id: a.approvalId ?? null, state: 'starting', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: t, updated_at: t, kind: 'interactive', pgid,
       repo: a.cwd, model, permission_mode: mode, resumes: 0, last_resume_at: null, in_fifo: fifo };

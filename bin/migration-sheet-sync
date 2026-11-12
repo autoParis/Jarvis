@@ -1,0 +1,41 @@
+#!/usr/bin/env -S node --disable-warning=ExperimentalWarning
+// Syncs the Migration list to the Marketplace migration sheet, through bin/sheet-edit only. Rules: daemon/sheetsync.ts.
+//   migration-sheet-sync --dry-run [--report <file.md>]   plans, runs sheet-edit --dry-run, writes nothing
+//   migration-sheet-sync --write   [--report <file.md>]   writes, verifies, then saves the baseline
+// jarvisd runs it once a day at 7:30 AM Eastern (JARVIS_MIGRATION_SHEET_SYNC picks the mode).
+// Exit codes: 0 ok or nothing to do, 1 failed, 3 aborted because a target cell changed after the read.
+// JARVIS_SHEET_EDIT overrides the sheet-edit path (default: bin/sheet-edit of this checkout). JARVIS_DATA_DIR overrides data/.
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { parseArgs } from 'node:util';
+import { DatabaseSync } from 'node:sqlite';
+import { runSync, reportOf } from '../daemon/sheetsync.ts';
+import { SHEET_ID } from '../daemon/sheet-edit.ts';
+
+const ROOT = join(dirname(import.meta.filename), '..');
+const { values } = parseArgs({ options: { 'dry-run': { type: 'boolean' }, write: { type: 'boolean' }, report: { type: 'string' } } });
+if (!!values['dry-run'] === !!values.write) { console.error('usage: migration-sheet-sync --dry-run | --write [--report <file.md>]'); process.exit(2); }
+const sheetEditBin = process.env.JARVIS_SHEET_EDIT?.trim() || join(ROOT, 'bin', 'sheet-edit');
+// JARVIS_DATA_DIR points a worktree run at the main checkout's data/ (jarvis.db and the sync's baseline).
+const data = process.env.JARVIS_DATA_DIR?.trim() || join(ROOT, 'data');
+const db = new DatabaseSync(join(data, 'jarvis.db'), { readOnly: true });
+const dataDir = join(data, 'migration-sheet-sync');
+mkdirSync(dataDir, { recursive: true });
+
+const r = runSync(values.write ? 'write' : 'dry-run', {
+  sheetId: SHEET_ID, db, dataDir,
+  log: (msg, fields) => console.log(`${new Date().toISOString()} ${msg} ${JSON.stringify(fields ?? {})}`),
+  sheetEdit: (file, dryRun) => {
+    try {
+      return { code: 0, output: execFileSync(sheetEditBin, [file, ...(dryRun ? ['--dry-run'] : [])], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+    } catch (e) {
+      return { code: e.status ?? 1, output: [e.stdout, e.stderr].filter(Boolean).join('\n') || e.message };
+    }
+  },
+});
+const md = reportOf(r);
+writeFileSync(join(r.dir, 'report.md'), md);
+if (values.report) writeFileSync(values.report, md);
+console.log(md);
+process.exit(r.outcome === 'failed' ? 1 : r.outcome === 'aborted' ? 3 : 0);

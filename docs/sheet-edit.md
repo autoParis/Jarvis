@@ -72,6 +72,7 @@ The rules for each key:
 
 ## Limits
 
+- Google allows 60 reads a minute. The preflight reads each `expected` range twice, and the read-back reads each write and `verify` range. A call that Google refuses with 429 (over the quota) ran nothing, so sheet-edit waits 30 seconds and sends it again, up to 4 times. Write a row as one range, not cell by cell: it costs one read instead of one per cell.
 - `verify` only checks cell values. A formatting request is not itself verified, so verify that the rows it touched kept their values.
 - `requests` can reach rows that `expected` does not list, and the preflight does not protect those rows. The backup does cover their tabs.
 - Writes are not atomic. If `requests` succeed and `writes` fail, the run exits 1 and prints the backup path. Nothing restores automatically.

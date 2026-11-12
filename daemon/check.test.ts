@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeCheck, readDelivery, inCheckHours, CHECK_MS, ASK_WAIT_MS, LOST_MS, type Delivery } from './check.ts';
+import { makeCheck, readDelivery, inCheckHours, CHECK_MS, ASK_WAIT_MS, LOST_MS, OWNER_WAIT_MS, OWNER_WAIT_REPEAT_MS, type Delivery } from './check.ts';
 import type { Work, WorkRow } from './work.ts';
 
 const at = (s: string) => Date.parse(s);
@@ -35,25 +35,25 @@ const DAY = at('2026-11-02T15:00:00Z'); // 10 AM Eastern
 
 function setup(rows: WorkRow[] = [], start = DAY) {
   const store = openStore(':memory:');
-  let clock = start, polls = 0, error: string | undefined;
+  let clock = start, polls = 0;
   const wakes: string[] = [];
   const closing = new Set<number>();
   const git = { delivery: { master: 'a'.repeat(40), unmerged: [] } as Delivery, error: undefined as string | undefined, running: 'a'.repeat(40), busy: false, paused: false };
   const check = makeCheck({
-    store, jarvisRun: 'run_j', log: () => {}, now: () => clock, paused: () => git.paused,
-    poll: async () => { polls++; return { at: '', rows, done: [], ...(error ? { error } : {}) } as Work; },
+    store, log: () => {}, now: () => clock, paused: () => git.paused,
+    poll: async () => { polls++; return { at: '', rows } as Work; },
     requests: { synced: async () => {}, closing: id => closing.has(id) },
     delivery: async () => { if (git.error) throw new Error(git.error); return git.delivery; },
     get running() { return git.running; },
     brainBusy: () => git.busy,
     wake: t => wakes.push(t),
   });
-  return { store, check, wakes, closing, git, polls: () => polls, failOrca: (e?: string) => { error = e; }, tick: (ms: number) => { clock += ms; } };
+  return { store, check, wakes, closing, git, polls: () => polls, tick: (ms: number) => { clock += ms; } };
 }
-const worker = (id: string, extra: Partial<WorkRow> = {}): WorkRow => ({ id, kind: 'worker', dispatch: id, run: 'run_j', title: id, group: 'other', state: 'working', sideChat: false, steer: 'auto', ...extra });
+const worker = (id: string, extra: Partial<WorkRow> = {}): WorkRow => ({ id, kind: 'worker', dispatch: id, title: id, group: 'other', state: 'working', steer: 'auto', ...extra });
 /** An ask that arrived `minutes` before the test clock. */
 function ask(store: ReturnType<typeof openStore>, id: string, dispatch: string | null, minutes: number) {
-  store.insertItem({ source: 'orca', external_id: id, kind: 'question', dispatch_id: dispatch, subject: 'Which one?', status: 'spoken' });
+  store.insertItem({ source: 'native', external_id: id, kind: 'question', dispatch_id: dispatch, subject: 'Which one?', status: 'spoken' });
   store.db.prepare('UPDATE items SET created_at = ? WHERE external_id = ?').run(new Date(DAY - minutes * 60_000).toISOString().slice(0, 19).replace('T', ' '), id);
 }
 
@@ -99,38 +99,22 @@ test('an ask counts as unanswered after 15 minutes, and only while its worker is
 });
 
 test('each finding wakes the brain once, across restarts; one that clears and returns wakes it again', async () => {
-  const rows = [worker('ctx_1', { state: 'exited' })];
+  const rows: WorkRow[] = [];
   const { store, check, wakes } = setup(rows);
+  store.addRequest({ dispatch_id: 'n:1', action: 'worker-start', title: 'Orphan' });
   await check.tick();
   await check.tick();
   assert.equal(wakes.length, 1);
-  assert.match(wakes[0], /exited without reporting/);
-  const later = makeCheck({ store, jarvisRun: 'run_j', log: () => {}, now: () => DAY, paused: () => false, poll: async () => ({ at: '', rows, done: [] }), requests: { synced: async () => {}, closing: () => false }, delivery: async () => ({ master: 'a', unmerged: [] }), running: 'a', brainBusy: () => false, wake: t => wakes.push(t) });
+  assert.match(wakes[0], /Request open \(working\) with no live worker/);
+  const later = makeCheck({ store, log: () => {}, now: () => DAY, paused: () => false, poll: async () => ({ at: '', rows }), requests: { synced: async () => {}, closing: () => false }, delivery: async () => ({ master: 'a', unmerged: [] }), running: 'a', brainBusy: () => false, wake: t => wakes.push(t) });
   await later.tick();
+  assert.equal(wakes.length, 1);
+  rows.push(worker('n:1'));
+  await check.tick();
   assert.equal(wakes.length, 1);
   rows.length = 0;
   await check.tick();
-  assert.equal(wakes.length, 1);
-  rows.push(worker('ctx_1', { state: 'exited' }));
-  await check.tick();
   assert.equal(wakes.length, 2);
-});
-
-test('stuck means exited, idle or parked at a prompt, on Jarvis\'s own workers; side chats and other Runs do not count', async () => {
-  const { check, wakes } = setup([
-    worker('ctx_exit', { state: 'exited' }),
-    worker('ctx_idle', { state: 'idle', note: 'No activity for 4 h, Orca cannot see it' }),
-    worker('ctx_prompt', { state: 'waiting', note: 'Waiting at a prompt in Orca' }),
-    worker('ctx_fine'),
-    worker('ctx_side', { state: 'idle', note: 'Idle 2 h', sideChat: true }),
-    worker('ctx_other', { state: 'exited', run: 'run_other' }),
-    { id: 's:k', kind: 'session', title: 'The owner chat', group: 'other', state: 'waiting', note: 'Waiting at a prompt in Orca', sideChat: false, steer: 'none' },
-  ]);
-  await check.tick();
-  assert.match(wakes[0], /ctx_exit/);
-  assert.match(wakes[0], /ctx_idle/);
-  assert.match(wakes[0], /ctx_prompt/);
-  assert.doesNotMatch(wakes[0], /ctx_fine|ctx_side|ctx_other|The owner chat/);
 });
 
 test('closed requests never count as open; a failed one and an orphan do', async () => {
@@ -156,15 +140,13 @@ test('closed requests never count as open; a failed one and an orphan do', async
   assert.doesNotMatch(wakes[0], /ctx_done|ctx_review|ctx_hidden|ctx_closing/);
 });
 
-test('when Orca does not answer the tick wakes nobody and forgets nothing', async () => {
-  const { store, check, wakes, failOrca } = setup();
-  store.addRequest({ dispatch_id: 'ctx_1', action: 'worker-start', title: 'Orphan' });
-  failOrca('Orca: no answer');
+test('a native worker in the polled rows is live: its open request is no orphan, and it is not judged stuck', async () => {
+  // main.ts hands the check the native rows (nativeWork). Without them every running native worker read as
+  // "Request open (working) with no live worker" (2026-11-09: 43dfae28, f918c991, 4b393f6c).
+  const { store, check, wakes } = setup([worker('n:43dfae28', { state: 'idle', note: 'Idle, resumes on a message' })]);
+  store.addRequest({ dispatch_id: 'n:43dfae28', action: 'worker-start', title: '#4886 Check the price' });
   await check.tick();
   assert.deepEqual(wakes, []);
-  failOrca();
-  await check.tick();
-  assert.equal(wakes.length, 1);
 });
 
 const branch = (name: string, sha: string, worktree?: string) => ({ branch: name, sha, worktree });
@@ -184,11 +166,11 @@ test('a branch not in master wakes the brain once per commit, whether or not it 
   assert.doesNotMatch(wakes[1], /finished/);
 });
 
-test('a branch still being worked on is not finished work; a session Orca shows as Done does not hold it back', async () => {
-  const session = (worktree: string, state: WorkRow['state'], note?: string): WorkRow => ({ id: `s:${worktree}`, kind: 'session', title: worktree, group: 'other', state, note, worktree, sideChat: false, steer: 'none' });
+test('a branch still being worked on is not finished work; a session listed as Done does not hold it back', async () => {
+  const session = (worktree: string, state: WorkRow['state'], note?: string): WorkRow => ({ id: `s:${worktree}`, kind: 'session', title: worktree, group: 'other', state, note, worktree, steer: 'none' });
   const { check, wakes, git } = setup([
-    worker('ctx_live', { worktree: 'live' }), worker('ctx_exit', { state: 'exited', worktree: 'exited', run: 'run_other' }),
-    session('chat', 'working'), session('prompt', 'waiting', 'Waiting at a prompt in Orca'), session('monitor', 'idle', 'Monitoring'),
+    worker('ctx_live', { worktree: 'live' }), worker('ctx_exit', { state: 'exited', worktree: 'exited' }),
+    session('chat', 'working'), session('prompt', 'waiting', 'Waiting at a prompt'), session('monitor', 'idle', 'Monitoring'),
     session('over', 'idle', 'Done 3 h ago'),
   ]);
   git.delivery.unmerged = ['live', 'exited', 'chat', 'prompt', 'monitor', 'over'].map(n => branch(`b-${n}`, 'e'.repeat(40), `/w/${n}`));
@@ -347,4 +329,58 @@ test('readDelivery counts a branch merged into an archived ref as delivered, and
   assert.deepEqual((await readDelivery(dir, [])).unmerged.map(b => b.branch).sort(), ['archive', 'old', 'old-work']);
   assert.deepEqual((await readDelivery(dir, ['archive'])).unmerged, []);
   assert.deepEqual((await readDelivery(dir, ['missing'])).unmerged.map(b => b.branch).sort(), ['archive', 'old', 'old-work']);
+});
+
+test('a worker that waits on the owner with no open ask is one finding after 30 minutes, once per WAITING report', async () => {
+  // Worker 5361 (2026-11-11): its ask was answered "you sign in later", and its row showed a spinner for 4 hours.
+  const since = new Date(DAY - OWNER_WAIT_MS + 60_000).toISOString();
+  const native = { id: 'aa11', sessionId: null, name: 'empty-annonces-5361', state: 'working' as const, waitingFor: null, outcome: null, waitingOn: { text: 'Simon signs in to the empty Facebook profile', since } };
+  const rows = [worker('n:aa11', { title: 'empty-annonces-5361', state: 'waiting', native }), worker('ctx_9')];
+  const { check, wakes, tick } = setup(rows);
+  await check.tick();
+  assert.deepEqual(wakes, [], 'not before 30 minutes');
+  tick(60_000);
+  await check.tick();
+  assert.equal(wakes.length, 1);
+  assert.match(wakes[0], /Worker waits on .* with no open ask, for 30 min: dispatch=n:aa11 title="empty-annonces-5361" WAITING: "Simon signs in to the empty Facebook profile"/);
+  assert.match(wakes[0], /jarvis-remind list/);
+  assert.match(wakes[0], /Do not nudge the worker/);
+  tick(CHECK_MS);
+  await check.tick();
+  assert.equal(wakes.length, 1, 'not again within 2 hours');
+});
+
+test('a wait on the owner is told again every 2 hours in check hours, and once at 8 AM after the night', async () => {
+  // Waiting since 9:00 AM Eastern. The finding comes at 9:30, 11:30, 1:30 and 3:30, then at 8 AM the next day.
+  const since = at('2026-11-02T14:00:00Z');
+  const native = { id: 'aa11', sessionId: null, name: 'empty-annonces-5361', state: 'working' as const, waitingFor: null, outcome: null, waitingOn: { text: 'Simon signs in', since: new Date(since).toISOString() } };
+  const { check, wakes, tick } = setup([worker('n:aa11', { state: 'waiting', native })], since);
+  const minutes: number[] = [];
+  for (let t = 0; t <= 24 * 60; t += 10) {
+    const before = wakes.length;
+    await check.tick();
+    if (wakes.length > before) minutes.push(t);
+    tick(CHECK_MS);
+  }
+  assert.deepEqual(minutes, [30, 150, 270, 390, 1380], '9:30, 11:30, 1:30 and 3:30 PM, then 8:00 AM the next day');
+  assert.ok(wakes.every(w => /Worker waits on .* with no open ask/.test(w)));
+  assert.equal(OWNER_WAIT_REPEAT_MS, 2 * 60 * 60_000);
+});
+
+test('a worker stuck overnight is reported at the first tick after 8 AM, once per stall', async () => {
+  // Worker 579 (2026-11-11): stuck on a WAITING line from the evening. native.ts marks the row, and the check repeats it in the morning.
+  const since = '2026-11-02T02:11:48.824Z';
+  const rows = [worker('n:53078ac3', { title: 'worker-pane-579', native: { id: '53078ac3', sessionId: null, name: 'worker-pane-579', state: 'working', waitingFor: null, outcome: null, stalledSince: since } }), worker('ctx_9')];
+  const { check, wakes, tick } = setup(rows, at('2026-11-02T12:55:00Z')); // 7:55 AM Eastern
+  await check.tick();
+  assert.deepEqual(wakes, [], 'outside the hours');
+  tick(10 * 60_000);
+  await check.tick();
+  assert.equal(wakes.length, 1);
+  assert.match(wakes[0], /Worker stuck, nothing since Nov 1, 9:11 PM Eastern .*dispatch=n:53078ac3 title="worker-pane-579"/);
+  assert.match(wakes[0], /jarvis-native reply/);
+  assert.doesNotMatch(wakes[0], /ctx_9/, 'a worker that is not stuck is no finding');
+  tick(CHECK_MS);
+  await check.tick();
+  assert.equal(wakes.length, 1, 'the same stall wakes the brain once');
 });

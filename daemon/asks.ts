@@ -1,13 +1,14 @@
-import { OWNER_CAP, OWNER } from './config.ts';
-import type { OrcaResult } from './orca.ts';
+import { OWNER } from './config.ts';
 import type { Store, Item, Approval } from './store.ts';
 import type { Log } from './log.ts';
-import type { Gate } from './gate.ts';
 import { approvalTag, approvalOutcomeText } from '../web/worklist.js';
-import { isStopNotice } from './work.ts';
-import { namedActionIn, namedLabel, namedQuestion, refusedByPermissionLayer, type Named } from './namedactions.ts';
-import { readStopNotice, readScreen, stillAt, storedContext, type StopNotice, type PromptOption, type PromptContext } from './prompt.ts';
-import { explainCredentialCommand } from './promptexplain.ts';
+import { namedActionIn, namedLabel, refusedByPermissionLayer, type Named } from './namedactions.ts';
+import { brainCard, answerBrainAsk, isBrainAsk, type BrainNote } from './brainasks.ts';
+import { fields, askReportPath, reportPathIn, readReport } from './workercontract.ts';
+import type { ReportSummary } from './reports.ts';
+import { docHref } from '../web/contract.js';
+import type { RouteResult, Body } from './route.ts';
+export { fields } from './workercontract.ts';
 
 // A worker's question or escalation as a card in the chat: title, markdown body, and the options as buttons.
 // The card is built in code from the stored item. The brain still speaks the ask; nothing here is spoken.
@@ -44,22 +45,21 @@ export type AskCard = {
   answer: string | null;
   /** Set when the brain closed this ask by steering the worker on its own, so the words are not the owner's. */
   answeredBy?: 'jarvis';
-  /** The options are a menu in the worker's terminal: a tap types the key, and only the menu can answer it. */
-  prompt?: boolean;
-  /** What that prompt wants to run, as much of it as Jarvis has. */
-  command?: string;
-  /** The heading over `command`, which says whether that is all of it. */
-  commandLabel?: string;
   /**
    * Set for an ask with a QUESTION field. The page then draws fixed headings: What the worker is doing (`doing`), The
    * question, Options, and the rest (`more`) behind a More toggle. `image` is the picture's markdown, drawn at the top.
    * Without it the page draws `body` as one block, as before.
    */
   parts?: { doing?: string; more?: string; image?: string };
+  /**
+   * The report this decision rests on: the ask's REPORT line, else a data/reports path in its text. Set only for a file
+   * the daemon can open. `href` opens it in the report viewer, `image` is its first picture, `pictures` how many it has.
+   */
+  report?: AskReport;
 };
 
-const LABELS = ['STORY', 'WHERE', 'QUESTION', 'CONTEXT', 'IMAGE', 'OPTIONS', 'FAILED', 'PROPOSES', 'PROPOSAL', 'PROPOSE'] as const;
-const LABEL_LINE = new RegExp(`^\\s*(${LABELS.join('|')})\\s*:\\s*(.*)$`, 'i');
+export type AskReport = ReportSummary & { href: string };
+
 // "Options: (a) one; (b) two" or "Options: 1) one 2) two" at the end of a free-form ask.
 const INLINE_OPTIONS = /(?:^|\n|\s)options?\s*:\s*([\s\S]*)$/i;
 const MARKER = /(?:^|\s)\(?([a-z]|\d{1,2})[).]\s+/gi;
@@ -73,22 +73,6 @@ const PART_MAX = 220;
 const SENTENCE_END = /(?<=[.!?])(?<!\b(?:e\.g|i\.e|etc|vs)\.)\s+(?=[\p{Lu}"'`(\[])/u;
 const NOT_PROSE = /^\s*(?:[-*+>#|]|\d+[.)]\s|\[image:)/m;
 
-/**
- * The labeled fields of an ask written in the jarvis-ask shape (spec 6.6). A line without a label continues the field
- * above, blank lines included, so markdown paragraphs, lists and headings in a field survive. Text before the first
- * label is kept under PREAMBLE.
- */
-export function fields(body: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  let key = 'PREAMBLE';
-  for (const line of body.replace(/\r\n?/g, '\n').split('\n')) {
-    const m = LABEL_LINE.exec(line);
-    if (m) { key = m[1].toUpperCase(); if (key === 'PROPOSAL' || key === 'PROPOSE') key = 'PROPOSES'; out[key] = m[2]; }
-    else out[key] = key in out ? out[key] + '\n' + line : line;
-  }
-  for (const k of Object.keys(out)) { out[k] = out[k].trim(); if (!out[k]) delete out[k]; }
-  return out;
-}
 
 /** The OPTIONS field ends at its first blank line; anything after it is ask text, not more options. */
 function splitOptions(text: string): { options: string; after: string } {
@@ -195,18 +179,9 @@ function refusal(text: string): { named?: Named } | undefined {
   return named ? { named } : {};
 }
 
-/** The text of an escalation that a permission layer may have refused. A menu still open is not a refusal: its Yes can work. */
+/** The text of an escalation that a permission layer may have refused. */
 function refusalText(i: Item): string | undefined {
-  if (i.kind !== 'escalation') return undefined;
-  if (!isStopNotice(i)) return `${i.subject ?? ''}\n${i.body ?? ''}`;
-  const n = readStopNotice(i.body);
-  return n.kind === 'prompt' ? undefined : n.output;
-}
-
-/** The named action a tap on this escalation would propose. */
-function namedActionOf(i: Item): Named | undefined {
-  const text = refusalText(i);
-  return text === undefined ? undefined : refusal(text)?.named;
+  return i.kind === 'escalation' ? `${i.subject ?? ''}\n${i.body ?? ''}` : undefined;
 }
 
 /** Takes Retry off a refused card, says why, and puts the named action first when there is one. */
@@ -221,75 +196,17 @@ function withRefusal(card: AskCard, text: string | undefined): AskCard {
   };
 }
 
-/** What a tap does at a permission prompt, for the answers Claude Code's menus use. A menu's own wording stays otherwise. */
-function permissionDetail(label: string, cut: boolean, detail?: string): string | undefined {
-  if (/^yes$/i.test(label)) return cut ? 'Lets the whole command run once, including the part cut off. It asks again next time.' : 'Lets this run once. It asks again next time.';
-  if (/^yes.*auto mode/i.test(label)) return 'Lets this run, then auto mode answers these prompts in your place.';
-  if (/^yes.*(don.t ask again|always allow|allow all)/i.test(label)) return 'Lets this run, and stops asking about anything like it.';
-  if (/^no$/i.test(label)) return 'Blocks this and nothing runs. The worker must find another way.';
-  return detail;
-}
-
-/** The small line above the question: what the worker was doing, and its own reason when its log gives one. */
-function doingLine(context: PromptContext | undefined): string {
-  const did = 'Stopped at a safety prompt while working on this story.';
-  const why = context?.description ? ` It describes this step as "${context.description}".` : ' It gave no reason for this step.';
-  const last = context?.said ? ` It last said: "${context.said}"` : '';
-  return (did + why + last).replace(/\[image:[^\]]*\]/g, '');
-}
-
-const STOP_OUTPUT_MAX = 600;
-const STOPPED_LINE = 'It ended its turn without reporting.';
-
 const answeredBy = (i: Item) => i.answered_by === 'jarvis' ? { answeredBy: 'jarvis' as const } : {};
-
-/** Orca's stop notice as a card: the task, what the worker wants, and the menu's real options. None of Orca's template. */
-function stopCard(i: Item, story: string | undefined, n: StopNotice): AskCard {
-  const base = {
-    id: i.external_id, kind: 'escalation' as const, dispatch: i.dispatch_id, title: n.task || story || 'Worker',
-    at: isoTime(i.created_at), ...(i.updated_at ? { settledAt: isoTime(i.updated_at) } : {}),
-    status: i.status === 'answered' || i.status === 'done' ? 'answered' as const : i.status === 'replying' ? 'sending' as const : 'open' as const,
-    answer: i.answer, ...answeredBy(i),
-  };
-  if (n.kind === 'prompt') {
-    if (!n.prompt) {
-      const question = 'It is waiting at a prompt, and Jarvis could not read the options. Answer it in Orca, or send it a message here.';
-      return { ...base, body: question, question, options: [], ...(n.output ? { command: n.output.slice(-STOP_OUTPUT_MAX), commandLabel: 'Last output' } : {}) };
-    }
-    const p = n.prompt, context = storedContext(i.meta);
-    const command = context?.command ?? p.full;
-    const cut = !context?.command && !!p.clipped;
-    const credential = !p.tool && !!command && /credential/i.test(p.said ?? p.summary);
-    const known = credential ? explainCredentialCommand(command, cut) : undefined;
-    // The prompt's own words, whole, when no code explains them. Its first sentence is already in the question.
-    const rawRest = !known && p.said && !p.summary.includes(p.said) ? p.said : '';
-    const question = known?.question ?? p.summary;
-    const facts = known ? known.facts.map(f => `- ${f}`).join('\n') : rawRest;
-    return {
-      ...base, body: [doingLine(context), question, facts].filter(Boolean).join('\n\n'), question, prompt: true,
-      options: p.options.map(({ key, label, detail }) => {
-        const d = p.permission ? permissionDetail(label, cut, detail) : detail;
-        return { value: key, label, ...(d ? { detail: d } : {}) };
-      }),
-      ...(command ? { command: cut ? `… ${command}` : command, commandLabel: p.tool ? 'Tool' : cut ? 'End of the command (the start is cut off)' : 'The whole command' } : {}),
-    };
-  }
-  const body = n.output.length > STOP_OUTPUT_MAX ? `${n.output.slice(0, STOP_OUTPUT_MAX).trimEnd()}…` : n.output;
-  const parts = shortParts(body);
-  const defaults = { options: DEFAULT_OPTIONS, suggested: true };
-  return withRefusal(n.kind === 'stopped'
-    ? { ...base, ...defaults, body: [STOPPED_LINE, parts].filter(Boolean).join('\n\n'), question: STOPPED_LINE }
-    : { ...base, ...defaults, body: parts }, n.output);
-}
 
 /**
  * Builds the card for a question or escalation; undefined for anything else.
  * `story` is the worker's title from the work list, used when the ask names no story.
  * `shown` says whether the page may show a picture at that path (the daemon passes its /image folder check).
+ * `reportOf` reads a report in data/reports (reports.ts reportSummary); undefined means the file cannot be opened.
  */
-export function askCard(i: Item, story?: string, shown: (path: string) => boolean = looksLikeImage): AskCard | undefined {
+export function askCard(i: Item, story?: string, shown: (path: string) => boolean = looksLikeImage, reportOf?: (path: string) => ReportSummary | undefined): AskCard | undefined {
   if (i.kind !== 'question' && i.kind !== 'escalation') return undefined;
-  if (isStopNotice(i)) return stopCard(i, story, readStopNotice(i.body));
+  if (isBrainAsk(i)) return brainCard(i);
   const body = (i.body ?? '').trim();
   const f = fields(body);
   const escalation = i.kind === 'escalation';
@@ -315,7 +232,7 @@ export function askCard(i: Item, story?: string, shown: (path: string) => boolea
     }
   }
   let options: AskOption[];
-  // Orca keeps only the last of repeated --options flags (msg_81728794bdde), so a body naming more choices wins and none is lost.
+  // A body naming more choices than the short list wins, so none is lost.
   if (short.length >= worded.length) {
     options = short.map((value, n) => {
       // "GO b" or "b" points at "(b) ..." in the body; otherwise match by position.
@@ -346,8 +263,16 @@ export function askCard(i: Item, story?: string, shown: (path: string) => boolea
   // replies. A path outside the allowed folders shows as text, never as a broken thumbnail.
   const [imageLine = '', ...afterImage] = (f.IMAGE ?? '').split('\n');
   const named = imageLine.replace(/^\[image:\s*(.*?)\s*\]$/i, '$1').replace(/^`(.*)`$/, '$1').trim();
-  let text = structured ? [f.PREAMBLE, f.WHERE, f.QUESTION, f.CONTEXT, afterImage.join('\n').trim(), opts.after].filter(Boolean).join('\n\n') : rest;
+  // The report: the REPORT line, else a data/reports path the text names (an ask written before the REPORT line existed).
+  // A REPORT line the daemon cannot open stays in view as text, so the path is not lost.
+  const reportLine = askReportPath(body);
+  const doc = reportLine ?? reportPathIn(body);
+  const summary = doc ? reportOf?.(doc) : undefined;
+  if (summary) card.report = { ...summary, href: docHref(summary.path) };
+  const missing = f.REPORT && !summary ? `Report (not found in data/reports): \`${reportLine ?? f.REPORT.split('\n')[0]}\`` : '';
+  let text = structured ? [f.PREAMBLE, f.WHERE, f.QUESTION, f.CONTEXT, missing, afterImage.join('\n').trim(), opts.after].filter(Boolean).join('\n\n') : rest;
   if (!structured && named) text = text.replace(/^\s*IMAGE\s*:.*$/im, '');
+  if (!structured && f.REPORT) text = text.replace(/^\s*REPORT\s*:.*$/im, missing);
   const source = structured ? body : text;
   const path = named || [...source.matchAll(IMAGE_MARKER)][0]?.[1] || BARE_IMAGE.exec(source)?.[1];
   const image = path && shown(path) ? `[image: ${path}]` : named ? `Image (not in an allowed folder): \`${named}\`` : undefined;
@@ -359,7 +284,7 @@ export function askCard(i: Item, story?: string, shown: (path: string) => boolea
   if (question) card.question = question;
   if (f.QUESTION) {
     const clean = (s?: string) => (s ?? '').replace(IMAGE_MARKER, (_, p: string) => shown(p) ? '' : `\`${p}\``).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    const doing = clean(f.WHERE), more = clean([f.PREAMBLE, f.CONTEXT, afterImage.join('\n').trim(), opts.after].filter(Boolean).join('\n\n'));
+    const doing = clean(f.WHERE), more = clean([f.PREAMBLE, f.CONTEXT, missing, afterImage.join('\n').trim(), opts.after].filter(Boolean).join('\n\n'));
     card.parts = { ...(doing ? { doing } : {}), ...(more ? { more: escalation ? shortParts(more) : more } : {}), ...(image ? { image } : {}) };
   }
   if (escalation) {
@@ -396,151 +321,105 @@ export function auditEntries(store: Store, cardOf: (i: Item) => AskCard | undefi
   return [...asks, ...approvals].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, limit);
 }
 
-/**
- * `jarvis-orca steer` went out, which closes that worker's open escalations. The owner's spoken answer to an escalation takes
- * this path too, so the words count as his only while the brain's turn holds a message from him. Returns the closed ids.
- */
-export function closeSteeredAsks(store: Store, dispatch: string, answer: string | undefined, fromOwner: boolean): string[] {
-  const open = store.openItems().filter(x => x.kind === 'escalation' && x.dispatch_id === dispatch);
-  for (const i of open) store.markItem(i.external_id, 'answered', answer, fromOwner ? undefined : 'jarvis');
-  return open.map(i => i.external_id);
-}
-
-type Orca = (args: string[]) => Promise<OrcaResult>;
 export type AnswerResult = { status: number; error?: string };
 
 type AnswerArgs = {
-  id: string; value: string; run: string; handle: string; store: Store; orca: Orca; log: Log; note: (text: string) => void;
-  /** Runs the key press on a terminal menu, recorded in `approvals`, and proposes a named action. */
-  gate?: Pick<Gate, 'pressed'> & Partial<Pick<Gate, 'propose'>>;
-  /** The pause before looking at the screen again. */
-  wait?: (ms: number) => Promise<unknown>;
+  id: string; value: string; store: Store; log: Log; note: BrainNote;
   /** Carries an answer into a background Claude worker (native.ts). */
   native?: { reply: (id: string, text: string, by: 'owner' | 'jarvis') => Promise<{ ok: true } | { ok: false; error: string }> };
 };
-/** How long a terminal gets to take a key before the screen is read again. */
-const KEY_SETTLE_MS = 1500;
 
 /**
- * the owner tapped an option of a menu in a worker's terminal. A digit picks whatever menu is up, so the screen is read first
- * and nothing is typed unless it shows this same prompt. No Enter follows: the digit picks the option by itself, and an
- * Enter would land on whatever came next, possibly another prompt.
- */
-async function answerPrompt(o: AnswerArgs, n: StopNotice, option: PromptOption): Promise<AnswerResult> {
-  const { id, store, log } = o;
-  const item = store.item(id)!;
-  const ids = { item: id, dispatch: item.dispatch_id, terminal: n.terminal };
-  if (!o.gate) return { status: 500, error: 'Nothing was typed: this path cannot reach the worker\'s terminal.' };
-  const claim = store.claimReply(id);
-  if (claim !== 'claimed') return { status: 409, error: `That prompt is already ${claim}. Not answering it twice.` };
-
-  const before = await readScreen(o.orca, n.terminal!);
-  if (!before) {
-    store.releaseReply(id);
-    log('prompt card: no screen from Orca, nothing typed', ids);
-    return { status: 502, error: 'Nothing was typed: Orca could not show this worker\'s screen, so Jarvis could not check the prompt is still open. Answer it in Orca.' };
-  }
-  if (before.exited || !stillAt(n.prompt!, before.tail)) {
-    store.markItem(id, 'done');
-    log('prompt card: the worker left the prompt, nothing typed', ids);
-    return { status: 409, error: 'Nothing was typed: the worker is no longer at that prompt.' };
-  }
-  const a = await o.gate.pressed('prompt-key', { terminal: n.terminal, key: option.key }, `Answer "${option.label}" at the prompt in "${n.task?.slice(0, 60) ?? n.terminal}"`).catch(e => ({ status: 'failed', result: (e as Error).message }));
-  if (a.status === 'unknown') {
-    log('prompt card: no answer from Orca, card stays sending', ids);
-    return { status: 502, error: 'Orca gave no answer, so the key may or may not have gone in. Check the worker in Orca before answering again.' };
-  }
-  if (a.status !== 'done') {
-    store.releaseReply(id);
-    log('prompt card: key refused', { ...ids, error: a.result });
-    return { status: 502, error: `Not answered: ${a.result ?? 'Orca refused the key.'}` };
-  }
-  await (o.wait ?? (ms => new Promise(r => setTimeout(r, ms))))(KEY_SETTLE_MS);
-  const after = await readScreen(o.orca, n.terminal!);
-  if (after && !after.exited && stillAt(n.prompt!, after.tail)) {
-    store.releaseReply(id);
-    log('prompt card: the prompt still shows after the key', ids);
-    return { status: 502, error: 'The key went in, but the prompt is still showing. Check the worker in Orca.' };
-  }
-  store.markItem(id, 'answered', option.key);
-  log('prompt card: The owner answered a terminal prompt', { ...ids, key: option.key, seenGone: !!after });
-  o.note(`[ask card] ${OWNER} tapped ${JSON.stringify(option.label)} on prompt message_id=${id} in the app, and the key went into the worker's terminal. Do not answer it again. Reply SILENT.`);
-  return { status: 200 };
-}
-
-/**
- * the owner tapped an option on an ask card. A question gets the same reply as `jarvis-orca reply --id <id> --body <value>`,
- * claimed first so it can never go out twice. An escalation is not something Orca can reply to, so the value goes to
- * the worker as a message, as the steer box does.
+ * the owner tapped an option on an ask card. A native worker's question gets the words through native.reply, claimed first
+ * so it can never go out twice. Jarvis's own question goes to the brain.
  */
 export async function answerAsk(o: AnswerArgs): Promise<AnswerResult> {
   const { id, value, store, log } = o;
   const item = store.item(id);
   if (!item || (item.kind !== 'question' && item.kind !== 'escalation')) return { status: 404, error: 'That ask is not known here.' };
   if (!value.trim()) return { status: 400, error: 'No answer to send.' };
+  // Jarvis's own question (brainasks.ts): the answer goes to the brain, not to a worker.
+  if (isBrainAsk(item)) return answerBrainAsk({ id, value, store, log, note: o.note });
   const ids = { item: id, dispatch: item.dispatch_id };
-  if (isStopNotice(item)) {
-    const n = readStopNotice(item.body);
-    const option = n.prompt?.options.find(x => x.key === value);
-    if (n.terminal && option) return answerPrompt(o, n, option);
-  }
-  const told = `[ask card] ${OWNER} tapped ${JSON.stringify(value)} on ask message_id=${id} in the app. It already went to the worker; do not reply to it again. Reply SILENT.`;
-
-  // A background Claude worker's question: jarvisd carries the words in itself (native.ts), no Orca reply.
-  if (item.source === 'native') {
-    if (!o.native || !item.dispatch_id) return { status: 500, error: 'Nothing was sent: this path cannot reach native workers.' };
-    const claim = store.claimReply(id);
-    if (claim !== 'claimed') return { status: 409, error: `That question is already ${claim}. Not answering it twice.` };
-    const r = await o.native.reply(item.dispatch_id, value, 'owner');
-    if (!r.ok) { store.releaseReply(id); log('ask card: native reply failed, ask reopened', { ...ids, error: r.error }); return { status: 502, error: `Not sent: ${r.error}` }; }
-    store.markItem(id, 'answered', value);
-    log('ask card: The owner answered a native worker', ids);
-    o.note(told);
-    return { status: 200 };
-  }
-
-  if (item.kind === 'escalation') {
-    if (!item.dispatch_id) return { status: 409, error: 'This escalation names no worker to send the answer to.' };
-    if (item.status !== 'new' && item.status !== 'spoken') return { status: 409, error: `That escalation is already ${item.status}.` };
-    let message = value;
-    if (value === NAMED_ACTION) {
-      const named = namedActionOf(item);
-      if (!named) return { status: 409, error: 'This card no longer names an action to run.' };
-      if (!o.gate?.propose) return { status: 500, error: 'Nothing was proposed: this path cannot reach the gate.' };
-      // A second tap after a failed send finds the same card: the gate returns a repeat proposal instead of adding one.
-      const card = await o.gate.propose(named.action, named.args, namedQuestion(named)).catch(e => (e as Error));
-      if (card instanceof Error) {
-        log('ask card: named action refused', { ...ids, action: named.action, error: card.message });
-        return { status: 400, error: `Nothing was proposed: ${card.message}` };
-      }
-      log('ask card: The owner asked for a named action', { ...ids, action: named.action, approval: card.id });
-      message = `Do not retry the refused step. ${OWNER_CAP} has it on an Approve card (${namedLabel(named)}), and jarvisd runs it, not you. Leave that step out, finish whatever else you can, and report with worker_done, saying that step went to his card.`;
-    }
-    const r = await o.orca(['orchestration', 'send', '--run', o.run, '--from', o.handle, '--to', `dispatch:${item.dispatch_id}`, '--subject', `From ${OWNER}`, '--body', message]).catch(() => undefined);
-    if (!r?.ok) {
-      log('ask card: send failed', { ...ids, error: r?.error?.code ?? 'no answer' });
-      return { status: 502, error: r ? `Orca refused it: ${r.error?.message ?? r.error?.code}` : 'Orca gave no answer, so the message may or may not have gone out.' };
-    }
-    store.markItem(id, 'answered', value);
-    log('ask card: The owner answered an escalation', ids);
-    o.note(told);
-    return { status: 200 };
-  }
-
+  if (item.source !== 'native') return { status: 409, error: 'This ask came from a worker Jarvis no longer runs, so nothing can answer it here.' };
+  if (!item.dispatch_id) return { status: 409, error: 'Jarvis does not know which worker sent this, so nothing was sent. Tell Jarvis your answer and it finds the worker.' };
+  if (!o.native) return { status: 500, error: 'Nothing was sent: this path cannot reach native workers.' };
   const claim = store.claimReply(id);
   if (claim !== 'claimed') return { status: 409, error: `That question is already ${claim}. Not answering it twice.` };
-  const r = await o.orca(['orchestration', 'reply', '--run', o.run, '--from', o.handle, '--id', id, '--body', value]).catch(() => undefined);
-  if (r?.ok) {
-    store.markItem(id, 'answered', value);
-    log('ask card: The owner answered a question', ids);
-    o.note(told);
-    return { status: 200 };
+  const r = await o.native.reply(item.dispatch_id, value, 'owner');
+  if (!r.ok) { store.releaseReply(id); log('ask card: native reply failed, ask reopened', { ...ids, error: r.error }); return { status: 502, error: `Not sent: ${r.error}` }; }
+  store.markItem(id, 'answered', value);
+  log('ask card: The owner answered a native worker', ids);
+  o.note(`[ask card] ${OWNER} tapped ${JSON.stringify(value)} on ask message_id=${id} in the app. It already went to the worker; do not reply to it again. Reply SILENT.`);
+  return { status: 200 };
+}
+
+export type AskCtx = {
+  store: Store; log: Log;
+  native: AnswerArgs['native'];
+  /**
+   * A line for the brain. With no `card` (a worker ask), it waits for the next turn. With `card` (an answer on the brain's
+   * own ask), it starts a turn at once. The caller checks the kill switch.
+   */
+  note: BrainNote;
+  /** Sends the card's new state to every open page. */
+  askChanged: (id: string) => void;
+  cardOf: (i: Item | undefined) => AskCard | undefined;
+  /** The gate's PRESSED actions, left out of the audit log. */
+  pressed: Set<string>;
+  /** Sends the work list to every open page. */
+  publish: () => void;
+  /** Moves the requests and the Today rows on from the native rows now, not at the next poll. */
+  sync: () => void;
+  /** An email the brain marked answered: its send proposals go, and the Messages list updates. */
+  emailDone: (id: string) => void;
+};
+
+/** The ask cards' routes: a tap on an option, the audit log, and the brain marking an ask or email answered. */
+export async function askRoute(o: AskCtx, method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+  // the owner tapped an option on an ask card: it goes to the worker at once, as if he had said it.
+  if (method === 'POST' && url === '/api/ask/answer') {
+    const { id, value } = await body();
+    if (typeof id !== 'string' || typeof value !== 'string') return { status: 400, body: { error: 'id and value are required' } };
+    const r = await answerAsk({ id, value: value.trim(), store: o.store, log: o.log, native: o.native, note: o.note });
+    o.askChanged(id);
+    if (r.status === 200) { o.publish(); o.sync(); }
+    return { status: r.status, body: { error: r.error, ask: o.cardOf(o.store.item(id)) } };
   }
-  if (r && !r.ok) {
-    store.releaseReply(id);
-    log('ask card: Orca refused the reply, ask reopened', { ...ids, error: r.error?.code });
-    return { status: 502, error: `Orca refused the answer: ${r.error?.message ?? r.error?.code}` };
+  // The audit log panel: answered asks and decided approvals. Read-only.
+  if (method === 'GET' && url === '/api/audit') return { status: 200, body: auditEntries(o.store, o.cardOf, o.pressed) };
+  // Called by bin/jarvis-act on behalf of the brain: a spoken or typed answer, or jarvis-act email-done.
+  if (method === 'POST' && url === '/api/internal/answered') {
+    const { id, answer } = await body();
+    if (typeof id !== 'string' || !id) return { status: 400, body: { error: 'id is required' } };
+    o.store.markItem(id, 'answered', typeof answer === 'string' ? answer : undefined);
+    o.log('reply recorded', { item: id });
+    o.askChanged(id); // a spoken or typed answer marks the card answered too
+    if (o.store.item(id)?.source === 'gmail') o.emailDone(id); // jarvis-act email-done
+    o.publish(); o.sync(); // the answered ask leaves "waiting" (and the Requests badge) now, not in up to 30 s
+    return { status: 204 };
   }
-  log('ask card: no answer from Orca, ask stays replying', ids);
-  return { status: 502, error: 'Orca gave no answer, so the reply may or may not have gone out. Check before sending it again.' };
+  return undefined;
+}
+
+/** What a worker's SendMessage is: an ask with options, a status notice, or an ask with no options (sent back). */
+export type WorkerMessageKind = 'ask' | 'notice' | 'no-options';
+
+
+const LINK = /\bhttps?:\/\/\S+/g;
+
+/**
+ * Sorts a worker's message. A message with options is an ask. A message that asks nothing (a `NOTICE:`, `DONE:` or
+ * `FAILED:` first line, or no QUESTION field and no question mark outside a link) is a notice. Anything else is a
+ * question with no options. The owner could not answer it with a tap, so it goes back to the worker.
+ */
+export function workerMessageKind(text: string): WorkerMessageKind {
+  const body = text.trim();
+  const label = readReport(body).label;
+  if (label === 'NOTICE' || label === 'DONE' || label === 'FAILED') return 'notice';
+  const probe = { id: 0, source: 'native', external_id: 'probe', kind: 'question', dispatch_id: null, subject: '', body, options: null,
+    status: 'new', answer: null, created_at: '', pushes: 0, pushed_at: null, meta: null } as Item;
+  if (askCard(probe)?.options.length) return 'ask';
+  const asks = Boolean(fields(body).QUESTION) || body.replace(LINK, '').includes('?');
+  return asks ? 'no-options' : 'notice';
 }

@@ -1,5 +1,6 @@
 // Which model and effort the brain runs on. Only the brain: workers pick their own model.
 // The setting lives in the store's `state` table under `brainModel`, so it survives a jarvisd restart.
+import type { RouteResult, Body } from './route.ts';
 
 export const MODELS = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5', note: 'For complex work and everyday tasks' },
@@ -54,4 +55,15 @@ export async function changeBrainModel(o: { body: unknown; brain: Switchable; se
   const refused = await o.brain.switchModel(m);
   if (refused) { saveBrainModel(o.setState, before); return { status: 409, error: refused }; }
   return { status: 200 };
+}
+
+/** The brain's model and effort (the picker by the chat box). Only the brain: workers are not touched. `changed` runs after a switch. */
+export async function brainModelRoute(o: { brain: Switchable; setState: (key: string, value: string) => void; killed: () => boolean; info: () => object; changed: () => void },
+  method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+  if (url !== '/api/brain/model') return undefined;
+  if (method === 'GET') return { status: 200, body: o.info() };
+  if (method !== 'POST') return undefined;
+  const r = await changeBrainModel({ body: await body(), brain: o.brain, setState: o.setState, killed: o.killed() });
+  if (r.status === 200) o.changed();
+  return { status: r.status, body: { error: r.error, ...o.info() } };
 }

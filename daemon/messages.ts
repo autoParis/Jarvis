@@ -8,6 +8,7 @@ import type { Gate } from './gate.ts';
 import { replyAll, selfAddresses, stripSignoff, OWNER_EMAILS, type EmailMeta } from './gmail.ts';
 import type { PushMessage } from './push.ts';
 import { GMAIL_ACCOUNT as CONFIG_GMAIL_ACCOUNT } from './config.ts';
+import type { RouteResult, Body } from './route.ts';
 
 // The account `gws` reads, so the link opens the right mailbox when a browser holds several.
 const GMAIL_ACCOUNT = CONFIG_GMAIL_ACCOUNT;
@@ -136,4 +137,31 @@ export function makeMessages(d: { store: Store; gate: Gate; log: (m: string, f?:
       return { status: 200, body: { messages: list() } };
     },
   };
+}
+
+export type Messages = ReturnType<typeof makeMessages>;
+/**
+ * The Messages popup's routes. Send reply is the owner's Approve for this email, with the words now in the box: `approved`
+ * tells the brain the outcome. I'll handle it, or Done on a message the owner sends himself, closes the card: `handled`
+ * tells the brain. jarvis-act message-add adds a card.
+ */
+export async function messagesRoute(o: { messages: Pick<Messages, 'send' | 'handled' | 'add'>; approved: (a: Approval) => void; handled: (id: string) => void },
+  method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+  if (method !== 'POST') return undefined;
+  if (url === '/api/message/send') {
+    const { id, text } = await body();
+    if (typeof id !== 'string' || typeof text !== 'string') return { status: 400, body: { error: 'id and text are required' } };
+    const r = await o.messages.send(id, text);
+    if (r.body.approval) o.approved(r.body.approval);
+    return r;
+  }
+  if (url === '/api/message/handled') {
+    const { id } = await body();
+    if (typeof id !== 'string') return { status: 400, body: { error: 'id is required' } };
+    const r = o.messages.handled(id);
+    if (r.status === 200) o.handled(id);
+    return r;
+  }
+  if (url === '/api/internal/messages') return o.messages.add(await body());
+  return undefined;
 }

@@ -18,6 +18,12 @@ fs.appendFileSync(path.join(dir, 'calls.jsonl'), JSON.stringify({ verb, params, 
 const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));
 console.error('Using keyring backend: keyring');
 if (state.failOn === verb) { console.error('boom'); process.exit(1); }
+if (state.quotaOn === verb && (state.quotaLeft ?? 1) > 0) {
+  state.quotaLeft = (state.quotaLeft ?? 1) - 1;
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state));
+  console.log(JSON.stringify({ error: { code: 429, message: "Quota exceeded for quota metric 'Read requests'" } }));
+  process.exit(1);
+}
 let out = {};
 if (verb === 'sheets spreadsheets get') out = { sheets: state.sheets };
 if (verb === 'sheets spreadsheets values get') {
@@ -52,7 +58,7 @@ function setup(state: object = {}) {
     run: (edit: unknown, ...flags: string[]) => {
       const file = join(dir, 'edit.json');
       writeFileSync(file, typeof edit === 'string' ? edit : JSON.stringify(edit));
-      return run([file, ...flags], { gwsBin, root, now: () => new Date('2026-11-03T12:00:00.000Z'), log: l => lines.push(l) });
+      return run([file, ...flags], { gwsBin, root, now: () => new Date('2026-11-03T12:00:00.000Z'), log: l => lines.push(l), retryMs: 1 });
     },
   };
 }
@@ -283,4 +289,10 @@ test('refuses unreadable JSON, a missing file, and a tab the sheet does not have
   assert.equal(b.run(e), 2);
   assert.match(b.output(), /Nope/);
   assert.equal(b.writes().length, 0);
+});
+
+test('a call over the per-minute quota (429) is sent again, and the edit completes', () => {
+  const t = setup({ quotaOn: 'sheets spreadsheets values get', quotaLeft: 2 });
+  assert.equal(t.run(edit()), 0, t.output());
+  assert.match(t.output(), /Read-back: no differences/);
 });

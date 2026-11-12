@@ -9,7 +9,7 @@ export const projectName = (p: string) => LABELS[p] ?? (p.charAt(0).toUpperCase(
 export function terminalRows(list: TermInfo[]): WorkRow[] {
   return list.map(t => ({
     id: `t:${t.name}`, kind: 'session', title: `${t.kind === 'codex' ? 'Codex' : 'Terminal'} in ${projectName(t.project)}`,
-    group: 'terminal', state: 'idle', note: t.name, sideChat: false, steer: 'none',
+    group: 'terminal', state: 'idle', note: t.name, steer: 'none',
     tmux: { name: t.name, project: t.project, kind: t.kind, cwd: t.cwd, branch: t.branch },
   }));
 }

@@ -22,7 +22,7 @@ type Write = Check & { inputOption?: 'RAW' | 'USER_ENTERED'; expect?: Grid };
 type Edit = { spreadsheetId?: string; description?: string; expected: Check[]; writes?: Write[]; requests?: object[]; verify?: Check[] };
 type Range = { tab: string; col1: number; row1: number; col2: number; row2: number };
 type Diff = { range: string; cell: string; expected: string; actual: string };
-type Deps = { gwsBin?: string; root?: string; now?: () => Date; log?: (line: string) => void };
+type Deps = { gwsBin?: string; root?: string; now?: () => Date; log?: (line: string) => void; retryMs?: number };
 
 class Refused extends Error {}
 
@@ -131,18 +131,27 @@ function diffGrid(range: string, wanted: Grid, actual: Grid): Diff[] {
   return diffs;
 }
 
-function client(bin: string) {
+const RETRIES = 4;
+const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+function client(bin: string, retryMs = 30_000) {
   const call = (args: string[], params: object = {}, body?: object) => {
     const argv = ['sheets', 'spreadsheets', ...args, '--params', JSON.stringify({ ...params, spreadsheetId: SHEET_ID })];
     if (body) argv.push('--json', JSON.stringify(body));
-    try {
-      const out = execFileSync(bin, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 512 * 1024 * 1024 });
-      const parsed = JSON.parse(out || '{}');
-      if (parsed.error) throw new Error(JSON.stringify(parsed.error));
-      return parsed;
-    } catch (err) {
-      const e = err as Error & { stderr?: string; stdout?: string };
-      throw new Error(`gws ${args.join(' ')} failed: ${[e.stdout, e.stderr].filter(Boolean).join(' ').trim() || e.message}`, { cause: err });
+    // Google refuses a call over the per-minute quota with 429 and runs none of it, so the same call is safe to send again.
+    // A long read-back hits the read quota (60 a minute): wait out the minute, up to RETRIES times.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const out = execFileSync(bin, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 512 * 1024 * 1024 });
+        const parsed = JSON.parse(out || '{}');
+        if (parsed.error) throw new Error(JSON.stringify(parsed.error));
+        return parsed;
+      } catch (err) {
+        const e = err as Error & { stderr?: string; stdout?: string };
+        const detail = [e.stdout, e.stderr].filter(Boolean).join(' ').trim() || e.message;
+        if (attempt < RETRIES && /"code":\s*429|Quota exceeded/.test(detail)) { sleep(retryMs); continue; }
+        throw new Error(`gws ${args.join(' ')} failed: ${detail}`, { cause: err });
+      }
     }
   };
   return {
@@ -237,7 +246,7 @@ export function run(argv: string[], deps: Deps = {}): number {
       throw new Refused(`cannot read the edit file: ${(err as Error).message}`);
     }
     const edit = validate(raw);
-    const gws = client(deps.gwsBin ?? GWS_BIN);
+    const gws = client(deps.gwsBin ?? GWS_BIN, deps.retryMs);
 
     const changed = preflight(gws, edit.expected);
     if (changed.length) {

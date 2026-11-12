@@ -3,16 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { workerLines, chatLines, readChatFile, readSource, findChatFile, orcaMessage, showReplies, withEvents, fileCursor, CLIP, type Answer, type Line, type ReplyMemo } from './transcript.ts';
+import { chatLines, chatLineAt, readChatFile, withEvents, fileCursor, CLIP } from './transcript.ts';
 
-test('worker messages become text and one-line tool calls; clipped text is marked', () => {
-  const lines = workerLines([
-    { id: 'm1', role: 'user', timestamp: 1, blocks: [{ type: 'text', text: 'Do the thing\n… (truncated)' }] },
-    { id: 'm2', role: 'reasoning', blocks: [{ type: 'text', text: 'thinking' }] },
-    { id: 'm3', role: 'assistant', timestamp: 2, blocks: [{ type: 'text', text: 'x'.repeat(CLIP + 10) }, { type: 'tool-call', name: 'Bash', input: { command: 'npm\n test' } }, { type: 'tool-result', output: 'ok' }] },
-  ]);
-  assert.deepEqual(lines.map(l => [l.role, l.text.length > 50 ? l.text.length : l.text, !!l.clipped]), [
-    ['user', 'Do the thing', true],
+test('long text is clipped and marked, and a tool call is one short line', () => {
+  const jsonl = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(CLIP + 10) }, { type: 'tool_use', name: 'Bash', input: { command: 'npm\n test' } }] } }) + '\n';
+  assert.deepEqual(chatLines(jsonl, 0).map(l => [l.role, l.text.length > 50 ? l.text.length : l.text, !!l.clipped]), [
     ['agent', CLIP, true],
     ['tool', 'Bash: npm test', false],
   ]);
@@ -48,136 +43,19 @@ test('a chat file is read from its cursor, complete lines only', () => {
   assert.equal(readChatFile(file, 'f:999999').reset, true);
 });
 
-test('a worker read pages forward until the cursor stops moving, and restarts when the source changed', async () => {
-  const pages = [[{ id: 'a', role: 'assistant', blocks: [{ type: 'text', text: 'first' }] }], [{ id: 'b', role: 'assistant', blocks: [{ type: 'text', text: 'second' }] }]];
-  const calls: string[][] = [];
-  const orca = async (args: string[]) => {
-    calls.push(args);
-    const at = args.includes('--cursor') ? Number(args[args.indexOf('--cursor') + 1]) : 0;
-    if (at === 9) return { ok: false, error: { code: 'source_changed', message: '' } };
-    // Orca 1.4.244 says limited even on the last, empty page.
-    return { ok: true, result: { transcript: { messages: pages[at] ?? [], nextCursor: String(Math.min(at + 1, pages.length)), limited: true } } };
-  };
-  const r = await readSource(orca, { kind: 'worker', dispatch: 'd' }, undefined, new Map());
-  assert.deepEqual(r.lines.map(l => l.text), ['first', 'second']);
-  assert.equal(r.cursor, '2');
-  assert.equal(r.more, false);
-  assert.equal(calls.length, 3);
-  assert.deepEqual(await readSource(orca, { kind: 'worker', dispatch: 'd' }, '9', new Map()), { lines: [], reset: true });
-});
-
-test('a chat transcript path comes from the search hit for that exact session, inside the transcript folders only', async () => {
-  const hits = [
-    { structuredSession: { sessionId: 'other' }, source: { filePath: '/home/.claude/projects/x/other.jsonl' } },
-    { structuredSession: { sessionId: 'claude_88' }, source: { filePath: '/home/.claude/projects/x/88.jsonl' } },
-    { structuredSession: { sessionId: 'evil' }, source: { filePath: '/etc/passwd' } },
-  ];
-  const orca = async () => ({ ok: true, result: { hits } });
-  const src = (key: string) => ({ kind: 'chat' as const, key, cwd: '/w', query: 'words' });
-  assert.equal(await findChatFile(orca, src('claude_88'), ['/home/.claude/projects/']), '/home/.claude/projects/x/88.jsonl');
-  assert.equal(await findChatFile(orca, src('evil'), ['/home/.claude/projects/']), undefined);
-  assert.equal(await findChatFile(orca, src('missing'), ['/home/.claude/projects/']), undefined);
-});
-
-test('a terminal agent\'s transcript is the file holding its last message, never a chat tab\'s or another folder\'s', async () => {
-  const hits = [
-    { cwd: '/w/a', structuredSession: { sessionId: 'tab' }, source: { filePath: '/home/.claude/projects/x/tab.jsonl' } },
-    { cwd: '/w/b', source: { filePath: '/home/.claude/projects/x/other-folder.jsonl' } },
-    { cwd: '/w/a', source: { filePath: '/home/.claude/projects/x/one-word-match.jsonl' } },
-    { cwd: '/w/a', source: { filePath: '/home/.claude/projects/x/right.jsonl' } },
-  ];
-  const orca = async () => ({ ok: true, result: { hits } });
-  const tail = (f: string) => f.endsWith('right.jsonl') || f.endsWith('tab.jsonl') || f.endsWith('other-folder.jsonl') ? '{"text":"All \\"done\\" here"}' : '{"text":"other"}';
-  const ref = { key: 'pane:1', cwd: '/w/a', query: 'All done here', probe: 'All "done" here' };
-  assert.equal(await findChatFile(orca, ref, ['/home/.claude/projects/'], tail), '/home/.claude/projects/x/right.jsonl');
-  assert.equal(await findChatFile(orca, { ...ref, probe: undefined }, ['/home/.claude/projects/'], tail), undefined);
-  assert.equal(await findChatFile(orca, { ...ref, probe: 'not there' }, ['/home/.claude/projects/'], tail), undefined);
-});
-
-test('an ask and a worker_done read as whole messages, however the command is written', () => {
-  const long = 'x'.repeat(1972);
-  assert.deepEqual(orcaMessage(`git status; orca orchestration ask --from term_1 --options "A,B" --question "STORY: 12 fold\nQUESTION: ${long}?"`),
-    { kind: 'ask', text: `STORY: 12 fold\nQUESTION: ${long}?\n\nOptions: A, B` });
-  assert.equal(orcaMessage(`orca orchestration ask --question "STORY: 1\nOPTIONS:\n- A because b" --options "A"`)?.text, 'STORY: 1\nOPTIONS:\n- A because b', 'options already in the question are not repeated');
-  assert.deepEqual(orcaMessage(`git push && orca orchestration send --from t --type worker_done --subject "It's done" --body 'He said "ok" and it'\\''s in' --task-id t1 --outcome succeeded 2>&1 | tail -1`),
-    { kind: 'done', text: `**It's done**\n\nHe said "ok" and it's in` });
-  assert.deepEqual(orcaMessage(`orca orchestration send --type=worker_done --outcome=failed --body="cost \\$5\\nsee \\"log\\""`),
-    { kind: 'done', text: 'cost $5\nsee "log"', failed: true });
-  assert.deepEqual(orcaMessage(`orca orchestration send --type escalation --subject "Blocked: tests" --body "Red"`), { kind: 'blocked', text: '**Blocked: tests**\n\nRed' });
-  assert.equal(orcaMessage(`/opt/bin/jarvis-orca ask --question "Which one?"`)?.text, 'Which one?');
-  assert.deepEqual(orcaMessage(`orca orchestration send --type worker_done --subject S --body "$(cat <<'EOF'\nline one's\n\nline two\nEOF\n)"`), { kind: 'done', text: `**S**\n\nline one's\n\nline two` });
-});
-
-test('commands that only mention an ask stay tool rows', () => {
-  for (const c of [
-    'orca orchestration ask --help | head',
-    'grep -n "orca orchestration ask --question x" web/index.html',
-    'orca orchestration send --to dispatch:1 --subject Hi --body Yo',
-    'orca orchestration send --type worker_done --body "$(make_report)"',
-    'echo worker_done',
-  ]) assert.equal(orcaMessage(c), undefined, c);
-});
-
-const CLAUDE_ASK = { type: 'assistant', timestamp: '2026-11-03T10:00:00Z', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: `orca orchestration ask --question "${'q'.repeat(500)}"` } }] } };
-test('both session formats and Orca transcripts carry the whole message, past the 200 characters of a tool row', () => {
-  const codex = (payload: object) => ({ type: 'response_item', payload });
-  const q = 'q'.repeat(500);
-  const lines = chatLines([
-    CLAUDE_ASK,
-    codex({ type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: `orca orchestration ask --question "${q}"` }) }),
-    codex({ type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['bash', '-lc', `orca orchestration send --type worker_done --body "${q}"`] }) }),
-    codex({ type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['ls', '-la'] }) }),
-    codex({ type: 'custom_tool_call', name: 'shell', input: `orca orchestration ask --question "${q}"` }),
-  ].map(e => JSON.stringify(e)).join('\n') + '\n', 0);
-  assert.deepEqual(lines.map(l => [l.role, l.kind, l.text.length > 100 ? l.text.length : l.text]), [
-    ['agent', 'ask', 500], ['agent', 'ask', 500], ['agent', 'done', 500], ['tool', undefined, 'shell: ls -la'], ['agent', 'ask', 500],
-  ]);
-  const [m] = workerLines([{ id: 'm', role: 'assistant', blocks: [{ type: 'tool-call', name: 'Bash', input: { command: `orca orchestration ask --question "${q}"` } }] }]);
-  assert.deepEqual([m.role, m.kind, m.text.length], ['agent', 'ask', 500]);
-});
-
-test("Orca's brief and wake-ups are marked, with their text intact, and a person's words are not", () => {
-  const brief = 'Please carry out this task.\n\n<pasted_content id="1">\nYou are working inside Orca, a multi-agent IDE. --dispatch-id ctx_1\n=== TASK ===\nDo it';
-  const user = (content: string) => ({ type: 'user', timestamp: '2026-11-03T10:00:00Z', message: { content } });
-  const codexUser = (text: string) => ({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });
-  const lines = chatLines([
-    user(brief), user('\nYou have 1 orchestration message. Run `orca orchestration check`.'), user('Why do you have 1 orchestration message?'),
-    codexUser('You are working inside Orca, a multi-agent IDE.'), codexUser('You have 2 orchestration messages. Run `orca orchestration check --run r`.'),
-  ].map(e => JSON.stringify(e)).join('\n') + '\n', 0);
-  assert.deepEqual(lines.map(l => l.kind), ['preamble', 'wake', undefined, 'preamble', 'wake']);
-  assert.equal(lines[0].text, brief, 'findWorkerSession looks for --dispatch-id in this text');
-});
-
-test('a wake-up shows the answer it stands for, once, and every pane shows the same', () => {
-  const T = Date.parse('2026-11-03T10:00:00Z');
-  const wake = (id: string, min: number): Line => ({ id, role: 'user', kind: 'wake', at: T + min * 60_000, text: 'You have 1 orchestration message.' });
-  const a = (id: string, min: number, by?: 'jarvis'): Answer => ({ id, text: `answer ${id}`, at: T + min * 60_000, ...(by ? { by } : {}) });
-  const memo: ReplyMemo = { used: new Set(), shown: new Map() };
-  const answers = [a('one', 0), a('two', 10, 'jarvis'), a('three', 20), a('four', 20.1)];
-  // A steer has no row in items, so its wake at minute 15 stays a wake, and the wake at 30 gets both answers it missed.
-  const lines = [wake('w1', 1), wake('w2', 11), wake('w3', 15), wake('w4', 30)];
-  showReplies(lines, answers, memo);
-  assert.deepEqual(lines.map(l => [l.kind, l.text.startsWith('answer') ? l.text : '-', l.by]), [
-    ['reply', 'answer one', undefined], ['reply', 'answer two', 'jarvis'], ['wake', '-', undefined], ['reply', 'answer three\n\nanswer four', undefined],
-  ]);
-  const again = [wake('w2', 11)];
-  showReplies(again, answers, memo);
-  assert.equal(again[0].text, 'answer two', 'a second pane reading the same line');
-});
-
-test('a wake-up before its answer is recorded, or in a read that starts partway, shows nothing false', () => {
-  const T = 1_000_000_000;
-  const wake: Line = { id: 'w', role: 'user', kind: 'wake', at: T, text: 'You have 1 orchestration message.' };
-  const memo = (): ReplyMemo => ({ used: new Set(), shown: new Map() });
-  const late = [{ ...wake }];
-  showReplies(late, [{ id: 'a', text: 'later', at: T + 60_000 }], memo());
-  assert.equal(late[0].kind, 'wake');
-  const partway = [{ ...wake }];
-  showReplies(partway, [{ id: 'a', text: 'old', at: T - 90_000 }, { id: 'b', text: 'newest', at: T - 1000 }], memo());
-  assert.equal(partway[0].text, 'newest');
-  const skew = [{ ...wake }];
-  showReplies(skew, [{ id: 'a', text: 'just after', at: T + 1000 }], memo());
-  assert.equal(skew[0].text, 'just after');
+test('read aloud finds a worker message by its pane id, and only a worker message', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'jarvis-tr-')), 's.jsonl');
+  const user = JSON.stringify({ type: 'user', message: { content: 'go on' } }) + '\n';
+  const agent = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Tests pass.' }, { type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] } }) + '\n';
+  writeFileSync(file, user + agent);
+  const ids = readChatFile(file).lines.map(l => l.id);
+  assert.deepEqual(ids, ['f:0', `f:${Buffer.byteLength(user)}`, `f:${Buffer.byteLength(user)}#1`]);
+  assert.equal(chatLineAt(file, ids[1]), 'Tests pass.');
+  assert.equal(chatLineAt(file, ids[0]), undefined, 'the owner\'s words are not read');
+  assert.equal(chatLineAt(file, ids[2]), undefined, 'nor a tool call');
+  assert.equal(chatLineAt(file, 'f:3'), undefined, 'nor the middle of a line');
+  assert.equal(chatLineAt(file, 'f:999999'), undefined);
+  assert.equal(chatLineAt(file, 'bad'), undefined);
 });
 
 test('a native pane: a typed line is a plain user line, a mid-turn typed line comes from its queued_command attachment, a relayed one is a reply', () => {

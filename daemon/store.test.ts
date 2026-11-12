@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from './store.ts';
 
-test('a replayed Orca delivery is stored once and open asks exclude answered ones', () => {
+test('a replayed item is stored once and open asks exclude answered ones', () => {
   const s = openStore(':memory:');
-  const m = { source: 'orca', external_id: 'msg_1', kind: 'question', body: 'Skip the step?' };
+  const m = { source: 'native', external_id: 'msg_1', kind: 'question', body: 'Skip the step?' };
   assert.ok(s.insertItem(m));
   assert.equal(s.insertItem(m), undefined);
   assert.equal(s.openItems().length, 1);
@@ -18,7 +18,7 @@ test('a replayed Orca delivery is stored once and open asks exclude answered one
 
 test('a reply claims the ask once; a refused reply reopens it', () => {
   const s = openStore(':memory:');
-  s.insertItem({ source: 'orca', external_id: 'msg_1', kind: 'question' });
+  s.insertItem({ source: 'native', external_id: 'msg_1', kind: 'question' });
   assert.equal(s.claimReply('msg_1'), 'claimed');
   assert.equal(s.claimReply('msg_1'), 'replying');
   assert.equal(s.openItems()[0].status, 'replying'); // still in the brief, flagged
@@ -62,7 +62,7 @@ test('messages from before settled_at are not in question; a new one waits until
 
 test('answering a worker\'s later ask closes the asks it raised before; later and other workers\' asks stay open', () => {
   const s = openStore(':memory:');
-  const ask = (id: string, dispatch: string | null, kind = 'question') => s.insertItem({ source: 'orca', external_id: id, kind, dispatch_id: dispatch });
+  const ask = (id: string, dispatch: string | null, kind = 'question') => s.insertItem({ source: 'native', external_id: id, kind, dispatch_id: dispatch });
   ask('old_q', 'd_1'); ask('old_e', 'd_1', 'escalation'); ask('sending', 'd_1'); ask('answered', 'd_1'); ask('newer', 'd_1'); ask('other', 'd_2'); ask('no_worker', null);
   s.claimReply('sending');
   assert.deepEqual(s.closeEarlierAsks(), [], 'nothing answered yet');
@@ -83,14 +83,4 @@ test('a work row is read back by id, and no other turn can be read that way', ()
   assert.equal(store.workSteps(work), '{"ms":5,"steps":[]}');
   assert.equal(store.workSteps(said), undefined);
   assert.equal(store.recentTurns(5)[0].id, work);
-});
-
-test('a worker\'s answers come oldest first, without open asks or other workers', () => {
-  const s = openStore(join(mkdtempSync(join(tmpdir(), 'jarvis-store-')), 'j.db'));
-  const ask = (id: string, dispatch: string) => s.insertItem({ source: 'orca', external_id: id, kind: 'question', dispatch_id: dispatch });
-  ask('a', 'd1'); ask('b', 'd1'); ask('c', 'd2'); ask('open', 'd1');
-  s.markItem('a', 'answered', 'first');
-  s.markItem('b', 'answered', 'second', 'jarvis');
-  s.markItem('c', 'answered', 'other worker');
-  assert.deepEqual(s.answersTo('d1').map(i => [i.external_id, i.answer, i.answered_by]), [['a', 'first', null], ['b', 'second', 'jarvis']]);
 });
