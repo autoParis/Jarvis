@@ -5,18 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from './store.ts';
 import { auditEntries, askCard } from './asks.ts';
-import { makeRequests, requestDetail } from './requests.ts';
+import { makeRequests, requestDetail, DONE_KEEP_MS } from './requests.ts';
 import { findWorkerSession } from './transcript.ts';
-import { mergeWork, workListHtml, folded, DONE_FOLD_MS, requestDetailHtml, groupOf, groupOpen, doneLine, approvalTag, approvalDetail, approvalButtons, approvalOutcomeText } from '../web/worklist.js';
+import { mergeWork, workListHtml, folded, DONE_FOLD_MS, COMPLETED_KEEP_MS, requestDetailHtml, groupOf, groupOpen, doneLine, approvalTag, approvalDetail, approvalButtons, approvalOutcomeText } from '../web/worklist.js';
 import { requestListHtml } from '../web/requestlist.js';
 
 const NOW = Date.parse('2026-11-02T15:00:00Z');
 const at = (min = 5) => new Date(NOW - min * 60_000).toISOString();
 const row = (id: string, extra: object = {}) => ({ id, kind: 'worker', dispatch: id, title: `Row ${id}`, group: 'other', state: 'working', sideChat: false, steer: 'auto', ...extra });
 const req = (id: number, status: string, extra: object = {}) => ({ id, title: `Req ${id}`, words: null, status, at: at(), startedAt: at(60), ...extra });
-const none = new Set<string>();
+const none: Record<string, string> = {};
 const itemsOf = (m: any, g: string) => m.groups.find((x: any) => x.key === g).items;
-const ctx = { hidden: none, shut: new Set<string>(), closedWaiting: new Set<string>(), folders: {}, now: NOW };
+const ctx = { shut: new Set<string>(), closedWaiting: new Set<string>(), folders: {}, now: NOW };
 
 test('a request and its row are one item, with the request\'s title, status and age', () => {
   const m = mergeWork([row('a', { group: 'story' })], [req(1, 'working', { row: 'a', title: '#1 The ask' })], none);
@@ -24,32 +24,32 @@ test('a request and its row are one item, with the request\'s title, status and 
   const html = workListHtml(m, ctx);
   assert.match(html, /#1 The ask/);
   assert.doesNotMatch(html, /Row a/);
-  assert.match(html, /data-hide-row="a" data-hide="1"/, 'Hide takes both off');
+  assert.match(html, /data-complete data-request="1" data-row-id="a"/, 'the × moves both to Completed');
 });
 
-test('the × closes an idle side chat and only hides every other row', () => {
-  const html = (r: object, hidden = none) => workListHtml(mergeWork([row('a', r)], [], hidden), { ...ctx, hidden });
+test('the × closes an idle side chat and moves every other row to Completed', () => {
+  const html = (r: object) => workListHtml(mergeWork([row('a', r)], [], none), ctx);
   const idle = html({ sideChat: true, state: 'idle' });
   assert.match(idle, /class="hide" data-close="a"/);
-  assert.doesNotMatch(idle, /data-hide-row|close-offer|Close it\?/);
-  assert.doesNotMatch(html({ sideChat: true, state: 'working' }), /data-close/);
+  assert.doesNotMatch(idle, /data-complete|close-offer|Close it\?/);
+  assert.match(html({ sideChat: true, state: 'working' }), /data-complete data-row-id="a" aria-label="Move Row a to Completed"/);
   assert.doesNotMatch(html({ state: 'idle' }), /data-close/);
 });
 
-test('a hidden idle side chat keeps ↺, so bringing it back never closes it', () => {
-  const hidden = new Set(['a']);
-  const out = workListHtml(mergeWork([row('a', { sideChat: true, state: 'idle' })], [], hidden, true), { ...ctx, hidden });
-  assert.doesNotMatch(out, /data-close/);
-  assert.match(out, /data-unhide/);
+test('nothing in the list hides a row any more: no Show hidden, no ↺', () => {
+  const out = workListHtml(mergeWork([row('a'), row('b')], [], { b: at(1) }, NOW), { ...ctx, folders: { done: true } });
+  assert.doesNotMatch(out, /data-unhide|showhidden|↺|hidden-row|Hide from this list/);
+  const page = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /showhidden|showHidden|\/api\/work\/hide|\/api\/requests\/hide/);
 });
 
-test('a working, waiting or failed request with no row still shows, in the group its title implies, with status and Hide', () => {
+test('a working, waiting or failed request with no row still shows, in the group its title implies, with status and its ×', () => {
   const m = mergeWork([], [req(1, 'working', { title: '#4 Story' }), req(2, 'waiting', { title: 'Babysit PR #9' }), req(3, 'failed', { title: 'One-off' })], none);
   assert.equal(itemsOf(m, 'story')[0].req.id, 1);
   assert.equal(itemsOf(m, 'babysit')[0].req.id, 2);
   assert.equal(itemsOf(m, 'other')[0].req.id, 3);
   const html = workListHtml(m, ctx);
-  for (const id of [1, 2, 3]) assert.match(html, new RegExp(`data-hide="${id}"`));
+  for (const id of [1, 2, 3]) assert.match(html, new RegExp(`data-complete data-request="${id}"`));
   assert.match(html, /Working/);
   assert.match(html, /Waiting on you/);
   assert.match(html, /g-failed/);
@@ -69,18 +69,32 @@ test('two requests on one row: the first takes the row and the second keeps its 
   assert.match(workListHtml(m, ctx), /data-id="a"[^]*data-id="a"/);
 });
 
-test('a row the owner hid stays hidden, but its open request does not vanish', () => {
-  const m = mergeWork([row('a')], [req(1, 'waiting', { row: 'a' })], new Set(['a']));
-  assert.equal(m.hiddenCount, 1);
+test('a moved row leaves its group for good, but an open request on it does not vanish', () => {
+  const m = mergeWork([row('a')], [req(1, 'waiting', { row: 'a' })], { a: at(1) }, NOW);
   const [only] = itemsOf(m, 'other');
   assert.equal(only.row, undefined);
   assert.equal(only.req.id, 1);
+  assert.equal(m.done.length, 0, 'the open request stands for the row, so the row is not in Completed twice');
 });
 
-test('a plain row with no request stays, and hidden rows come back with Show hidden', () => {
-  const hidden = new Set(['b']);
-  assert.deepEqual(itemsOf(mergeWork([row('a'), row('b')], [], hidden), 'other').map((i: any) => i.row.id), ['a']);
-  assert.deepEqual(itemsOf(mergeWork([row('a'), row('b')], [], hidden, true), 'other').map((i: any) => i.row.id), ['a', 'b']);
+test('a moved row with no request shows in Completed for a day from the press, then nowhere', () => {
+  const rows = [row('a', { title: 'Babysit PR #12', state: 'idle' }), row('b')];
+  const fresh = mergeWork(rows, [], { a: at(10) }, NOW);
+  assert.deepEqual(itemsOf(fresh, 'other').map((i: any) => i.row.id), ['b'], 'a moved working row leaves its group too');
+  assert.deepEqual(fresh.done.map((r: any) => [r.row, r.status, r.title]), [['a', 'done', 'Babysit PR #12']]);
+  const html = workListHtml(fresh, { ...ctx, folders: { done: true } });
+  assert.match(html, /Completed<span class="n">1<\/span>/);
+  assert.match(html, /data-row="a"/, 'it still opens its conversation');
+  assert.match(html, /class="hide" data-remove data-row-id="a" aria-label="Remove Babysit PR #12 from Completed"/);
+  const later = mergeWork(rows, [], { a: at(24 * 60 + 1) }, NOW);
+  assert.equal(later.done.length, 0, 'gone from Completed after a day');
+  assert.deepEqual(itemsOf(later, 'other').map((i: any) => i.row.id), ['b'], 'and it does not come back in its group');
+  assert.equal(COMPLETED_KEEP_MS, DONE_KEEP_MS, 'the same purge as a done request');
+});
+
+test('the × on a working row whose request waits for merge moves that request to Completed too', () => {
+  const m = mergeWork([row('a', { state: 'working' })], [req(1, 'review', { row: 'a' })], none, NOW);
+  assert.match(workListHtml(m, ctx), /data-complete data-request="1" data-row-id="a"/);
 });
 
 test('a finished request moves to its folder and takes an idle row with it; a row still active stays too', () => {
@@ -130,8 +144,9 @@ test('a Waiting for merge row starts with the story number, linked to the PR; wi
   assert.match(html, />PR #8<\/a>/);
 });
 
-test('Hide on a folder row also hides its conversation row, or the row would come back in its group', () => {
-  assert.match(requestListHtml([req(1, 'review', { row: 'a' })], { review: true }, NOW), /data-hide="1" data-hide-row="a"/);
+test('the × on a folder row names its conversation row too, or the row would come back in its group', () => {
+  assert.match(requestListHtml([req(1, 'review', { row: 'a' })], { review: true }, NOW), /data-complete data-request="1" data-row-id="a"/, 'Waiting for merge moves to Completed');
+  assert.match(requestListHtml([req(1, 'done', { row: 'a' })], { done: true }, NOW), /data-remove data-request="1" data-row-id="a"/, 'Completed removes now');
 });
 
 test('the done line counts what finished today and what waits for merge', () => {
@@ -214,11 +229,11 @@ test('a row with a conversation opens that conversation and shows no closed note
   assert.doesNotMatch(html, /req:1|Conversation closed/);
 });
 
-test('a folder row with no conversation opens its record, and its × still hides it', () => {
+test('a folder row with no conversation opens its record, and its × still removes it', () => {
   const html = requestListHtml([req(1, 'done')], { done: true }, NOW);
   assert.match(html, /data-row="req:1"/);
   assert.match(html, /Conversation closed/);
-  assert.match(html, /data-hide="1"/);
+  assert.match(html, /data-remove data-request="1"/);
   assert.match(requestListHtml([req(2, 'done', { row: 'a' })], { done: true }, NOW), /data-row="a"/);
 });
 
@@ -387,7 +402,7 @@ test('every web file is in the STATIC map, since the daemon serves nothing else'
 
 test('a row finished over an hour ago goes under the Done fold, and one finished an hour ago or less stays', () => {
   const ended = (min: number) => ({ state: 'idle', note: 'Done', endedAt: at(min) });
-  const m = mergeWork([row('a', ended(61)), row('b', ended(60)), row('c', ended(59)), row('d', { state: 'exited', endedAt: at(120) }), row('e')], [], none, false, NOW);
+  const m = mergeWork([row('a', ended(61)), row('b', ended(60)), row('c', ended(59)), row('d', { state: 'exited', endedAt: at(120) }), row('e')], [], none, NOW);
   const g = m.groups.find((x: any) => x.key === 'other');
   assert.deepEqual(g.items.map((i: any) => i.row.id).sort(), ['b', 'c', 'e']);
   assert.deepEqual(g.old.map((i: any) => i.row.id).sort(), ['a', 'd'], 'done and stopped rows both fold');
@@ -399,14 +414,14 @@ test('an open request keeps an old finished row in view', () => {
   const r = row('a', { state: 'idle', endedAt: at(300) });
   for (const status of ['waiting', 'working', 'failed']) assert.equal(folded({ row: r, req: req(1, status, { row: 'a' }) }, NOW), false, status);
   assert.equal(folded({ row: r }, NOW), true);
-  const m = mergeWork([r], [req(1, 'failed', { row: 'a' })], none, false, NOW);
+  const m = mergeWork([r], [req(1, 'failed', { row: 'a' })], none, NOW);
   assert.equal(itemsOf(m, 'other').length, 1);
   assert.equal(m.groups.find((x: any) => x.key === 'other').old.length, 0);
 });
 
 test('the Done fold shows its count closed, and opens to rows that still open their chat', () => {
   const rows = Array.from({ length: 16 }, (_, k) => row(`r${k}`, { state: 'idle', endedAt: at(90 + k) }));
-  const m = mergeWork([...rows, row('live')], [], none, false, NOW);
+  const m = mergeWork([...rows, row('live')], [], none, NOW);
   const closed = workListHtml(m, { ...ctx, doneOpen: new Set() });
   assert.match(closed, /data-done-fold="other" aria-expanded="false">.*Done \(16\)<\/button>/);
   assert.match(closed, /<span class="n">17<\/span>/, 'the group count still counts every row');
@@ -419,15 +434,15 @@ test('the Done fold shows its count closed, and opens to rows that still open th
 
 test('a folded row is drawn exactly as it was in view, so it opens the same chat and report', () => {
   const r = { state: 'idle', note: 'Done', endedAt: at(30), native: { id: 'n1' } };
-  const fresh = workListHtml(mergeWork([row('z', r)], [], none, false, NOW), ctx);
-  const old = workListHtml(mergeWork([row('z', r)], [], none, false, NOW + 2 * DONE_FOLD_MS), { ...ctx, now: NOW + 2 * DONE_FOLD_MS, doneOpen: new Set(['other']) });
+  const fresh = workListHtml(mergeWork([row('z', r)], [], none, NOW), ctx);
+  const old = workListHtml(mergeWork([row('z', r)], [], none, NOW + 2 * DONE_FOLD_MS), { ...ctx, now: NOW + 2 * DONE_FOLD_MS, doneOpen: new Set(['other']) });
   const drawn = (h: string) => /<div class="wrow[^]*?<\/div>/.exec(h)![0];
   assert.match(old, /Done \(1\)/);
   assert.equal(drawn(old), drawn(fresh));
 });
 
 test('a group with only folded rows still shows, with its fold', () => {
-  const m = mergeWork([row('a', { state: 'exited', endedAt: at(200) })], [], none, false, NOW);
+  const m = mergeWork([row('a', { state: 'exited', endedAt: at(200) })], [], none, NOW);
   const html = workListHtml(m, ctx);
   assert.match(html, /data-group="other"/);
   assert.match(html, /Done \(1\)/);

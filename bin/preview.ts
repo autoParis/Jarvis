@@ -202,8 +202,8 @@ function build(s: string) {
     { key: 'approval:8', kind: 'approval', tag: 'Story 4555', at: iso(150), question: 'Start a worker on story 4555?', answer: 'Approved, then failed: spawn_failed: no worktree slot', failed: true },
   ];
   const done = empty ? [] : [{ dispatch: 'ctx_done', at: iso(30), title: 'Logs panel', subject: 'Logs panel run history shipped', pr: 'PR #4570', url: 'https://github.com/example/repo/pull/4570' }];
-  if (s === 'native') return { rows: [NATIVE_ROW, ...rows], requests: nativeRequests() as typeof requests, items: [], emails: [], approvals: [], turns, audit: [], done, hidden: [] as string[] };
-  return { rows, requests, items: asks, emails, approvals, turns, audit, done, hidden: [] as string[] };
+  if (s === 'native') return { rows: [NATIVE_ROW, ...rows], requests: nativeRequests() as typeof requests, items: [], emails: [], approvals: [], turns, audit: [], done, completed: {} as Record<string, string> };
+  return { rows, requests, items: asks, emails, approvals, turns, audit, done, completed: {} as Record<string, string> };
 }
 
 // ?s=native: one native worker the gate just started. The request comes from daemon/requests.ts itself, fed the result
@@ -357,7 +357,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET') {
     if (url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-      res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows), done: scene.done }, hidden: scene.hidden, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows), done: scene.done }, completed: scene.completed, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
       clients.add(res);
       req.on('close', () => clients.delete(res));
       return;
@@ -396,7 +396,7 @@ http.createServer(async (req, res) => {
       const r = scene.requests.find(x => x.id === Number(closed[1]));
       return r ? send(res, 200, { lines: [], detail: { ...r, worktree: 'sample', history: [{ at: r.startedAt, kind: 'approval', title: 'Worker start: done by button', text: 'Start a worker?' }, { at: r.at, kind: 'status', title: `Status: working to ${r.status}`, failed: r.status === 'failed' }], transcript: false } }) : send(res, 404, { error: 'Jarvis has no record of it.' });
     }
-    if (url === '/api/work') return send(res, 200, { at: '', rows: withTerms(scene.rows), done: scene.done, hidden: scene.hidden, repos: PREVIEW_REPOS });
+    if (url === '/api/work') return send(res, 200, { at: '', rows: withTerms(scene.rows), done: scene.done, completed: scene.completed, repos: PREVIEW_REPOS });
     if (url === '/api/listen/config') return send(res, 200, { client: {}, wakeWord: false });
     if (url === '/api/push/key') return send(res, 200, { publicKey: '' });
     if (/^\/api\/work\/[^/]+\/read$/.test(url)) return send(res, 200, new URL(req.url!, 'http://x').searchParams.get('cursor') ? { lines: [], cursor: 'end' } : { lines: LINES, cursor: 'end' });
@@ -459,15 +459,19 @@ http.createServer(async (req, res) => {
     out({ type: 'messages', messages: messagesOf(scene) });
     return send(res, 200, { messages: messagesOf(scene) });
   }
-  if (url === '/api/requests/hide') {
-    scene.requests = scene.requests.filter(r => r.id !== Number(b.id));
-    out({ type: 'requests', requests: scene.requests });
-    return send(res, 204);
-  }
-  if (url === '/api/work/hide') {
-    scene.hidden = b.hidden === false ? scene.hidden.filter(x => x !== b.id) : [...scene.hidden, b.id];
-    out({ type: 'hidden', hidden: scene.hidden });
-    return send(res, 200, { hidden: scene.hidden });
+  // The ×, as daemon/workroutes.ts does it: complete moves a row and its request to Completed, remove takes them out of it.
+  if (url === '/api/work/complete' || url === '/api/work/remove') {
+    const removing = url === '/api/work/remove';
+    if (b.request) {
+      scene.requests = removing ? scene.requests.filter(r => r.id !== Number(b.request))
+        : scene.requests.map(r => r.id === Number(b.request) ? { ...r, status: 'done', at: new Date().toISOString() } : r);
+      out({ type: 'requests', requests: scene.requests });
+    }
+    if (typeof b.row === 'string') {
+      scene.completed = { ...scene.completed, [b.row]: removing ? new Date(0).toISOString() : scene.completed[b.row] ?? new Date().toISOString() };
+      out({ type: 'completed', completed: scene.completed });
+    }
+    return send(res, 200, { completed: scene.completed });
   }
   if (url === '/api/send') {
     // A reply quotes a turn of the scene or one sent here. The line the brain would get goes to the console.

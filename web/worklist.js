@@ -3,14 +3,16 @@
 //
 // The rules, so nothing vanishes silently:
 // - An open request (waiting, working, failed) with a listed row is that row, with the request's title, status and age.
-// - An open request with no row of its own (never listed, already gone, hidden, or a second request on one row) is its
-//   own row in the group its title implies, with its status and Hide.
+// - An open request with no row of its own (never listed, already gone, moved to Completed, or a second request on one
+//   row) is its own row in the group its title implies, with its status and its ×.
 // - A request in review or done is in Waiting for merge or Completed. Its row leaves the group only while the row is
 //   idle or exited. A row that is working or waiting stays in its group as well, since the owner kept talking to it.
 // - A row with no request is a plain row.
+// - The × moves a row to Completed (daemon/workroutes.ts). The row leaves its group for good. A row no request stands
+//   for in a folder shows in Completed itself, for a day from the press, the same purge as a done request.
 // - A row finished (done, failed or stopped) over an hour ago goes under its group's closed Done fold. It stays in view
 //   while its request is open (working, waiting, failed), or while it has no finish time. The fold only hides; it deletes nothing.
-import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, STATE } from './requestlist.js';
+import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, closeButtonHtml, STATE } from './requestlist.js';
 import { formatStamp } from './workfold.js';
 
 export const GROUPS = [['story', 'Stories'], ['babysit', 'Babysitting'], ['side', 'Side chats'], ['terminal', 'Terminals'], ['other', 'Other']];
@@ -19,6 +21,8 @@ export const TERM_MARK = '<svg class="g-term" viewBox="0 0 16 16" fill="none" st
 const WORK_STATE = { waiting: 'Waiting on you', idle: 'Idle', working: 'Working', exited: 'Exited' };
 const RANK = { waiting: 0, failed: 1, working: 2, idle: 3, exited: 4 };
 export const DONE_FOLD_MS = 60 * 60_000;
+/** How long a row stays in Completed. The same as DONE_KEEP_MS in daemon/requests.ts. */
+export const COMPLETED_KEEP_MS = 24 * 60 * 60_000;
 /** How the detail pane names the owner. jarvisd sends it (`owner` in GET /api/work); the page calls setOwner once at load. */
 let who = { called: 'the owner', cap: 'The owner' };
 export function setOwner(o) { if (typeof o?.called === 'string' && typeof o?.cap === 'string' && o.called) who = { called: o.called, cap: o.cap }; }
@@ -36,11 +40,14 @@ export function groupOf(title) {
   return /^\s*#\d+/.test(title) ? 'story' : 'other';
 }
 
-/** `hidden` is a Set of row ids. Returns the items per group (in view, and `old` under the Done fold), the two folders' requests and the hidden count. */
-export function mergeWork(rows, requests, hidden, showHidden = false, now = Date.now()) {
+/**
+ * `completed` maps a row id to the time the owner moved it to Completed. Returns the items per group (in view, and `old`
+ * under the Done fold) and the two folders' entries. Completed holds the done requests and the moved rows no request stands for.
+ */
+export function mergeWork(rows, requests, completed = {}, now = Date.now()) {
   const { open, review, done } = requestGroups(requests);
   const listed = new Map(rows.map(r => [r.id, r]));
-  const shown = r => showHidden || !hidden.has(r.id);
+  const shown = r => !Object.hasOwn(completed, r.id);
   const claimed = new Map(), orphans = [];
   for (const req of open) {
     const row = req.row && listed.get(req.row);
@@ -52,16 +59,22 @@ export function mergeWork(rows, requests, hidden, showHidden = false, now = Date
   const items = [
     ...rows.filter(r => shown(r) && (claimed.has(r.id) || !inFolder.has(r.id) || active(r))).map(row => {
       const req = claimed.get(row.id);
-      return { group: row.group, row, req, rank: RANK[req?.status === 'failed' ? 'failed' : row.state] ?? RANK.working };
+      // A row still active while its request waits for merge: its × moves that request to Completed as well.
+      const merge = !req && review.find(r => r.row === row.id);
+      return { group: row.group, row, req, ...(merge ? { merge } : {}), rank: RANK[req?.status === 'failed' ? 'failed' : row.state] ?? RANK.working };
     }),
     ...orphans.map(req => ({ group: groupOf(req.title), req, rank: RANK[req.status] ?? RANK.working })),
   ];
   const groups = GROUPS.map(([key, name]) => {
     const all = items.filter(i => i.group === key).sort((a, b) => a.rank - b.rank);
     const list = all.filter(i => !folded(i, now)), old = all.filter(i => folded(i, now));
-    return { key, name, items: list, old, waiting: list.filter(i => i.rank === RANK.waiting && !(i.row && hidden.has(i.row.id))).length };
+    return { key, name, items: list, old, waiting: list.filter(i => i.rank === RANK.waiting).length };
   });
-  return { groups, review, done, hiddenCount: rows.filter(r => hidden.has(r.id)).length };
+  // A moved row that a request stands for is that request's entry. Any other shows in Completed for a day.
+  const ofRequest = new Set(requests.map(r => r.row).filter(Boolean));
+  const moved = rows.filter(r => !shown(r) && !ofRequest.has(r.id) && now - Date.parse(completed[r.id]) < COMPLETED_KEEP_MS)
+    .map(r => ({ title: r.title, words: null, status: 'done', at: completed[r.id], startedAt: completed[r.id], row: r.id }));
+  return { groups, review, done: requestGroups([...done, ...moved]).done };
 }
 
 /** A group holding something waiting opens itself. A hand close lasts until nothing in it waits, and only that long. */
@@ -79,15 +92,14 @@ function itemHtml(i, ctx) {
   // The age column holds a real time or a short idle note. A row with neither shows nothing there.
   const age = req ? ago(req.at, ctx.now) : idleNote && idleNote.length <= 14 ? idleNote : '';
   const note = !req && idleNote && idleNote.length > 14 ? idleNote : !row && !req.row ? closedNote(req) : '';
-  const isHidden = row && ctx.hidden.has(row.id);
   const openId = row?.id ?? openIdOf(req);
-  // On an idle side chat the × closes the chat. On every other row it only hides the row.
-  const closes = row?.sideChat && row.state === 'idle' && !isHidden;
+  // On an idle side chat the × closes the chat. On every other row it moves the row to Completed.
+  const closes = row?.sideChat && row.state === 'idle';
   const hide = closes
     ? `<button type="button" class="hide" data-close="${esc(row.dispatch)}" aria-label="Close ${esc(title)}" title="Close this side chat. Its worker stops.">×</button>`
-    : `<button type="button" class="hide"${row ? ` data-hide-row="${esc(row.id)}"` : ''}${req ? ` data-hide="${req.id}"` : ''}${isHidden ? ' data-unhide' : ''} aria-label="${isHidden ? 'Show' : 'Hide'} ${esc(title)} in this list" title="${isHidden ? 'Show in the list again' : 'Hide from this list. Nothing in Orca stops.'}">${isHidden ? '↺' : '×'}</button>`;
+    : closeButtonHtml({ id: (req ?? i.merge)?.id, title, status: (req ?? i.merge)?.status, row: row?.id });
   const state = failed ? 'failed' : row?.state ?? req.status;
-  return `<div class="wrow s-${esc(state)}${openId && ctx.reading === openId ? ' reading' : ''}${isHidden ? ' hidden-row' : ''}"${openId ? ` data-id="${esc(openId)}" role="button" tabindex="0"` : ''} title="${esc(status)}${row?.note && row.state !== 'idle' ? `: ${esc(row.note)}` : ''}">`
+  return `<div class="wrow s-${esc(state)}${openId && ctx.reading === openId ? ' reading' : ''}"${openId ? ` data-id="${esc(openId)}" role="button" tabindex="0"` : ''} title="${esc(status)}${row?.note && row.state !== 'idle' ? `: ${esc(row.note)}` : ''}">`
     + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
     + (note ? `<div class="note">${esc(note)}</div>` : '') + '</div>';
 }
@@ -101,7 +113,7 @@ function doneFoldHtml(g, isOpen, ctx) {
 
 const CHEV = '<svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-/** `ctx`: { hidden, shut, closedWaiting, folders, reading, now, doneOpen }. `doneOpen` is a Set of the groups whose Done fold is open. */
+/** `ctx`: { shut, closedWaiting, folders, reading, now, doneOpen }. `doneOpen` is a Set of the groups whose Done fold is open. */
 export function workListHtml(merged, ctx) {
   const groups = merged.groups.filter(g => g.items.length || g.old?.length).map(g => {
     const open = groupOpen(g, ctx.shut, ctx.closedWaiting);

@@ -473,14 +473,14 @@ test('a PR row starts collapsed, and the folder keeps counting every request', (
   assert.match(html, /Waiting for merge<span class="n">4<\/span>/);
 });
 
-test('an expanded PR row lists each conversation, each one still openable and hideable, with no PR number repeated', () => {
+test('an expanded PR row lists each conversation, each one still openable and movable to Completed, with no PR number repeated', () => {
   const html = requestListHtml(shared, { review: true, prs: new Set(['PR #4407']) }, AT);
   assert.match(html, /data-pr="PR #4407"[^>]*aria-expanded="true"/);
   assert.match(html, /<div id="req-PR-4407" class="prrows">/);
   assert.deepEqual(order(html), ['review', '4 sessions', 'R1', 'R2', 'R3', 'R4']);
   for (const id of [1, 2, 3, 4]) {
     assert.match(html, new RegExp(`data-row="r${id}"`));
-    assert.match(html, new RegExp(`data-hide="${id}" data-hide-row="r${id}"`));
+    assert.match(html, new RegExp(`data-complete data-request="${id}" data-row-id="r${id}"`));
   }
   assert.equal(html.match(/>PR #4407</g)?.length, 1);
 });

@@ -12,7 +12,7 @@ import { ROW_PREFIX } from './native.ts';
 
 // The Requests sidebar: one row per thing the owner asked Jarvis for, from the worker start to its PR. A request is
 // recorded when the gate starts a worker for him, and its status follows the work poller. Nothing here touches
-// a worktree, a session or a branch: removing or hiding a row only marks it in the requests table.
+// a worktree, a session or a branch: closing or removing a row only marks it in the requests table.
 
 export type RequestStatus = 'waiting' | 'working' | 'review' | 'done' | 'failed';
 /** What the app shows for one request. `row` is the work-list row that opens its conversation, if one is listed. */
@@ -297,7 +297,8 @@ export function makeRequests(opts: {
       }
       // Done after a merge stays done: the PR check is in memory, and a restart must not reopen it as "in review".
       const status = statusOf(row, stopped ? undefined : outcome, isLive && !stopped, pr, r.status === 'done' ? false : check?.open, !!settled || over || stopped);
-      if (status && status !== r.status) { f.status = status; log('request status', { request: r.id, dispatch: r.dispatch_id, from: r.status, to: status }); }
+      // A request the owner closed with × stays done, whatever its worker does next.
+      if (status && status !== r.status && !r.closed_at) { f.status = status; log('request status', { request: r.id, dispatch: r.dispatch_id, from: r.status, to: status }); }
 
       // A done request leaves 24 hours after it became done, by its status_at. Never while Orca is not answering.
       if (r.status === 'done' && !f.status && !work.error && now() - Date.parse(`${r.status_at.replace(' ', 'T')}Z`) >= DONE_KEEP_MS) {
@@ -351,10 +352,16 @@ export function makeRequests(opts: {
     synced: (): Promise<void> => syncing ?? Promise.resolve(),
     /** True while this request's worker is missing but the request has not closed yet. */
     closing: (id: number): boolean => absent.has(id),
-    /** the owner hid a row. Only the requests table changes. */
+    /** The owner pressed × on its row: it goes to Completed now. Only the requests table changes. */
+    close(id: number): boolean {
+      const ok = store.closeRequest(id);
+      if (ok) { log('request closed by the owner', { request: id }); publish(); }
+      return ok;
+    },
+    /** The owner pressed × on a Completed row: it leaves now, before its purge. Only the requests table changes. */
     hide(id: number): boolean {
       const ok = store.hideRequest(id);
-      if (ok) { log('request hidden', { request: id }); publish(); }
+      if (ok) { log('request removed from Completed', { request: id }); publish(); }
       return ok;
     },
     /** A worker the gate just started for the owner. Its worktree is known at once; its session may need a later poll. */

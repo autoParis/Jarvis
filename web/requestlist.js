@@ -15,7 +15,7 @@ export const openIdOf = r => r.row ?? `req:${r.id}`;
 /** The line on a row with no listed conversation. A request still open may just be between polls. */
 export const closedNote = r => r.status === 'working' || r.status === 'waiting' ? 'Conversation not listed right now. Showing what Jarvis recorded.' : 'Conversation closed. Showing what Jarvis recorded.';
 
-/** Newest change first within each group. Open rows sort by status first; failed ones stay there until the owner hides them. */
+/** Newest change first within each group. Open rows sort by status first; failed ones stay there until the owner moves them to Completed. */
 export function requestGroups(requests) {
   const sorted = [...requests].sort((a, b) => (RANK[a.status] ?? 0) - (RANK[b.status] ?? 0) || Date.parse(b.at) - Date.parse(a.at));
   return {
@@ -38,9 +38,20 @@ function numberHtml(r) {
   return text ? numHtml(text, r.url) : '';
 }
 
-/** Hiding also hides the conversation row, or that row would come back in its work group. */
+/**
+ * The × on a row: anywhere but Completed it moves the row to Completed. In Completed it removes the row now, before its
+ * purge a day later. It always names the conversation row as well, or that row would come back in its work group.
+ * A row with no request (`id` undefined) is a conversation the owner moved to Completed (web/worklist.js).
+ */
+export function closeButtonHtml(r) {
+  const verb = r.status === 'done' ? 'remove' : 'complete';
+  const label = verb === 'remove' ? `Remove ${esc(r.title)} from Completed` : `Move ${esc(r.title)} to Completed`;
+  const tip = verb === 'remove' ? 'Remove from Completed now. It leaves by itself a day after it finished.' : 'Move to Completed. Nothing in Orca stops.';
+  return `<button type="button" class="hide" data-${verb}${r.id ? ` data-request="${Number(r.id)}"` : ''}${r.row ? ` data-row-id="${esc(r.row)}"` : ''} aria-label="${label}" title="${tip}">×</button>`;
+}
+
 function rowHtml(r, now) {
-  const hide = `<button type="button" class="hide" data-hide="${r.id}"${r.row ? ` data-hide-row="${esc(r.row)}"` : ''} aria-label="Hide ${esc(r.title)}" title="Hide from this list">×</button>`;
+  const hide = closeButtonHtml(r);
   return `<div class="rrow ${esc(r.status)}" data-row="${esc(openIdOf(r))}" role="button" tabindex="0" title="${esc(r.title)}">`
     + (numberHtml(r) || requestMark(r.status))
     + `<div class="t">${esc(reportHref(r) ? r.title : r.title.replace(/^\s*#\d+\s*/, '') || r.title)}</div><span class="state">${STATE[r.status] || esc(r.status)}</span><span class="ago">${ago(r.at, now)}</span>${hide}`

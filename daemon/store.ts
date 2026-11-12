@@ -26,6 +26,8 @@ export type Request = {
   words: string | null;
   worktree: string | null; session: string | null; pr: string | null; pr_url: string | null;
   status: string; status_at: string; hidden_at: string | null; removed_at: string | null; created_at: string;
+  /** When the owner pressed × on its row: the request went to Completed and the work poller no longer changes its status. */
+  closed_at: string | null;
 };
 
 /** A timed note for the owner (reminders.ts). Times are UTC 'YYYY-MM-DD HH:MM:SS'. `told_at` is the last time the check told the brain. */
@@ -162,6 +164,9 @@ export function openStore(path: string) {
   // Interactive sessions by default (2026-11-07): what a resume replays, and the pipe jarvisd types into.
   if (!nativeCols.includes('repo')) db.exec(`ALTER TABLE native_workers ADD COLUMN repo TEXT; ALTER TABLE native_workers ADD COLUMN model TEXT; ALTER TABLE native_workers ADD COLUMN permission_mode TEXT;
     ALTER TABLE native_workers ADD COLUMN resumes INTEGER NOT NULL DEFAULT 0; ALTER TABLE native_workers ADD COLUMN last_resume_at TEXT; ALTER TABLE native_workers ADD COLUMN in_fifo TEXT;`);
+  // The × moves a row to Completed (2026-11-12). Older databases get the column here.
+  const requestCols = (db.prepare('PRAGMA table_info(requests)').all() as { name: string }[]).map(c => c.name);
+  if (!requestCols.includes('closed_at')) db.exec('ALTER TABLE requests ADD COLUMN closed_at TEXT;');
   // Side chats were recorded as requests until 2026-10-30. Hide them; their worker, worktree and session stay.
   db.exec(`UPDATE requests SET hidden_at = datetime('now') WHERE action = 'side-chat' AND hidden_at IS NULL`);
   // Added with web push; older databases get the columns here.
@@ -392,6 +397,11 @@ export function openStore(path: string) {
       const cols = (['worktree', 'session', 'pr', 'pr_url', 'status'] as const).filter(k => f[k] !== undefined);
       const set = [...cols.map(k => `${k} = ?`), ...(f.status ? ["status_at = datetime('now')"] : []), ...(f.removed ? ["removed_at = datetime('now')"] : [])];
       if (set.length) db.prepare(`UPDATE requests SET ${set.join(', ')} WHERE id = ?`).run(...cols.map(k => f[k] as string), id);
+    },
+    /** The owner pressed ×: the request is done now, so it goes to Completed and leaves with its normal purge. */
+    closeRequest(id: number): boolean {
+      return db.prepare(`UPDATE requests SET status = 'done', status_at = datetime('now'), closed_at = datetime('now')
+        WHERE id = ? AND hidden_at IS NULL AND removed_at IS NULL AND closed_at IS NULL`).run(id).changes === 1;
     },
     hideRequest(id: number): boolean {
       return db.prepare(`UPDATE requests SET hidden_at = datetime('now') WHERE id = ? AND hidden_at IS NULL`).run(id).changes === 1;

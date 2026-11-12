@@ -38,6 +38,7 @@ import { makeTicketWorker } from './replyworker.ts';
 import { makeMigration, migrationRoute, migrationBrief, readDealerFile } from './migration.ts';
 import { makeNative, ROW_PREFIX, type NativeWorker } from './native.ts';
 import { nativeRoute, routeWorkerTurn } from './nativeroutes.ts';
+import { workRoute, completedRows } from './workroutes.ts';
 import { readChatFile, withEvents, fileCursor } from './transcript.ts';
 import type { PeerMessage } from './brain.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
@@ -230,8 +231,6 @@ async function resumeRow(row: WorkRow, text: string): Promise<ResumeStart | unde
   else gate.recorded(a.id, 'done', r.warning ? `Resumed; the open Orca tab will not see this turn` : 'Resumed');
   return r;
 }
-// Rows the owner hid from the app. Hiding only changes the view: nothing in Orca is stopped or deleted.
-const hiddenIds = (): string[] => JSON.parse(store.getState('workHidden') ?? '[]');
 /** Orca's answer when the worker or its terminal no longer exists. Close and Open then just drop the row. */
 const STALE = /\b(dispatch_inactive|terminal_handle_stale)\b/;
 work.start();
@@ -476,7 +475,7 @@ function repos(): { name: string; path: string }[] {
 }
 
 // Routes that act as the owner. They need the secret of an open app page (access.ts).
-const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled']);
+const AS_OWNER = new Set(['/api/ask/answer', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/work/side-chat', '/api/work/close', '/api/work/open', '/api/work/desktop', '/api/work/steer', '/api/work/stop', '/api/work/complete', '/api/work/remove', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled']);
 const ui = makeUiSessions();
 
 // ---- The one-off shell pane: a pty owned here, the owner's phone only (shell.ts, access.ts) ----
@@ -602,7 +601,7 @@ http.createServer(async (req, res) => {
           : t.role === 'jarvis' ? { ...t, clips: spokenSentences(t.text).length }
           : t.reply_to ? { ...t, quote: quoteOf(store.turn(t.reply_to)) } : t);
       const secret = ui.open();
-      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), completed: completedRows(store), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); ui.close(secret); termGate.dropPage(secret); });
@@ -730,12 +729,8 @@ http.createServer(async (req, res) => {
       // the owner just turned Alerts on and expects to see it, so the test push ignores quiet hours.
       return send(res, 200, { reached: await notify({ title: 'Jarvis', body: 'Alerts are on. This is what an ask looks like.', url: '/', tag: 'test' }, { urgent: true }) });
     }
-    // ---- Requests sidebar. Hiding a row changes only the requests table: no worktree, session or branch is touched. ----
+    // ---- Requests sidebar. Closing a row changes only the requests table: no worktree, session or branch is touched. ----
     if (req.method === 'GET' && url === '/api/requests') return send(res, 200, requests.list());
-    if (req.method === 'POST' && url === '/api/requests/hide') {
-      const { id } = await json(req);
-      return requests.hide(Number(id)) ? send(res, 204) : send(res, 404, { error: 'It is not in the list any more.' });
-    }
     // The page behind a row's Report link: the worker's last worker_done. Read-only.
     const reportOf = req.method === 'GET' && url.match(/^\/api\/requests\/(\d+)\/report$/);
     if (reportOf) {
@@ -743,19 +738,11 @@ http.createServer(async (req, res) => {
       return r ? send(res, 200, r) : send(res, 404, { error: 'No report is stored for this request.' });
     }
     // ---- Work list ----
-    if (req.method === 'GET' && url === '/api/work') return send(res, 200, { ...mergedWork(), hidden: hiddenIds(), repos: repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL }, owner: { called: OWNER, cap: OWNER_CAP } });
-    // Hide or show a row in the app. Only the list of hidden ids changes.
-    if (req.method === 'POST' && url === '/api/work/hide') {
-      const { id, hidden } = await json(req);
-      if (typeof id !== 'string' || !id) return send(res, 400, { error: 'id is required' });
-      const ids = new Set(hiddenIds());
-      ids.delete(id);
-      if (hidden !== false) ids.add(id);
-      // The newest 500 are kept, so the list cannot grow forever.
-      const next = [...ids].slice(-500);
-      store.setState('workHidden', JSON.stringify(next));
-      broadcast({ type: 'hidden', hidden: next });
-      return send(res, 200, { hidden: next });
+    if (req.method === 'GET' && url === '/api/work') return send(res, 200, { ...mergedWork(), completed: completedRows(store), repos: repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL }, owner: { called: OWNER, cap: OWNER_CAP } });
+    // The ×: a row goes to Completed, or leaves Completed now (workroutes.ts). Nothing in Orca stops.
+    if (url === '/api/work/complete' || url === '/api/work/remove') {
+      const r = await workRoute({ store, log, requests, changed: completed => broadcast({ type: 'completed', completed }) }, req.method ?? '', url, req.method === 'POST' ? await json(req) : {});
+      if (r) return send(res, r.status, r.body);
     }
     // One "Worked for" row's steps, read when the owner opens it.
     const fold = req.method === 'GET' && url.match(/^\/api\/fold\/(\d+)$/);

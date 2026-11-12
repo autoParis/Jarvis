@@ -910,7 +910,7 @@ function connect() {
     else if (e.type === 'approval') setApproval(e.approval);
     else if (e.type === 'pane') { if (e.id === pane.id) { clearTimeout(pane.timer); pane.timer = setTimeout(() => readPane(pane.gen, false), 0); } } // the open native session's transcript changed
     else if (e.type === 'work') showWork(e.work);
-    else if (e.type === 'hidden') { hidden = new Set(e.hidden); showWork(work); }
+    else if (e.type === 'completed') { completed = e.completed || {}; showWork(work); }
     else if (e.type === 'requests') showRequests(e.requests);
     else if (e.type === 'messages') showMessages(e.messages);
     else if (e.type === 'today') today.show(e.today);
@@ -933,7 +933,7 @@ function showHistory(e) {
   answerLines.clear(); handed.clear();
   (e.asks || []).forEach(a => askData.set(a.id, a));
   e.approvals.forEach(a => approvals.set(a.id, a));
-  if (e.hidden) hidden = new Set(e.hidden);
+  if (e.completed) completed = e.completed;
   if (e.work) showWork(e.work);
   // The conversation in time order: what was said, the workers handed off and the answers given.
   // Handed rows and answer lines older than the first line of history are skipped.
@@ -964,8 +964,8 @@ const STATE = { waiting: 'Waiting on you', idle: 'Idle', working: 'Working', exi
 let work = { rows: [], done: [] };
 let requests = [];
 const handedSeen = new Set();
-// Rows the owner hid. The daemon keeps the ids; hiding never stops or deletes anything in Orca.
-let hidden = new Set(), showHidden = false;
+// Rows the owner moved to Completed with ×, row id to the time. The daemon keeps them; the × never stops anything in Orca.
+let completed = {};
 const readSet = k => { try { return new Set(JSON.parse(localStorage.getItem(k) || '[]')); } catch { return new Set(); } };
 const shutGroups = readSet('workGroupsShut');
 // A group closed by hand while something in it waits. Forgotten once nothing waits there.
@@ -974,7 +974,7 @@ const reqFolders = { review: false, done: false, prs: new Set() }; // both folde
 const doneOpen = new Set(); // the groups whose Done fold the owner opened; every Done fold starts closed on each page load
 function togglePr(pr) { reqFolders.prs.has(pr) ? reqFolders.prs.delete(pr) : reqFolders.prs.add(pr); renderWork(); }
 function renderWork() {
-  const seen = work.rows.filter(r => !hidden.has(r.id));
+  const seen = work.rows.filter(r => !Object.hasOwn(completed, r.id));
   const waiting = seen.filter(r => r.state === 'waiting').length;
   const working = seen.filter(r => r.state === 'working').length;
   $('workcount').textContent = working ? `${working} working` : '';
@@ -982,10 +982,9 @@ function renderWork() {
   railbtn.toggleAttribute('data-busy', waiting > 0);
   $('workerr').hidden = !work.error;
   $('workerr').textContent = work.error ? `${work.error}. Showing the last list.` : '';
-  const merged = mergeWork(work.rows, requests, hidden, showHidden);
+  const merged = mergeWork(work.rows, requests, completed);
   lastMerged = merged;
-  worklist.innerHTML = workListHtml(merged, { hidden, shut: shutGroups, closedWaiting, folders: reqFolders, reading: term ? `t:${term.name}` : pane.id, now: Date.now(), doneOpen })
-    + (merged.hiddenCount ? `<button type="button" class="showhidden" data-showhidden>${showHidden ? 'Leave out' : 'Show'} ${merged.hiddenCount} hidden</button>` : '');
+  worklist.innerHTML = workListHtml(merged, { shut: shutGroups, closedWaiting, folders: reqFolders, reading: term ? `t:${term.name}` : pane.id, now: Date.now(), doneOpen });
   $('doneinfo').textContent = doneLine(requests, Date.now());
   $('tojarvis').classList.toggle('here', !pane.id && !report.id);
 }
@@ -1015,15 +1014,12 @@ function toggleGroup(g) {
   try { localStorage.setItem('workGroupsShut', JSON.stringify([...shutGroups])); } catch {}
   renderWork();
 }
-async function hideWorkRow(id, hide) {
-  hide ? hidden.add(id) : hidden.delete(id);
-  renderWork();
-  const r = await fetch('/api/work/hide', { method: 'POST', body: JSON.stringify({ id, hidden: hide }) }).catch(() => null);
-  if (!r?.ok) { hide ? hidden.delete(id) : hidden.add(id); renderWork(); add('event', 'Hide: not saved, try again.'); }
-}
-async function hideRequest(id) {
-  const r = await fetch('/api/requests/hide', { method: 'POST', body: JSON.stringify({ id: Number(id) }) }).catch(() => null);
-  if (!r?.ok) add('event', 'Hide: ' + ((await r?.json().catch(() => ({})))?.error || r?.status || 'no answer from Jarvis'));
+// The ×: `complete` moves a row to Completed, `remove` takes it out of Completed now. One call carries the row and its request.
+async function closeRow(verb, row, request) {
+  const r = await fetch(`/api/work/${verb}`, { method: 'POST', body: JSON.stringify({ ...(row ? { row } : {}), ...(request ? { request: Number(request) } : {}) }) }).catch(() => null);
+  if (!r?.ok) { add('event', `${verb === 'remove' ? 'Remove' : 'Move to Completed'}: ` + ((await r?.json().catch(() => ({})))?.error || r?.status || 'no answer from Jarvis')); return; }
+  const j = await r.json().catch(() => ({}));
+  if (j.completed) { completed = j.completed; renderWork(); }
 }
 function openRow(id) { if (String(id).startsWith('t:')) openTerm({ name: id.slice(2) }); else openPane(id); panel(false); }
 worklist.addEventListener('click', async e => {
@@ -1047,14 +1043,12 @@ worklist.addEventListener('click', async e => {
     return;
   }
   if (b.classList.contains('hide')) {
-    // A merged row is one thing to the owner: Hide takes the conversation and the request off together.
-    const { hideRow, hide } = b.dataset, unhide = 'unhide' in b.dataset;
+    // A merged row is one thing to the owner: the × moves the conversation and the request together.
     b.disabled = true;
-    if (hideRow) await hideWorkRow(hideRow, !unhide);
-    if (hide && !unhide) await hideRequest(hide);
+    await closeRow('remove' in b.dataset ? 'remove' : 'complete', b.dataset.rowId, b.dataset.request);
+    b.disabled = false;
     return;
   }
-  if ('showhidden' in b.dataset) { showHidden = !showHidden; return renderWork(); }
 });
 worklist.addEventListener('keydown', e => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-pr]')) { e.preventDefault(); return togglePr(e.target.dataset.pr); }
