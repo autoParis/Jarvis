@@ -1,7 +1,8 @@
 // The Today list: The owner drops a thought, Jarvis works it up, and it waits on the row until he taps.
 // Hard limits, enforced here and not only in the prompt:
-// - Nothing outward without a tap. Go only starts a local worker. The issue is filed only by Accept, which the brain cannot call.
-// - The brain's routes can write a work-up or a result. They cannot release, drop, accept or run anything.
+// - Nothing outward without the owner's yes. Go only starts a local worker. The issue is filed only by Accept: his tap, or
+//   his "do it" in the chat (startFromChat), which the route allows only in a turn that holds his message.
+// - The brain's routes can write a work-up or a result, and start a waiting row in his turn. They cannot release or drop.
 // - A pass decides in code first, so a pass with nothing to do makes no model call.
 import { OWNER_CAP, OWNER } from './config.ts';
 import { cpus, loadavg } from 'node:os';
@@ -31,9 +32,12 @@ const KINDS = ['story', 'task', 'talk'];
 
 export type Question = { q: string; options: string[]; recommended: number; answer?: string };
 export type Story = { github: string; title: string; body: string };
+/** One line of a row's history: what happened to it outside a tap, with the owner's words when he said it. */
+export type HistoryEntry = { at: string; event: string; words?: string };
 export type TodayView = {
   id: number; words: string; title: string; kind: string | null; go: boolean; status: string; statusWords: string; at: string;
   reading: string; questions: Question[]; assumptions: string[]; reason: string; result: string; notProven: string; note: string; line: string;
+  history: HistoryEntry[];
   /** `url` opens a page; `open` is the request whose conversation a tap opens. */
   link?: { label: string; url?: string; open?: number };
   buttons: string[];
@@ -64,7 +68,7 @@ export function todayView(i: TodayRow, store?: Pick<Store, 'requestOf'>): TodayV
   return {
     id: i.id, words: i.words, title: i.title || i.words.replace(/\s+/g, ' ').slice(0, 80), kind: i.kind, go: !!i.go, status: i.status, statusWords: STATUS_WORDS[i.status] ?? i.status,
     at: iso(i.status_at), reading: i.reading ?? '', questions: parse(i.questions, []), assumptions: parse(i.assumptions, []), reason: i.reason ?? '',
-    result: i.result ?? '', notProven: i.not_proven ?? '', note: i.note ?? '', line: i.line ?? '', ...(link ? { link } : {}), buttons: buttons(i),
+    result: i.result ?? '', notProven: i.not_proven ?? '', note: i.note ?? '', line: i.line ?? '', history: parse(i.history, []), ...(link ? { link } : {}), buttons: buttons(i),
   };
 }
 
@@ -441,6 +445,28 @@ export function makeToday(o: {
       }
       return refuse(400, `unknown action ${action}`);
     },
+    /**
+     * `jarvis-today start`. The owner said "do it" (or "start it", "go") in the chat about this row, so it does what his tap
+     * does: Do it on a task, Accept on a story. The route checks that his message is in the turn. This checks the row:
+     * it must wait on him, not be a talk, and have no question he has not answered.
+     */
+    async startFromChat(id: number, words: string[]): Promise<RouteResult> {
+      const i = store.todayItem(id);
+      if (!i || i.status === 'dropped' || i.status === 'moved') return refuse(404, `no today item ${id}`);
+      if (i.status !== 'waiting') return refuse(409, `Item ${id} is ${STATUS_WORDS[i.status] ?? i.status}, not waiting on ${OWNER}. Only a waiting row starts.`);
+      if (i.kind === 'talk') return refuse(409, `Item ${id} is a talk. A talk does not start: discuss it with ${OWNER}.`);
+      const open = parse<Question[]>(i.questions, []).map((q, n) => ({ q, n })).filter(x => x.q.answer === undefined);
+      if (open.length) return refuse(409, `Item ${id} still has a question ${OWNER} has not answered: ${open.map(x => `${x.n} ${JSON.stringify(x.q.q)}`).join(', ')}. Record his answer with jarvis-today answer first.`);
+      const action = i.kind === 'story' ? 'accept' : 'do';
+      if (!buttons(i).includes(action)) return refuse(409, i.kind === 'story' && i.story ? `Item ${id} cannot be accepted now: ${i.reason ?? 'the last filing lost its answer'}. ${OWNER_CAP} checks it on the row.` : `Item ${id} has no work-up to start. Write one first.`);
+      // Written before the start, so the record stays even if the start fails or jarvisd stops halfway.
+      const said = words.join('\n').trim().slice(0, 2000);
+      const history = [...parse<HistoryEntry[]>(i.history, []), { at: new Date(now()).toISOString(), event: `started from the chat (${action === 'accept' ? 'Accept' : 'Do it'})`, ...(said ? { words: said } : {}) }];
+      store.setToday(id, { history: JSON.stringify(history) });
+      log('today item started from the chat', { item: id, action });
+      const r = await api.act({ id, action });
+      return r.status === 200 ? { ...r, body: { ...r.body, item: todayView(store.todayItem(id)!, store) } } : r;
+    },
     /** the owner changed the kind. A kind whose path needs a work-up it does not have goes back to Jarvis. */
     setKind(i: TodayRow, kind: unknown): RouteResult {
       if (i.status !== 'new' && i.status !== 'waiting') return refuse(409, 'The kind can change only before work starts.');
@@ -561,10 +587,11 @@ export type Today = ReturnType<typeof makeToday>;
 
 /**
  * The routes. `/api/today/*` act as the owner and sit behind the open-page secret in main.ts. `/api/internal/today*` is what the
- * brain's CLI calls: it can add, write a work-up, ask for a draft, record a chat answer or a result. It has no route to release, drop, accept or run.
+ * brain's CLI calls: it can add, write a work-up, ask for a draft, record a chat answer or a result, and start a waiting row in a turn
+ * that holds the owner's message. It has no route to release or drop.
  * Undefined when the URL is not one of these.
  */
-export async function todayRoute(t: Today, method: string, url: string, b: any, ctx: { fromOwner: () => boolean }): Promise<RouteResult | undefined> {
+export async function todayRoute(t: Today, method: string, url: string, b: any, ctx: { fromOwner: () => boolean; ownerWords?: () => string[] }): Promise<RouteResult | undefined> {
   if (method === 'GET' && (url === '/api/today' || url === '/api/internal/today')) return { status: 200, body: { today: t.list() } };
   if (method !== 'POST') return undefined;
   if (url === '/api/today/add') return t.add(b);
@@ -574,8 +601,13 @@ export async function todayRoute(t: Today, method: string, url: string, b: any, 
     if (b?.go === true && !ctx.fromOwner()) return { status: 409, body: { error: `Go needs ${OWNER} saying so in this turn. Add it without --go.` } };
     return t.add(b);
   }
-  const m = /^\/api\/internal\/today\/(\d+)\/(workup|draft|answer|result)$/.exec(url);
+  const m = /^\/api\/internal\/today\/(\d+)\/(workup|draft|answer|result|start)$/.exec(url);
   if (!m) return undefined;
   const id = Number(m[1]);
+  if (m[2] === 'start') {
+    // The same rule as Go: a start is the owner's yes, so it needs his message in this turn. An event or a check wakes no start.
+    if (!ctx.fromOwner()) return { status: 409, body: { error: `Start needs ${OWNER} saying so in this turn. Tell him the row waits for his tap.` } };
+    return t.startFromChat(id, ctx.ownerWords?.() ?? []);
+  }
   return m[2] === 'workup' ? t.workup(id, b) : m[2] === 'draft' ? t.draft(id, b) : m[2] === 'answer' ? t.answer(id, b) : t.result(id, b);
 }

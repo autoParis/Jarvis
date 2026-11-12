@@ -56,6 +56,7 @@ export function detailHtml(i, s = {}) {
     + (i.result ? `<div class="t-sec"><h4>Result</h4><p>${esc(i.result)}</p></div>` : '')
     + (i.notProven ? `<div class="t-sec"><h4>Not proven</h4><p>${esc(i.notProven)}</p></div>` : '')
     + (i.link ? `<div>${linkHtml(i.link)}</div>` : '')
+    + (i.history?.length ? `<div class="t-sec"><h4>History</h4><ul>${i.history.map(h => `<li>${esc(h.event)}${h.words ? `, you said: <q>${esc(h.words)}</q>` : ''}</li>`).join('')}</ul></div>` : '')
     + (editable ? `<div class="t-kinds" role="group" aria-label="Kind">${Object.entries(KIND_LABEL).map(([k, l]) => `<button type="button" data-kind="${k}" aria-pressed="${i.kind === k}">${l}</button>`).join('')}</div>` : '')
     + (s.error ? `<p class="t-reason"><span class="pill failed">Not done</span>${esc(s.error)}</p>` : '')
     + (s.notRight ? `<form class="t-note" data-note-form><input type="text" data-note aria-label="What is not right" placeholder="What is not right?" value="${esc(s.noteText ?? '')}" enterkeyhint="send" autocomplete="off"><button type="submit" class="t-act primary">Send</button></form>` : '')

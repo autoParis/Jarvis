@@ -489,6 +489,8 @@ http.createServer(async (req, res) => {
     const method = req.method ?? '', body = lazyBody(() => json(req)), query = new URL(req.url ?? '/', 'http://x').searchParams;
     const post = async () => method === 'POST' ? await body() : {};
     const owner = { fromOwner: () => brain.answeringOwner };
+    // A start from the chat records his words, read from the stored turns, not from what the brain passes.
+    const todayOwner = { ...owner, ownerWords: () => brain.ownerTurns.map(id => store.turnText(id)).filter((t): t is string => !!t) };
     const routes: (() => Promise<RouteResult | undefined> | RouteResult | undefined)[] = [
       // A native worker's hooks (from its settings file) and the brain's jarvis-native commands.
       async () => url.startsWith('/api/hooks/') || url.startsWith('/api/internal/native/') ? nativeRoute({ native, store, log, askChanged }, method, url, await post()) : undefined,
@@ -503,7 +505,7 @@ http.createServer(async (req, res) => {
       // The chat microphone, hands-free listening and the Today microphone (voice.ts). The body is audio, read as bytes.
       // Before the Today route: that route reads every /api/today/ body as JSON, and the Today microphone's is audio.
       () => voiceRoute(voiceCtx, method, url, limit => readBody(req, limit), query),
-      async () => url === '/api/today' || url.startsWith('/api/today/') || url.startsWith('/api/internal/today') ? todayRoute(today, method, url, await post(), owner) : undefined,
+      async () => url === '/api/today' || url.startsWith('/api/today/') || url.startsWith('/api/internal/today') ? todayRoute(today, method, url, await post(), todayOwner) : undefined,
       async () => url === '/api/migration' || url.startsWith('/api/migration/') || url.startsWith('/api/internal/migration') ? migrationRoute(migration, method, url, await post()) : undefined,
       async () => url.startsWith('/api/internal/replies') ? replyRoute(store, log, method, url, await post(), { ...owner, fromOwnerCard: () => brain.answeringOwnerCard }) : undefined,
       async () => url.startsWith('/api/internal/reminders') ? reminderRoute(store, log, method, url, await post()) : undefined,

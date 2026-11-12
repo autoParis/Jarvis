@@ -228,6 +228,8 @@ export class Brain extends EventEmitter {
   }
   /** The running turn holds a message from the owner. Event, check and gate messages carry no turn id. */
   get answeringOwner() { return this.handed.length > 0; }
+  /** The stored turn ids of the owner's messages in the running turn. Empty when the turn holds none. */
+  get ownerTurns(): number[] { return [...this.handed]; }
   /**
    * The running turn holds the owner's tap or typed answer on one of the brain's own ask cards, not a refusal.
    * Only reply-add reads it. A worker ask tap, a held notice, a [check] or a [work list] line never sets it.

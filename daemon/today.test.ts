@@ -40,7 +40,7 @@ const settle = () => new Promise(r => setImmediate(r));
 const STORY = { kind: 'story', title: 'Photo order', reading: 'A re-shoot breaks the order.', repo: REPO, story: { github: 'o/r', title: 'Photo order', body: 'Story text' } };
 const TASK = { kind: 'task', title: 'Read the logs', reading: 'Read them.', repo: REPO, spec: 'Read the logs and report.' };
 const TALK = { kind: 'talk', title: 'A talk', reading: 'To discuss.' };
-const row = (f: Partial<TodayRow>): TodayRow => ({ id: 1, words: 'w', title: null, kind: null, go: 0, status: 'new', status_at: '2026-11-04 15:00:00', reading: null, questions: null, assumptions: null, reason: null, result: null, not_proven: null, link: null, link_label: null, note: null, repo: null, spec: null, story: null, phase: null, brief: null, draft_report: null, dispatch: null, worktree: null, line: null, issue_url: null, issue_state: null, owed: null, told_at: null, tries: 0, created_at: '2026-11-04 15:00:00', released_at: null, ...f });
+const row = (f: Partial<TodayRow>): TodayRow => ({ id: 1, words: 'w', title: null, kind: null, go: 0, status: 'new', status_at: '2026-11-04 15:00:00', reading: null, questions: null, assumptions: null, reason: null, result: null, not_proven: null, link: null, link_label: null, note: null, repo: null, spec: null, story: null, phase: null, brief: null, draft_report: null, dispatch: null, worktree: null, line: null, issue_url: null, issue_state: null, owed: null, told_at: null, tries: 0, created_at: '2026-11-04 15:00:00', released_at: null, history: null, ...f });
 const addItem = (t: ReturnType<typeof setup>, words: string, go = false) => t.today.add({ words, go }).body.item.id as number;
 const status = (t: ReturnType<typeof setup>, id: number) => t.store.todayItem(id)!.status;
 /** A request and a stored report, as an earlier sync would have left them. */
@@ -669,7 +669,69 @@ test('the session brief lists open rows and nothing when the list is empty', () 
 });
 
 // ---- the routes ----
-const route = (t: ReturnType<typeof setup>, method: string, url: string, b: any = {}, fromOwner = false) => todayRoute(t.today, method, url, b, { fromOwner: () => fromOwner });
+const route = (t: ReturnType<typeof setup>, method: string, url: string, b: any = {}, fromOwner = false, words: string[] = []) => todayRoute(t.today, method, url, b, { fromOwner: () => fromOwner, ownerWords: () => words });
+const start = (t: ReturnType<typeof setup>, id: number, fromOwner = true, words = ['do it']) => route(t, 'POST', `/api/internal/today/${id}/start`, {}, fromOwner, words);
+
+test('a start from the chat needs the owner\'s message in the turn, then does what Do it does and records his words', async () => {
+  const t = setup();
+  const id = addItem(t, 'Read the logs');
+  t.today.workup(id, TASK);
+  await settle();
+  const refused = await start(t, id, false);
+  assert.equal(refused!.status, 409);
+  assert.match(refused!.body.error, /saying so in this turn/);
+  assert.equal(status(t, id), 'waiting');
+  assert.equal(t.store.todayItem(id)!.history, null, 'a refused start records nothing');
+  assert.deepEqual(t.pressed, []);
+  const ok = await start(t, id, true, ['yes, do it']);
+  assert.equal(ok!.status, 200);
+  await settle(); await settle();
+  assert.equal(status(t, id), 'working');
+  assert.deepEqual(t.pressed.map(p => p.action), ['today-start']);
+  assert.equal(t.store.todayItem(id)!.go, 1, 'the same as his tap on Do it');
+  const h = ok!.body.item.history;
+  assert.equal(h.length, 1);
+  assert.match(h[0].event, /started from the chat \(Do it\)/);
+  assert.equal(h[0].words, 'yes, do it');
+  assert.ok(t.logs.includes('today item started from the chat'));
+});
+
+test('a story started from the chat files the issue and starts it, as Accept does', async () => {
+  const t = setup();
+  const id = addItem(t, 'photo order');
+  t.today.workup(id, STORY);
+  const ok = await start(t, id, true, ['go']);
+  assert.equal(ok!.status, 200);
+  assert.deepEqual(t.pressed.map(p => p.action), ['today-issue', 'today-start']);
+  assert.equal(status(t, id), 'moved');
+  assert.deepEqual(ok!.body.moved, { number: 4890, url: 'https://github.com/o/r/issues/4890' });
+  assert.equal(JSON.parse(t.store.todayItem(id)!.history!)[0].words, 'go');
+});
+
+test('a start from the chat refuses a talk, an unanswered question, a row not waiting on him, and a story that may be filed', async () => {
+  const t = setup();
+  const talk = addItem(t, 'talk');
+  t.today.workup(talk, TALK);
+  assert.match((await start(t, talk))!.body.error, /is a talk/);
+  const asked = addItem(t, 'asked');
+  t.today.workup(asked, { ...TASK, questions: [{ q: 'Which log?', options: ['jarvisd', 'brain'], recommended: 0 }] });
+  const open = await start(t, asked);
+  assert.equal(open!.status, 409);
+  assert.match(open!.body.error, /not answered: 0 "Which log\?"/);
+  t.today.answer(asked, { question: 0, text: 'jarvisd' });
+  assert.equal(status(t, asked), 'waiting', 'the recommended answer keeps it waiting');
+  assert.equal((await start(t, asked))!.status, 200, 'answered, it starts');
+  const fresh = addItem(t, 'not worked up');
+  assert.match((await start(t, fresh))!.body.error, /is New, not waiting/);
+  const lost = addItem(t, 'lost story');
+  t.today.workup(lost, STORY);
+  t.store.setToday(lost, { issue_state: 'unknown', reason: 'Check GitHub.' });
+  assert.match((await start(t, lost))!.body.error, /cannot be accepted now: Check GitHub/);
+  assert.equal((await start(t, 999))!.status, 404);
+  for (const id of [talk, fresh, lost]) assert.equal(t.store.todayItem(id)!.history, null, `item ${id} records nothing`);
+  await settle(); await settle();
+  assert.deepEqual(t.pressed.map(p => p.action), ['today-start'], 'only the answered task started');
+});
 
 test('the routes list, add and act', async () => {
   const t = setup();
@@ -747,11 +809,12 @@ test('a native report: its DONE sentence is the result, and Not proven is read t
   assert.equal(p.notProven, 'the phone view.');
 });
 
-test('the real CLI relays to the real routes, and has no way to press a button', async () => {
+test('the real CLI relays to the real routes, has no way to release or drop, and starts only in his turn', async () => {
   const t = setup();
+  let owner = false;
   const server = http.createServer(async (req, res) => {
     let s = ''; for await (const c of req) s += c;
-    const r = await route(t, req.method!, req.url!, s ? JSON.parse(s) : {});
+    const r = await route(t, req.method!, req.url!, s ? JSON.parse(s) : {}, owner, ['start it']);
     res.writeHead(r?.status ?? 404, { 'content-type': 'application/json' });
     res.end(JSON.stringify(r?.body ?? { error: 'not found' }));
   }).listen(0, '127.0.0.1');
@@ -769,6 +832,15 @@ test('the real CLI relays to the real routes, and has no way to press a button',
     assert.equal((await cli('answer', String(id), '--question', '3', '--text', 'x')).code, 1);
     assert.equal((await cli('workup', String(id), '--json', 'not json')).code, 2);
     for (const c of ['accept', 'release', 'drop', 'do']) assert.equal((await cli(c, String(id))).code, 2, c);
+    assert.equal((await cli('start')).code, 2, 'start needs an id');
+    const refused = await cli('start', String(id));
+    assert.equal(refused.code, 1, 'start is refused outside his turn');
+    assert.match(refused.err, /saying so in this turn/);
+    assert.equal(status(t, id), 'waiting');
+    owner = true;
+    const started = await cli('start', String(id));
+    assert.equal(started.code, 0, started.err);
+    assert.equal(JSON.parse(started.out).history[0].words, 'start it');
   } finally { server.close(); }
 });
 
@@ -815,6 +887,12 @@ test('a failed row shows its reason, a ready row its result and what was not pro
   assert.match(html, /data-act="release"/);
 });
 
+test('a row shows its history with his words, escaped', () => {
+  const html = detailHtml(view({ status: 'working', history: JSON.stringify([{ at: '2026-11-12T15:00:00Z', event: 'started from the chat (Do it)', words: 'do <it>' }]) }));
+  assert.match(html, /<h4>History<\/h4><ul><li>started from the chat \(Do it\), you said: <q>do &lt;it&gt;<\/q><\/li>/);
+  assert.doesNotMatch(detailHtml(view({})), /History/);
+});
+
 test('a working row has no buttons, and a link with another scheme is not drawn', () => {
   const html = detailHtml({ ...view({ status: 'working', line: 'Running' }), link: { label: 'x', url: 'javascript:alert(1)' } });
   assert.doesNotMatch(html, /data-act/);
@@ -850,5 +928,5 @@ test('the list folds Released under a count, shows the moved line, and has an em
 
 test('the brain\'s file names the events, the command and the hard limits', () => {
   const v = read('../vault/CLAUDE.md');
-  for (const s of ['[today pass]', '[today brief]', 'jarvis-today workup', 'jarvis-today draft', 'jarvis-today answer', 'Go never covers', 'exactly one question']) assert.ok(v.includes(s), s);
+  for (const s of ['[today pass]', '[today brief]', 'jarvis-today workup', 'jarvis-today draft', 'jarvis-today answer', 'jarvis-today start', 'Go never covers', 'exactly one question']) assert.ok(v.includes(s), s);
 });

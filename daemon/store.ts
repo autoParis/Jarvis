@@ -54,6 +54,8 @@ export type TodayRow = {
   issue_url: string | null; issue_state: string | null;
   owed: string | null; told_at: string | null; tries: number;
   created_at: string; released_at: string | null;
+  /** JSON list of { at, event, words }: what happened to the row outside the owner's taps, such as a start from the chat. */
+  history: string | null;
 };
 
 /**
@@ -207,6 +209,7 @@ export function openStore(path: string) {
   // Set when the brain's turn ends without an error, or when the check reports the message lost. Messages from before this column are not in question.
   const turnCols = (db.prepare('PRAGMA table_info(turns)').all() as { name: string }[]).map(c => c.name);
   if (!turnCols.includes('settled_at')) db.exec(`ALTER TABLE turns ADD COLUMN settled_at TEXT; UPDATE turns SET settled_at = created_at WHERE role = 'owner';`);
+  if (!(db.prepare('PRAGMA table_info(today_items)').all() as { name: string }[]).some(c => c.name === 'history')) db.exec('ALTER TABLE today_items ADD COLUMN history TEXT;'); // a start from the chat (2026-11-12)
   if (!turnCols.includes('reply_to')) db.exec('ALTER TABLE turns ADD COLUMN reply_to INTEGER;'); // the message the owner answers, set by the reply button or swipe
 
   const getState = (key: string): string | undefined =>
@@ -531,7 +534,7 @@ export function openStore(path: string) {
     },
     /** Sets the named columns; a new status also moves status_at. `words` and `id` are not in the list, so they cannot be written. */
     setToday(id: number, f: Partial<Omit<TodayRow, 'id' | 'words' | 'status_at' | 'created_at'>>) {
-      const allowed = ['title', 'kind', 'go', 'status', 'reading', 'questions', 'assumptions', 'reason', 'result', 'not_proven', 'link', 'link_label', 'note', 'repo', 'spec', 'story', 'phase', 'brief', 'draft_report', 'dispatch', 'worktree', 'line', 'issue_url', 'issue_state', 'owed', 'told_at', 'tries', 'released_at'] as const;
+      const allowed = ['title', 'kind', 'go', 'status', 'reading', 'questions', 'assumptions', 'reason', 'result', 'not_proven', 'link', 'link_label', 'note', 'repo', 'spec', 'story', 'phase', 'brief', 'draft_report', 'dispatch', 'worktree', 'line', 'issue_url', 'issue_state', 'owed', 'told_at', 'tries', 'released_at', 'history'] as const;
       const cols = allowed.filter(k => f[k] !== undefined);
       const set = [...cols.map(k => `${k} = ?`), ...(f.status ? ["status_at = datetime('now')"] : [])];
       if (set.length) db.prepare(`UPDATE today_items SET ${set.join(', ')} WHERE id = ?`).run(...cols.map(k => f[k] as string | number | null), id);
