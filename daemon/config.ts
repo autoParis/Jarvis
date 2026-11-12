@@ -55,6 +55,10 @@ export const STORY_START_HOUR = hour(env.JARVIS_STORY_START_HOUR, 8);
 export const STORY_END_HOUR = hour(env.JARVIS_STORY_END_HOUR, 16);
 const max = Number(env.JARVIS_STORY_MAX);
 export const STORY_MAX = env.JARVIS_STORY_MAX?.trim() && Number.isInteger(max) && max >= 0 ? max : 3;
+/** The daily worktree cleanup (worktrees.ts): delete (the default) removes the worktrees its rule allows, dry-run only records
+ * what it would remove, off stops it. The repos are the project cards in vault/projects. */
+const wtc = env.JARVIS_WORKTREE_CLEANUP?.trim().toLowerCase();
+export const WORKTREE_CLEANUP: 'off' | 'dry-run' | 'delete' = wtc === 'off' || wtc === 'dry-run' ? wtc : 'delete';
 /** The environment for every command jarvisd runs: its own, a copy taken at start. */
 export const cleanEnv: NodeJS.ProcessEnv = { ...env };
 /** Slack, read only (slack.ts): the owner's user token (xoxp) and the app-level token (xapp) for Socket Mode.

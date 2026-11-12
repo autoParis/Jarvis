@@ -18,7 +18,7 @@ const SPECS: Spec[] = [
   { id: 'jarvisd:check', name: 'Ten-minute check', cron: '', source: 'jarvisd', label: 'jarvisd timer (check)', hourly: true, every: 10, description: 'Wakes the brain on a new finding or a due reminder.' },
   { id: 'jarvisd:today', name: 'Today list backstop', cron: '', source: 'jarvisd', label: 'jarvisd timer (today)', hourly: true, every: 30, description: 'Catches Today items that an event missed.' },
   { id: 'launchd:local.tripwire-poll', name: 'Tripwire check', cron: '@every 30m', source: 'launchd', label: 'launchd job local.tripwire-poll', hourly: true, every: 30, description: 'Checks the FBM tripwire.', editable: true },
-  { id: 'launchd:local.worktree-cleanup', name: 'Worktree cleanup', cron: '0 * * * *', source: 'launchd', label: 'launchd job local.worktree-cleanup', hourly: true, every: 60, failAll: 'Precheck timed out after 300s. The run was skipped.', description: '', editable: true },
+  { id: 'jarvisd:worktree-cleanup', name: 'Worktree cleanup', cron: '0 6 * * *', source: 'jarvisd', label: 'jarvisd timer (worktree-cleanup)', hourly: false, every: 24 * 60, description: 'Removes the old worktrees in .claude/worktrees of each project repo: merged or PR closed, clean, no worker or process on it, unchanged for 2 days. Never deletes a branch.', editable: true },
 ];
 const SCHEDULE: Record<string, string> = { 'jarvisd:gmail': 'Every 10 minutes', 'jarvisd:check': 'Every 10 minutes, 8 AM to 4 PM', 'jarvisd:today': 'Every 30 minutes' };
 

@@ -30,6 +30,8 @@ export type Task = {
   logTail?: { file: string; at: string; text: string };
   /** The owner hid it on the screen. It still runs and is still sampled. jarvisd keeps the list (state key tasksHidden), not the plist. */
   hidden?: boolean;
+  /** The last run that kept a detail text (task_runs.detail), such as the worktree cleanup's list of what it removed and kept. */
+  lastRun?: { at: string; outcome: Outcome; note?: string; detail: string };
 };
 type RunRow = { at: number; outcome: Outcome; note?: string };
 
@@ -185,7 +187,11 @@ export function lastErrorOf(runs: RunRow[]): Task['lastError'] {
 }
 
 // ---- the reader ----
-export type JarvisdTask = { id: string; name: string; schedule: string; everyMs: number; description: string };
+/**
+ * A jarvisd timer. With `cron` the owner can change its schedule and description on the screen: jarvisd keeps the
+ * change in its state (keys taskCron:<id> and taskDesc:<id>) and `claimDue` reads it. Without `cron` the schedule is in the code.
+ */
+export type JarvisdTask = { id: string; name: string; schedule: string; everyMs: number; description: string; cron?: string };
 export type TasksDeps = {
   db: DatabaseSync; run: Run; uid: number; agentsDir: string; prefixes: string[];
   /** Labels never offered for editing: jarvisd's own job, which a reload would stop mid-request. */
@@ -198,11 +204,14 @@ export function makeTasks(d: TasksDeps) {
   const now = d.now ?? Date.now;
   d.db.exec(`CREATE TABLE IF NOT EXISTS task_runs (id INTEGER PRIMARY KEY, task TEXT NOT NULL, at INTEGER NOT NULL, outcome TEXT NOT NULL, note TEXT);
     CREATE INDEX IF NOT EXISTS task_runs_task_at ON task_runs (task, at);`);
-  const insert = d.db.prepare('INSERT INTO task_runs (task, at, outcome, note) VALUES (?, ?, ?, ?)');
+  // detail, added 2026-11-12: the long text of one run (the worktree cleanup's list), shown in the open row, not in the strip.
+  if (!(d.db.prepare('PRAGMA table_info(task_runs)').all() as { name: string }[]).some(c => c.name === 'detail')) d.db.exec('ALTER TABLE task_runs ADD COLUMN detail TEXT');
+  const insert = d.db.prepare('INSERT INTO task_runs (task, at, outcome, note, detail) VALUES (?, ?, ?, ?, ?)');
+  const lastDetail = d.db.prepare('SELECT at, outcome, note, detail FROM task_runs WHERE task = ? AND detail IS NOT NULL ORDER BY at DESC LIMIT 1');
   const select = d.db.prepare('SELECT at, outcome, note FROM task_runs WHERE task = ? AND at >= ? ORDER BY at');
   const lastFew = d.db.prepare('SELECT at, outcome, note FROM task_runs WHERE task = ? ORDER BY at DESC LIMIT ?');
   const prune = d.db.prepare('DELETE FROM task_runs WHERE at < ?');
-  const record = (task: string, outcome: Outcome, note?: string, at = now()) => { insert.run(task, at, outcome, note ?? null); };
+  const record = (task: string, outcome: Outcome, note?: string, at = now(), detail?: string) => { insert.run(task, at, outcome, note ?? null, detail ?? null); };
   const stored = (task: string, hourly: boolean): RunRow[] => (hourly ? select.all(task, now() - 25 * HOUR) : (lastFew.all(task, RUNS_SHOWN) as unknown[]).reverse())
     .map(r => { const x = r as { at: number; outcome: Outcome; note: string | null }; return { at: x.at, outcome: x.outcome, ...(x.note ? { note: x.note } : {}) }; });
 
@@ -270,14 +279,46 @@ export function makeTasks(d: TasksDeps) {
     };
   }
 
+  /** The schedule of an editable jarvisd task: the owner's change from the screen, else the default in the code. */
+  function jarvisdSched(t: JarvisdTask): Sched | null {
+    if (!t.cron) return null;
+    const own = d.getState(`taskCron:${t.id}`);
+    const s = fromCron(own ?? t.cron);
+    if (!('error' in s)) return s;
+    const def = fromCron(t.cron);
+    return 'error' in def ? null : def;
+  }
+
   function jarvisdTask(t: JarvisdTask): Task {
-    const hourly = t.everyMs <= HOUR, runs = stored(t.id, hourly), shown = marks(runs, hourly, now());
+    const sched = jarvisdSched(t);
+    const hourly = sched ? frequent(sched) : t.everyMs <= HOUR, runs = stored(t.id, hourly), shown = marks(runs, hourly, now());
     const lastError = lastErrorOf(runs);
+    const last = lastDetail.get(t.id) as { at: number; outcome: Outcome; note: string | null; detail: string } | undefined;
     return {
-      id: t.id, source: 'jarvisd', sourceLabel: `jarvisd timer (${t.id.slice('jarvisd:'.length)})`, name: t.name, schedule: t.schedule,
-      editable: false, editNote: 'This timer is part of jarvisd. Its schedule is in the code.', description: t.description,
+      id: t.id, source: 'jarvisd', sourceLabel: `jarvisd timer (${t.id.slice('jarvisd:'.length)})`, name: t.name,
+      schedule: sched ? schedSentence(sched) : t.schedule, ...(sched ? { cron: toCron(sched) } : {}),
+      editable: !!sched, ...(sched ? { editNote: 'jarvisd keeps this schedule in its own state and checks it every minute, on this Mac\'s clock.' } : { editNote: 'This timer is part of jarvisd. Its schedule is in the code.' }),
+      description: (sched && d.getState(`taskDesc:${t.id}`)) || t.description,
       status: statusOf(runs, shown, false), strip: hourly ? 'hourly' : 'runs', marks: shown, ...(lastError ? { lastError } : {}),
+      ...(last ? { lastRun: { at: new Date(last.at).toISOString(), outcome: last.outcome, ...(last.note ? { note: last.note } : {}), detail: last.detail } } : {}),
     };
+  }
+
+  /**
+   * Called every minute by the task's timer. True when a start time of its schedule fell since the last call (a calendar
+   * schedule), or when the interval has passed since the last run. The first call only sets the baseline. A missed start
+   * time (jarvisd was down) still counts when the next call comes within 24 hours, like launchd runs a missed job on wake.
+   */
+  function claimDue(id: string): boolean {
+    const t = d.jarvisd.find(x => x.id === id), sched = t && jarvisdSched(t);
+    if (!sched) return false;
+    const at = now(), key = `taskCheck:${id}`, before = Number(d.getState(key) ?? NaN);
+    d.setState(key, String(at));
+    if ('interval' in sched) {
+      const last = (lastFew.all(id, 1) as { at: number }[])[0]?.at;
+      return Number.isFinite(before) && (last === undefined || at - last >= sched.interval * 1000);
+    }
+    return Number.isFinite(before) && calendarHit(sched.calendar, Math.max(before, at - 24 * HOUR), at);
   }
 
   const hiddenIds = (): string[] => { try { const v = JSON.parse(d.getState('tasksHidden') ?? '[]'); return Array.isArray(v) ? v.filter(x => typeof x === 'string') : []; } catch { return []; } };
@@ -313,6 +354,18 @@ export function makeTasks(d: TasksDeps) {
    */
   async function save(id: string, cronText: string, description: string): Promise<{ status: number; error?: string; task?: Task }> {
     if (saving) return { status: 409, error: 'Another save is running. Try again in a moment.' };
+    const own = d.jarvisd.find(t => t.id === id);
+    if (own) {
+      if (!own.cron) return { status: 403, error: 'This timer is part of jarvisd. Its schedule is in the code.' };
+      const s = fromCron(String(cronText ?? ''));
+      if ('error' in s) return { status: 400, error: s.error };
+      const text = String(description ?? '').replace(/\s+/g, ' ').trim();
+      if (text.length > 200) return { status: 400, error: 'Keep the description to one line, under 200 characters.' };
+      d.setState(`taskCron:${id}`, toCron(s));
+      d.setState(`taskDesc:${id}`, text);
+      d.log?.('tasks: jarvisd schedule saved', { id, schedule: toCron(s) });
+      return { status: 200, task: jarvisdTask(own) };
+    }
     const label = id.startsWith('launchd:') ? id.slice('launchd:'.length) : '';
     const job = (await launchdJobs()).find(j => j.label === label);
     if (!job) return { status: 404, error: 'Only a launchd job with a schedule can be edited here.' };
@@ -381,7 +434,17 @@ export function makeTasks(d: TasksDeps) {
     return last || 'bootstrap failed';
   }
 
-  return { list, sample, save, record, setHidden, hiddenIds };
+  return { list, sample, save, record, setHidden, hiddenIds, claimDue };
+}
+
+/** True when one of the calendar entries matches a minute in (from, to], on this Mac's clock (as launchd reads it). */
+export function calendarHit(cal: Cal[], from: number, to: number): boolean {
+  for (let m = Math.floor(from / 60_000) + 1; m <= Math.floor(to / 60_000); m++) {
+    const t = new Date(m * 60_000);
+    const v = { Minute: t.getMinutes(), Hour: t.getHours(), Day: t.getDate(), Month: t.getMonth() + 1, Weekday: t.getDay() };
+    if (cal.some(c => CAL_KEYS.every(k => c[k] === undefined || c[k] === v[k] || (k === 'Weekday' && c[k] === 7 && v[k] === 0)))) return true;
+  }
+  return false;
 }
 
 export const humanize = (label: string) => sentenceCase(label.split('.').at(-1)!.replace(/[-_]+/g, ' '));

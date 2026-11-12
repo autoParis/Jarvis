@@ -1189,6 +1189,7 @@ body:not(.term-open) .term-act { display: none; }
 .tk-log { padding: 0 2px; min-width: 0; }
 .tk-log p { overflow-wrap: anywhere; }
 .tk-log pre { font-size: 13px; color: var(--muted); }
+.tk-lastrun pre { max-height: 320px; overflow-y: auto; }
 .tk-form { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(0, 7fr) auto; gap: 20px; align-items: end; }
 .tk-f { display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--muted); min-width: 0; }
 .tk-hint { margin-left: 8px; font-size: 12px; }

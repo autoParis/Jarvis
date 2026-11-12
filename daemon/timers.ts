@@ -112,3 +112,32 @@ export function startSheetSync(o: {
   setInterval(tick, SHEET_SYNC_TICK_MS);
   tick();
 }
+
+export const WORKTREE_CLEANUP_TICK_MS = 60_000;
+/**
+ * The worktree cleanup (worktrees.ts): checked every minute, run when its schedule says (tasks.ts claimDue, default every
+ * day at 6 AM, editable on the Scheduled tasks screen). Each run writes one task_runs row: the outcome, a one-line note and
+ * the list of what it removed and kept, with the reason for each. Off, or the kill switch on, skips the check. One run at a time.
+ */
+export function startWorktreeCleanup(o: {
+  id: string; mode: 'off' | 'dry-run' | 'delete'; due: () => boolean;
+  run: (mode: 'dry-run' | 'delete') => Promise<{ outcome: 'ok' | 'warn' | 'fail'; note: string; detail: string }>;
+  killed: () => boolean; record: (id: string, outcome: 'ok' | 'warn' | 'fail', note: string, detail: string) => void; log: Log;
+}) {
+  let running = false;
+  const tick = () => {
+    const mode = o.mode;
+    if (running || mode === 'off' || o.killed() || !o.due()) return;
+    running = true;
+    o.log('worktree cleanup start', { mode });
+    o.run(mode).then(s => {
+      o.log('worktree cleanup done', { mode, outcome: s.outcome, note: s.note });
+      o.record(o.id, s.outcome, s.note, s.detail);
+    }, e => {
+      o.log(`worktree cleanup failed: ${e}`);
+      o.record(o.id, 'fail', `The run stopped: ${String(e).slice(0, 300)}`, String((e as Error)?.stack ?? e).slice(0, 2000));
+    }).finally(() => { running = false; });
+  };
+  setInterval(tick, WORKTREE_CLEANUP_TICK_MS);
+  tick();
+}
