@@ -60,6 +60,16 @@ export function startTodayBackstop(o: { today: { tick: () => Promise<unknown>; p
 }
 
 /**
+ * The story queue (stories.ts): a fill every minute. Returns the fill, which main.ts also calls when a worker reports
+ * DONE or FAILED, so a free slot does not wait for the next minute. The fill checks the hours, the max and the kill switch.
+ */
+export function startStoryQueue(o: { fill: () => Promise<unknown>; everyMs: number; log: Log }): () => void {
+  const run = () => { o.fill().catch(e => o.log(`story queue: ${e}`)); };
+  setInterval(run, o.everyMs);
+  return run;
+}
+
+/**
  * Project terminals (terminal.ts): the tmux list every 15 s. A change publishes the work list. Returns the poll, which
  * the terminal routes also call after a change.
  */

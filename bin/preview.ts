@@ -74,6 +74,8 @@ const reportShown = (p: string) => !!REPORT_DIR && p.startsWith(REPORT_DIR + '/'
 const previewReportOf = (p: string) => REPORT_FILE ? reportSummary(p, REPORT_DIR, reportShown) : undefined;
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const PORT = Number(process.env.PREVIEW_PORT ?? 7718);
+/** The story queue the Today scene shows above its list (stories.ts view). */
+const SAMPLE_QUEUE = { stories: [{ number: 4890, topic: 'Extension: photos missing on publish' }, { number: 4871, topic: 'Muse reply language' }, { number: 4866, topic: 'Marketplace price sync' }], running: [{ number: 4812, worker: 'a' }, { number: 4840, worker: 'b' }, { number: 4855, worker: 'c' }], max: 3, hours: { zone: 'America/Toronto', start: 8, end: 16, open: true } };
 // The web code version, as jarvisd sends it. `curl -XPOST localhost:7718/api/preview/restart` acts as a restart with
 // new web code: a new version and every stream closed, so each open page reconnects and reloads (web/reload.js).
 let webVer = webVersion(WEB);
@@ -399,7 +401,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET') {
     if (url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-      res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows) }, hidden: scene.hidden, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', busy: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'working', turns: scene.turns, approvals: scene.approvals.filter(a => a.status === 'pending'), work: { at: '', rows: withTerms(scene.rows) }, hidden: scene.hidden, requests: scene.requests, asks: scene.items.map(cardOf), audit: scene.audit, messages: messagesOf(scene), today: today.list(), stories: new URL(req.headers.referer ?? 'http://x/').searchParams.get('s') === 'today' ? SAMPLE_QUEUE : undefined, migration: migration.state(), brain: brainInfo(), session: 'preview' })}\n\n`);
       res.write(`data: ${JSON.stringify(versionEvent(webVer))}\n\n`);
       clients.add(res); allStreams.add(res);
       req.on('close', () => { clients.delete(res); allStreams.delete(res); });

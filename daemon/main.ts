@@ -35,6 +35,7 @@ import { gitSelfCheck, gitNotice } from './gitcheck.ts';
 import { reminderRoute } from './reminders.ts';
 import { makeMessages, emailPush, outboxLine, messagesRoute } from './messages.ts';
 import { makeToday, todayRoute, todayBrief, BACKSTOP_MS } from './today.ts';
+import { makeStories, storyRoute, FILL_MS } from './stories.ts';
 import { makeReplies, replyRoute, repliesBrief, gh } from './replies.ts';
 import { makeTicketWorker } from './replyworker.ts';
 import { makeMigration, migrationRoute, migrationBrief, readDealerFile } from './migration.ts';
@@ -42,10 +43,10 @@ import { makeNative, ROW_PREFIX, type NativeWorker } from './native.ts';
 import { nativeRoute } from './nativeroutes.ts';
 import { quoteOf, quoteLine, replyIdOf, type Quote } from './quote.ts';
 import { SERVICE_LABEL, LAUNCHD_PREFIXES } from './config.ts';
-import { DEALERS_FILE, MIGRATION_SHEET_SYNC } from './config.ts';
+import { DEALERS_FILE, MIGRATION_SHEET_SYNC, PRODUCT_KEY } from './config.ts';
 import { makeChatLinks } from './chatlink.ts';
 import { wireBrain, turnAskNote } from './brainevents.ts';
-import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, startSheetSync } from './timers.ts';
+import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, startSheetSync, startStoryQueue } from './timers.ts';
 import { syncDue, runSyncChild } from './sheetsync.ts';
 import { SHEET_ID } from './sheet-edit.ts';
 
@@ -99,6 +100,8 @@ const requests = makeRequests({ store, log, repoOf: githubRepo, mergeRepo: ROOT,
 const backfilled = backfillRequests(store);
 if (backfilled) log(`requests: backfilled ${backfilled} from earlier worker starts`);
 
+/** Set once the story queue exists, further down: a report at startup comes before it. */
+let fillQueue = () => {};
 // Set once the Today list exists, so a native sync that runs during the start (a report recovered from a transcript) waits.
 let todayReady = false;
 // ---- Native workers: Claude background sessions jarvisd starts itself (native.ts, nativeroutes.ts) ----
@@ -114,6 +117,7 @@ const native = makeNative({
       : `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) reported ${w.outcome}:\n${text}`;
     store.addTurn({ role: 'event', text: line });
     broadcast({ type: 'event', text: line, at: new Date().toISOString() });
+    fillQueue(); // its slot is free now
     if (!existsSync(KILL_FILE)) brain.send(`${line}\n\nThis is its report, word for word. Speak it to ${OWNER} if it is an answer or a problem; a plain success is SILENT unless he asked for it. It needs no release.`);
   },
   onCard: a => {
@@ -152,7 +156,8 @@ const gate = makeGate(store, a => {
   if (a.status === 'done') requests.started(a);
   // A stopped worker can drop out of a later list, so its session and worktree are recorded now.
   if (a.action === 'worker-stop' && a.status === 'done') { try { requests.capture(JSON.parse(a.args).dispatch); } catch {} }
-  if (!PRESSED.has(a.action)) broadcast({ type: 'approval', approval: a });
+  // A queue start has no card; its chat line comes from stories.ts.
+  if (!PRESSED.has(a.action) && a.decided_by !== 'queue') broadcast({ type: 'approval', approval: a });
   if (a.action === 'gmail-send') messagesChanged();
 }, log, undefined, undefined, native, { repo: ROOT, fromOwner: () => brain.answeringOwner }); // brain is set before any proposal arrives
 // Can a worker still commit? One notice per new failure: jarvisd restarts after every merge, so a repeat stays quiet.
@@ -353,6 +358,20 @@ if (SHEET_SYNC_ON) startSheetSync({
   killed: () => existsSync(KILL_FILE), record: tasks.record, wake: text => brain.send(text), log,
 });
 
+// ---- Story queue: from 8 AM to 4 PM Eastern, jarvisd starts the next queued story while fewer than 3 run, with no card (rules in stories.ts) ----
+const stories = makeStories({
+  store, gate, log,
+  repo: () => repos().find(r => r.name === PRODUCT_KEY)?.path,
+  paused: () => existsSync(KILL_FILE),
+  told: (line, notice) => {
+    store.addTurn({ role: 'event', text: line });
+    broadcast({ type: 'event', text: line, at: new Date().toISOString() });
+    if (!existsSync(KILL_FILE)) brain.send(notice);
+  },
+  onChange: () => broadcast({ type: 'stories', stories: stories.view() }),
+});
+fillQueue = startStoryQueue({ fill: () => stories.fill(), everyMs: FILL_MS, log });
+
 // ---- HTTP ----
 async function readBody(req: http.IncomingMessage, limit = 1e6): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -458,6 +477,9 @@ http.createServer(async (req, res) => {
       async () => url === '/api/migration' || url.startsWith('/api/migration/') || url.startsWith('/api/internal/migration') ? migrationRoute(migration, method, url, await post()) : undefined,
       async () => url.startsWith('/api/internal/replies') ? replyRoute(store, log, method, url, await post(), { ...owner, fromOwnerCard: () => brain.answeringOwnerCard }) : undefined,
       async () => url.startsWith('/api/internal/reminders') ? reminderRoute(store, log, method, url, await post()) : undefined,
+      // The story queue: the Today popup reads it, and jarvis-stories changes it (stories.ts).
+      () => url === '/api/stories' && method === 'GET' ? { status: 200, body: stories.view() } : undefined,
+      async () => url.startsWith('/api/internal/stories') ? storyRoute(store, stories, log, method, url, await post(), () => broadcast({ type: 'stories', stories: stories.view() })) : undefined,
       // The work list and its row buttons (workroutes.ts).
       () => workRoute(workCtx, method, url, body, query),
       // Ask cards: a tap on an option, the audit log, an answer the brain recorded (asks.ts).
@@ -484,7 +506,7 @@ http.createServer(async (req, res) => {
           : t.role === 'jarvis' ? { ...t, clips: spokenSentences(t.text).length }
           : t.reply_to ? { ...t, quote: quoteOf(store.turn(t.reply_to)) } : t);
       const secret = ui.open();
-      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(store), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(store), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), stories: stories.view(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
       res.write(`data: ${JSON.stringify(versionEvent(WEB_VERSION))}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25_000);

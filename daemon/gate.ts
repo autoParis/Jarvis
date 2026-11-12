@@ -407,6 +407,18 @@ export function makeGate(store: Store, onChange: (a: Approval) => void, log: Log
       if (action === 'session-phone') return a; // native.phone runs it; `recorded` finishes the row with what it did.
       return execute(store.approval(a.id)!);
     },
+    /**
+     * A story from the story queue (stories.ts): the worker-start path with no card, because the owner's queue rule of
+     * 2026-11-11 covers it. Recorded in `approvals` with `decided_by = queue`, refused like a proposal when the same title runs.
+     */
+    async queued(args: any, say: string): Promise<Approval> {
+      buildCommand('worker-start', args, item);
+      refuseDuplicateStart('worker-start', args);
+      const a = store.addApproval({ action: 'worker-start', args: JSON.stringify(args), say: str(say, 'say') });
+      store.decide(a.id, 'approved', 'queue');
+      log('gate queue start', { approval: a.id, action: 'worker-start' });
+      return execute(store.approval(a.id)!);
+    },
     /** The outcome of a press the gate does not run itself. */
     recorded(approvalId: number, status: 'done' | 'failed', result: string) {
       store.finishApproval(approvalId, status, result);
