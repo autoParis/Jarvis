@@ -10,7 +10,7 @@
 //   jarvis-act reject <id>     after the owner says no
 //   jarvis-act list            pending proposals
 //   jarvis-act email-done gmail:<id>   the owner will handle that email himself; drops it from the brief
-//   jarvis-act message-add --to <name> --channel <slack|email> --reason <text> --text <draft>
+//   jarvis-act message-add --to <name> --channel <slack|email|text> [--contact <phone or email>] --reason <text> --text <draft>
 //                              a card under Messages for something the owner sends himself. Nothing is sent; he taps Done.
 //   jarvis-act reply-add --ref TICKET-1045 --dealership <name> --dealership-id <uuid> --repo <owner/name> --pr <number> --text <exact words>
 //                              a support reply the owner approved. jarvisd sends it once, on its own, when the PR is in production.
@@ -46,7 +46,7 @@ if (cmd === 'ask' || cmd === 'ask-done') {
   process.exit(res.ok ? 0 : 1);
 }
 if (cmd === 'message-add') {
-  const res = await fetch(`${url}/api/internal/messages`, { method: 'POST', body: JSON.stringify({ to: flag('to'), channel: flag('channel'), reason: flag('reason'), text: flag('text') }) });
+  const res = await fetch(`${url}/api/internal/messages`, { method: 'POST', body: JSON.stringify({ to: flag('to'), channel: flag('channel'), contact: flag('contact'), reason: flag('reason'), text: flag('text') }) });
   console.log(await res.text());
   process.exit(res.ok ? 0 : 1);
 }

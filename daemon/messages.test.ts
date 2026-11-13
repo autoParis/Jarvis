@@ -22,7 +22,7 @@ const { openStore } = await import('./store.ts');
 const { makeGate } = await import('./gate.ts');
 const { makeMessages, messageCard, messageOrder, emailPush, outboxLine } = await import('./messages.ts');
 const { makeCheck } = await import('./check.ts');
-const { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } = await import('../web/messages.js');
+const { messageButton, messageHeadHtml, messageControls, otherMessagesLabel, smsHref } = await import('../web/messages.js');
 const { swipeAction } = await import('../web/swipe.js');
 const { auditEntries } = await import('./asks.ts');
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
@@ -330,7 +330,7 @@ test('a retry with the same words returns the open card; after Done the same wor
 
 test('message-add refuses a missing field and an unknown channel', () => {
   const { m } = setup([]);
-  for (const [bad, why] of [[{ to: ' ' }, /--to/], [{ channel: 'sms' }, /slack or email/], [{ channel: 'constructor' }, /slack or email/], [{ reason: '' }, /--reason/], [{ text: ' \n' }, /--text/]] as const) {
+  for (const [bad, why] of [[{ to: ' ' }, /--to/], [{ channel: 'sms' }, /slack, email or text/], [{ channel: 'constructor' }, /slack, email or text/], [{ reason: '' }, /--reason/], [{ text: ' \n' }, /--text/]] as const) {
     const r = m.add({ ...TEAMMATE, ...bad });
     assert.equal(r.status, 400);
     assert.match((r.body as any).error, why);
@@ -388,7 +388,7 @@ test('jarvis-act message-add goes through the route and prints the card, and bad
     assert.equal(JSON.parse(s.openOutbox()[0].meta!).text, 'Hi Sam, on October 30? (issue 4531) Thanks.');
     const bad = await act('--to', 'Sam', '--channel', 'sms', '--reason', 'x', '--text', 'y');
     assert.equal(bad.code, 1);
-    assert.match(bad.out, /slack or email/);
+    assert.match(bad.out, /slack, email or text/);
     assert.equal(s.openOutbox().length, 1);
   } finally { server.close(); }
 });
@@ -398,5 +398,92 @@ test('the page copies a card, hides its empty link, and the brain is told how to
   assert.match(page, /copyOnly\) return copyDraft\(msgCurrent, text\)/);
   assert.match(page, /navigator\.clipboard\.writeText\(text\)/);
   assert.match(page, /\$\('msg-open'\)\.hidden = !m\.openUrl/);
-  assert.match(read('../vault/CLAUDE.md'), /jarvis-act message-add --to <name> --channel <slack\|email> --reason/);
+  assert.match(read('../vault/CLAUDE.md'), /jarvis-act message-add --to <name> --channel <slack\|email\|text> --contact "<phone or email>" --reason/);
+});
+
+// ---- The text channel and the contact under the name ----
+const DEALER = { to: 'Alex at the dealer', channel: 'text', contact: '+1 (555) 010-0199', reason: 'Photos for the listing', text: 'Hi Alex, can you send the photos? Thanks & bye' };
+
+test('a text card carries its phone number to the card and the brief, and the contact is optional', () => {
+  const { s, m } = setup([]);
+  const card = addCard(m, DEALER);
+  assert.equal(card.label, 'To send by text');
+  assert.equal(card.channel, 'text');
+  assert.equal(card.address, '+1 (555) 010-0199');
+  assert.equal(JSON.parse(s.item(card.id)!.meta!).contact, '+1 (555) 010-0199');
+  assert.match(outboxLine(s.item(card.id)!), / channel=text contact="\+1 \(555\) 010-0199" reason=/);
+  const plain = addCard(m);
+  assert.equal(plain.address, '');
+  assert.equal('contact' in JSON.parse(s.item(plain.id)!.meta!), false, 'no empty contact is stored');
+  assert.equal(addCard(m, { ...TEAMMATE, channel: 'email', contact: 'sam@example.test', text: 'Mail words' }).address, 'sam@example.test');
+});
+
+test('the card shows the contact under the name with its own Copy, and Text only for a phone on the text channel', () => {
+  const { m } = setup([]);
+  const card = addCard(m, DEALER);
+  const html = messageHeadHtml(card, Date.parse(card.at));
+  const name = html.indexOf('msg-from'), contact = html.indexOf('msg-contact'), reason = html.indexOf('class="say"');
+  assert.ok(name < contact && contact < reason, 'the contact sits right under the name, above the reason');
+  assert.match(html, /<span class="msg-addr">\+1 \(555\) 010-0199<\/span><button type="button" class="msg-contact-copy">Copy<\/button>/);
+  assert.match(html, /<a class="msg-sms" href="sms:\+15550100199\?&amp;body=Hi%20Alex%2C%20can%20you%20send%20the%20photos%3F%20Thanks%20%26%20bye">Text<\/a>/);
+  assert.match(messageHeadHtml(card, Date.parse(card.at), undefined, true), /class="msg-contact-copy">Copied</);
+  assert.doesNotMatch(html, /<small>/, 'the contact shows once, not also beside the name');
+  assert.deepEqual(messageControls(card, false), { draft: 'Draft', send: 'Copy', handled: 'Done' }, 'the draft keeps its own Copy');
+
+  const mail = addCard(m, { ...TEAMMATE, channel: 'email', contact: 'sam@example.test', text: 'Mail words' });
+  const mailHtml = messageHeadHtml(mail, Date.parse(mail.at));
+  assert.match(mailHtml, /msg-addr">sam@example\.test<\/span><button type="button" class="msg-contact-copy">Copy/);
+  assert.doesNotMatch(mailHtml, /msg-sms/);
+  const noPhone = addCard(m, { ...DEALER, contact: 'alex@example.test', text: 'Other' });
+  assert.doesNotMatch(messageHeadHtml(noPhone, Date.parse(noPhone.at)), /msg-sms/, 'Text needs a phone number');
+  const bare = addCard(m, { ...DEALER, contact: undefined, text: 'Third' });
+  assert.doesNotMatch(messageHeadHtml(bare, Date.parse(bare.at)), /msg-contact/);
+  const evil = addCard(m, { ...DEALER, contact: '<b>x</b>"', text: 'Fourth' });
+  assert.match(messageHeadHtml(evil, Date.parse(evil.at)), /&lt;b&gt;x&lt;\/b&gt;&quot;/);
+
+  const email = setup([['a']]).m.list()[0];
+  const emailHtml = messageHeadHtml(email, Date.parse(email.at));
+  assert.match(emailHtml, /<small>a@x\.test<\/small>/, 'an incoming email keeps its sender address beside the name');
+  assert.doesNotMatch(emailHtml, /msg-contact/);
+});
+
+test('smsHref: digits and a leading plus only, the words encoded, null for anything else', () => {
+  assert.equal(smsHref('555.010.0199', 'a b'), 'sms:5550100199?&body=a%20b');
+  assert.equal(smsHref('+15550100199', ''), 'sms:+15550100199?&body=');
+  for (const bad of ['', '12345', 'alex@example.test', '555-CALL-NOW', undefined]) assert.equal(smsHref(bad, 'x'), null);
+});
+
+test('jarvis-act message-add --channel text --contact goes through the daemon route and keeps the number', async () => {
+  const { s, m } = setup([]);
+  const server = http.createServer(async (req, res) => {
+    let b = ''; for await (const c of req) b += c;
+    assert.equal(req.url, '/api/internal/messages');
+    const r = m.add(JSON.parse(b));
+    res.writeHead(r.status).end(JSON.stringify(r.body));
+  });
+  await new Promise<void>(ok => server.listen(0, '127.0.0.1', ok));
+  const port = (server.address() as AddressInfo).port;
+  const act = (...args: string[]) => new Promise<{ code: number; out: string }>(ok =>
+    execFile(process.execPath, [fileURLToPath(new URL('../bin/jarvis-act', import.meta.url)), 'message-add', ...args], { env: { ...process.env, JARVIS_URL: `http://127.0.0.1:${port}` } }, (e, out) => ok({ code: e ? Number(e.code) : 0, out })));
+  try {
+    const r = await act('--to', DEALER.to, '--channel', 'text', '--contact', DEALER.contact, '--reason', DEALER.reason, '--text', DEALER.text);
+    assert.equal(r.code, 0);
+    const card = JSON.parse(r.out);
+    assert.equal(card.address, DEALER.contact);
+    assert.equal(card.label, 'To send by text');
+    assert.deepEqual(JSON.parse(s.openOutbox()[0].meta!), { to: DEALER.to, channel: 'text', text: DEALER.text, contact: DEALER.contact });
+    const slack = await act('--to', 'Sam', '--channel', 'slack', '--reason', 'x', '--text', 'y');
+    assert.equal(slack.code, 0, 'slack without --contact works as before');
+    assert.equal(JSON.parse(slack.out).address, '');
+  } finally { server.close(); }
+  const route = read('./messages.ts');
+  assert.match(route, /url === '\/api\/internal\/messages'\) return o\.messages\.add\(await body\(\)\)/, 'messagesRoute hands the whole body, contact included, to messages.add');
+});
+
+test('the page copies only the contact, and Text takes the words in the draft box', () => {
+  const page = read('../web/index.html');
+  assert.match(page, /closest\('\.msg-contact-copy'\)/);
+  assert.match(page, /navigator\.clipboard\.writeText\(m\.address\)/);
+  assert.match(page, /sms\.href = smsHref\(m\.address, \$\('msg-draft'\)\.value\.trim\(\)\)/);
+  assert.match(page, /copyOnly\) return copyDraft\(msgCurrent, text\)/, 'the draft Copy still copies the draft');
 });

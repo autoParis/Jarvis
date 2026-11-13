@@ -18,15 +18,19 @@ export type MessageCard = {
   subject: string; summary: string; draft: string; at: string; openLabel: string; openUrl: string;
   /** Nothing here sends it: the popup offers Copy and Done, and `from` is who it is for. */
   copyOnly: boolean;
+  /** An outbox card's channel: slack, email or text. The page offers Text only for `text` with a phone number. */
+  channel?: string;
   /** Who Send reply goes to: reply all, without the owner. Null when an older email's list is read from Gmail at send time. */
   replyTo?: { to: string[]; cc: string[] } | null;
 };
 
-/** Who an outbox card is for, how the owner sends it, and the words. The reason is the item's subject. */
-export type OutboxMeta = { to: string; channel: string; text: string };
-const CHANNELS: Record<string, string> = { slack: 'Slack', email: 'email' };
+/** Who an outbox card is for, how the owner sends it, and the words. The reason is the item's subject.
+ * `contact` is the phone number or email address the owner sends to, shown under the name with its own Copy. */
+export type OutboxMeta = { to: string; channel: string; text: string; contact?: string };
+/** How the card's title names each channel. `text` is a phone text message the owner sends from his phone. */
+const CHANNELS: Record<string, string> = { slack: 'on Slack', email: 'on email', text: 'by text' };
 
-const SOURCES: Record<string, { label: string; openLabel: string; sendAction?: string; fields(i: Item, meta: any, self: string[]): Pick<MessageCard, 'urgent' | 'from' | 'address' | 'draft' | 'openUrl'> & { label?: string; replyTo?: MessageCard['replyTo'] } }> = {
+const SOURCES: Record<string, { label: string; openLabel: string; sendAction?: string; fields(i: Item, meta: any, self: string[]): Pick<MessageCard, 'urgent' | 'from' | 'address' | 'draft' | 'openUrl'> & { label?: string; channel?: string; replyTo?: MessageCard['replyTo'] } }> = {
   gmail: {
     label: 'Email', openLabel: 'Open in Gmail', sendAction: 'gmail-send',
     fields: (_i, m: Partial<EmailMeta>, self) => ({
@@ -37,7 +41,7 @@ const SOURCES: Record<string, { label: string; openLabel: string; sendAction?: s
   },
   outbox: {
     label: 'To send', openLabel: '',
-    fields: (_i, m: Partial<OutboxMeta>) => ({ label: `To send on ${CHANNELS[m.channel ?? ''] ?? m.channel}`, urgent: false, from: m.to ?? 'Unknown', address: '', draft: m.text ?? '', openUrl: '' }),
+    fields: (_i, m: Partial<OutboxMeta>) => ({ label: `To send ${CHANNELS[m.channel ?? ''] ?? `on ${m.channel}`}`, channel: m.channel ?? '', urgent: false, from: m.to ?? 'Unknown', address: m.contact ?? '', draft: m.text ?? '', openUrl: '' }),
   },
 };
 
@@ -55,7 +59,7 @@ export function messageCard(i: Item, proposed?: string, self: string[] = OWNER_E
 /** One line of the brain's session brief. */
 export function outboxLine(i: Item): string {
   const m = JSON.parse(i.meta ?? '{}') as OutboxMeta;
-  return `- [to send] item=${i.external_id} to=${JSON.stringify(m.to)} channel=${m.channel} reason=${JSON.stringify(i.subject)} text=${JSON.stringify(m.text)}`;
+  return `- [to send] item=${i.external_id} to=${JSON.stringify(m.to)} channel=${m.channel}${m.contact ? ` contact=${JSON.stringify(m.contact)}` : ''} reason=${JSON.stringify(i.subject)} text=${JSON.stringify(m.text)}`;
 }
 
 /** Urgent first, then the one that has waited longest. */
@@ -91,16 +95,16 @@ export function makeMessages(d: { store: Store; gate: Gate; log: (m: string, f?:
     list,
     dropProposals,
     /** `jarvis-act message-add`. The same words to the same person while a card is open return that card, so a retry adds nothing. */
-    add(b: { to?: unknown; channel?: unknown; reason?: unknown; text?: unknown }): { status: number; body: unknown } {
+    add(b: { to?: unknown; channel?: unknown; contact?: unknown; reason?: unknown; text?: unknown }): { status: number; body: unknown } {
       const oneLine = (v: unknown) => typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '';
-      const to = oneLine(b.to), reason = oneLine(b.reason), channel = String(b.channel ?? ''), text = typeof b.text === 'string' ? b.text.trim() : '';
+      const to = oneLine(b.to), contact = oneLine(b.contact), reason = oneLine(b.reason), channel = String(b.channel ?? ''), text = typeof b.text === 'string' ? b.text.trim() : '';
       if (!to) return { status: 400, body: { error: '--to is required' } };
-      if (!Object.hasOwn(CHANNELS, channel)) return { status: 400, body: { error: '--channel must be slack or email' } };
+      if (!Object.hasOwn(CHANNELS, channel)) return { status: 400, body: { error: '--channel must be slack, email or text' } };
       if (!reason) return { status: 400, body: { error: '--reason is required' } };
       if (!text) return { status: 400, body: { error: '--text is required' } };
       const same = store.openOutbox().find(i => { const m = JSON.parse(i.meta ?? '{}') as OutboxMeta; return m.to === to && m.channel === channel && m.text === text; });
       if (same) return { status: 200, body: { ...messageCard(same), existing: true } };
-      const meta: OutboxMeta = { to, channel, text };
+      const meta: OutboxMeta = { to, channel, text, ...(contact ? { contact } : {}) };
       const item = store.insertItem({ source: 'outbox', external_id: `outbox:${randomUUID()}`, kind: 'outbox', subject: reason, meta: JSON.stringify(meta), status: 'spoken' })!;
       log('message card added', { item: item.external_id, channel });
       d.onChange();
