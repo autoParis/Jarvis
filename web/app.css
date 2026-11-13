@@ -272,6 +272,9 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .urgent { color: var(--bad); margin-left: 6px; }
 .msg-from { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
 .msg-to { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
+.msg-contact { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; font-size: 14px; }
+.msg-addr { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; user-select: all; }
+.msg-contact-copy, .msg-sms { font-size: 13px; padding: 4px 10px; border: 1px solid var(--control); border-radius: var(--r-s); background: var(--ground); color: var(--ink); text-decoration: none; }
 .msg-from small { font-size: 12px; font-weight: 400; color: var(--muted); }
 .draft { display: flex; flex-direction: column; gap: 6px; }
 .draft label { font-size: 13px; color: var(--muted); }

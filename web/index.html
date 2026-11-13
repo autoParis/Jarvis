@@ -176,7 +176,7 @@ import { foldHtml, stepsHtml, eventMessages, messageFoldHtml, answerFoldHtml, me
 import { makeSpeech } from '/speech.js';
 import { enterSends } from '/enterkey.js';
 import { makeScreen, feed as feedScreen, screenText } from '/shell.js';
-import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel } from '/messages.js';
+import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel, smsHref } from '/messages.js';
 import { todayButton, makeTodayPop } from '/today.js';
 import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
 import { boxAfterSend } from '/dictate.js';
@@ -545,14 +545,14 @@ async function decide(id, approve) {
 }
 
 // ---- the Messages popup: one open message, the others behind one line of text. Never mixed with the requests. ----
-let messages = [], msgCurrent = null, msgOthersOpen = false, msgDrawnKey = null, msgDrawnHtml = '', msgCopied = null, msgCopiedTimer;
+let messages = [], msgCurrent = null, msgOthersOpen = false, msgDrawnKey = null, msgDrawnHtml = '', msgCopied = null, msgCopiedTimer, msgContactCopied = null, msgContactTimer;
 const msgSending = new Set(), msgErrors = new Map(), msgEdits = new Map();
 const openMessages = () => messages.filter(m => !msgSending.has(m.id));
 function renderMessages() {
   const list = openMessages();
   const m = list.find(x => x.id === msgCurrent) ?? list[0];
   msgCurrent = m?.id ?? null;
-  const html = m ? messageHeadHtml(m, Date.now(), msgErrors.get(m.id)) : '<p class="pop-empty">No message waits on you.</p>';
+  const html = m ? messageHeadHtml(m, Date.now(), msgErrors.get(m.id), msgContactCopied === m.id) : '<p class="pop-empty">No message waits on you.</p>';
   for (const el of [$('msg-body').querySelector('.draft'), $('msg-body').querySelector('.pair')]) el.hidden = !m;
   if (!m) $('msg-open').hidden = true;
   const card = $('msg-card'), box = $('msg-draft');
@@ -623,6 +623,22 @@ async function copyDraft(id, text) {
   }
   renderMessages();
 }
+// The contact row: Copy copies only the phone number or address. Text opens Messages with the words in the box now.
+$('msg-card').addEventListener('click', async e => {
+  const m = messages.find(x => x.id === msgCurrent);
+  if (!m) return;
+  const sms = e.target.closest('.msg-sms');
+  if (sms) { sms.href = smsHref(m.address, $('msg-draft').value.trim()) ?? sms.href; return; }
+  if (!e.target.closest('.msg-contact-copy')) return;
+  msgErrors.delete(m.id);
+  try {
+    await navigator.clipboard.writeText(m.address);
+    msgContactCopied = m.id;
+    clearTimeout(msgContactTimer);
+    msgContactTimer = setTimeout(() => { msgContactCopied = null; renderMessages(); }, 1500);
+  } catch { msgErrors.set(m.id, 'Could not copy. Press and hold the number to copy it by hand.'); }
+  renderMessages();
+});
 $('msg-send').onclick = () => {
   const box = $('msg-draft'), text = box.value.trim();
   if (!msgCurrent) return;

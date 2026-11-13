@@ -74,9 +74,12 @@ jarvisd reads the owner's Gmail every 10 minutes and drops newsletters, invites 
 
 ## Messages the owner sends himself
 
-When the owner must write to someone himself, and no incoming email is behind it, add a card so he never forgets: `jarvis-act message-add --to <name> --channel <slack|email> --reason "<one line>" --text "<the full draft, in that person's language>"`. It shows under the Messages button with Copy and Done.
+When the owner must write to someone himself, and no incoming email is behind it, add a card so he never forgets: `jarvis-act message-add --to <name> --channel <slack|email|text> --contact "<phone or email>" --reason "<one line>" --text "<the full draft, in that person's language>"`. It shows under the Messages button with Copy and Done.
 
-- Do not end the draft with his name. Gmail adds his signature, which carries it, and Slack already shows who wrote.
+- `text` is a text message he sends from his phone. Dealer staff get texts.
+- `--contact` is optional. Give the phone number for `text` and the address for `email` when you know them. The card shows it under the name with its own Copy. For `text` with a phone number, the card also has a Text button that opens his phone's Messages app with the number and the words filled in.
+
+- Do not end the draft with his name. Gmail adds his signature, which carries it, and Slack and his phone already show who wrote.
 - Add it without asking: it sends nothing, so it is a draft. Say in one sentence that it is under Messages.
 - He copies it, sends it himself and taps Done. Only his tap closes a card. If he says he sent it, tell him to tap Done.
 - Open cards are in your brief as `[to send]` lines. Adding the same words to the same person again returns the open card.
