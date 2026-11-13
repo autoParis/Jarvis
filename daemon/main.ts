@@ -25,7 +25,7 @@ import { makeTasks, execRun, tasksRoute } from './tasks.ts';
 import { homedir } from 'node:os';
 import { githubRepo, type Work } from './work.ts';
 import { makeRequests, backfillRequests, requestsRoute } from './requests.ts';
-import { workRoute, hiddenIds, makePaneWatcher, steerWorker } from './workroutes.ts';
+import { workRoute, completedRows, makePaneWatcher, steerWorker } from './workroutes.ts';
 import { chatLineAt } from './transcript.ts';
 import { listenConfig } from './listen.ts';
 import { askCard, askRoute, auditEntries, type AskCard } from './asks.ts';
@@ -425,7 +425,7 @@ function repos(): { name: string; path: string }[] {
 }
 
 // Routes that act as the owner. They need the secret of an open app page (access.ts).
-const AS_OWNER = new Set(['/api/ask/answer', '/api/requests/hide', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/approval/undo', '/api/work/side-chat', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/hide', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled', '/api/tasks/save', '/api/tasks/hide', '/api/tasks/ask-fix']);
+const AS_OWNER = new Set(['/api/ask/answer', '/api/send', '/api/voice', '/api/upload', '/api/approval', '/api/approval/undo', '/api/work/side-chat', '/api/work/open', '/api/work/desktop', '/api/work/phone', '/api/work/steer', '/api/work/stop', '/api/work/complete', '/api/work/remove', '/api/today/add', '/api/today/act', '/api/today/voice', '/api/migration/add', '/api/migration/act', '/api/migration/dealer', '/api/migration/toast-close', '/api/message/send', '/api/message/handled', '/api/tasks/save', '/api/tasks/hide', '/api/tasks/ask-fix']);
 const ui = makeUiSessions();
 
 // ---- Project terminals from the new-session picker: tmux sessions, Touch ID on the Mac, the phone checks on the phone (terminal.ts, termgate.ts) ----
@@ -540,7 +540,7 @@ http.createServer(async (req, res) => {
           : t.role === 'jarvis' ? { ...t, clips: spokenSentences(t.text).length }
           : t.reply_to ? { ...t, quote: quoteOf(store.turn(t.reply_to)) } : t);
       const secret = ui.open();
-      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), hidden: hiddenIds(store), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), stories: stories.view(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'history', turns: history, busy: brain.busy, approvals: store.pendingApprovals(), work: mergedWork(), completed: completedRows(store), requests: requests.list(), asks: store.recentAsks().map(cardOf).filter(Boolean), audit: auditEntries(store, cardOf, PRESSED, 60), messages: messages.list(), today: today.list(), stories: stories.view(), migration: migration.state(), brain: brainInfo(), session: secret })}\n\n`);
       res.write(`data: ${JSON.stringify(versionEvent(WEB_VERSION))}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25_000);

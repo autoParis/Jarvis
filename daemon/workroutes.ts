@@ -13,11 +13,41 @@ import { spokenSentences } from './voice.ts';
 import type { RouteResult, Body } from './route.ts';
 import { withReadLine } from '../web/compose.js';
 
-// The work list's routes: the list, hiding a row, a "Worked for" row's steps, the transcript pane, and the row buttons
+// The work list's routes: the list, the × on a row, a "Worked for" row's steps, the transcript pane, and the row buttons
 // (Side chat, the steer box, Stop, Open, Desktop, Continue on phone). main.ts tries workRoute from its route table.
+//
+// The × (2026-11-12) moves a row to Completed, the same as a finished worker, and it leaves with Completed's normal
+// purge, a day later. No worker stops.
+// - A request is closed in the requests table (requests.ts): status done, and the poller no longer changes it.
+// - A row is kept in `workCompleted` with the time of the press. web/worklist.js keeps it out of its group from then on,
+//   and shows it in Completed for a day when no request stands for it there.
+// Before this, the × only hid a row, in `workHidden`, for ever. Those rows move to Completed once, at the first read.
 
-/** Rows the owner hid from the app. Hiding only changes the view: no worker is stopped or deleted. */
-export const hiddenIds = (store: Pick<Store, 'getState'>): string[] => JSON.parse(store.getState('workHidden') ?? '[]');
+export const COMPLETED_KEY = 'workCompleted';
+const HIDDEN_KEY = 'workHidden';
+/** A row removed from Completed by hand keeps this time, so it shows nowhere and stays out of its group. */
+export const REMOVED_AT = new Date(0).toISOString();
+/** The newest this many are kept, so the list cannot grow forever. */
+const KEEP = 500;
+
+/** Row id to the time the owner pressed ×, oldest first. Moves the rows hidden before 2026-11-12 in, once. */
+export function completedRows(store: Pick<Store, 'getState' | 'setState'>, now = Date.now()): Record<string, string> {
+  const saved = store.getState(COMPLETED_KEY);
+  if (saved !== undefined) return Object.fromEntries(parseList(saved));
+  const hidden = parseList(store.getState(HIDDEN_KEY) ?? '[]').filter((id): id is string => typeof id === 'string');
+  const at = new Date(now).toISOString();
+  return saveCompleted(store, hidden.map(id => [id, at]));
+}
+
+function parseList(text: string): any[] {
+  try { const v = JSON.parse(text); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
+function saveCompleted(store: Pick<Store, 'setState'>, pairs: [string, string][]): Record<string, string> {
+  const kept = pairs.slice(-KEEP);
+  store.setState(COMPLETED_KEY, JSON.stringify(kept));
+  return Object.fromEntries(kept);
+}
 
 /**
  * A native pane that was read is watched: a write to its transcript broadcasts a `pane` event, and the open page reads at
@@ -54,7 +84,7 @@ export type WorkCtx = {
   native: WorkNative;
   store: Store;
   gate: Pick<Gate, 'pressed' | 'recorded' | 'propose'>;
-  requests: Pick<Requests, 'read'>;
+  requests: Pick<Requests, 'read' | 'close' | 'hide'>;
   log: Log;
   /** The merged work list: native rows and project terminals. */
   work: () => Work;
@@ -72,6 +102,8 @@ export type WorkCtx = {
   /** Transcript files of finished requests, found once. */
   chatFiles: Map<string, string>;
   readLog: () => string;
+  /** The clock for the × press time. The default is Date.now. */
+  now?: () => number;
 };
 
 /**
@@ -87,7 +119,7 @@ export function withClips<R extends Read>(r: R): R {
   return r;
 }
 
-export type SteerCtx = Pick<WorkCtx, 'native' | 'store' | 'work' | 'askChanged' | 'killed' | 'wake' | 'publish' | 'sync'>;
+export type SteerCtx = Pick<WorkCtx, 'native' | 'store' | 'work' | 'askChanged' | 'killed' | 'wake' | 'publish' | 'sync' | 'broadcast'>;
 
 /**
  * One message from the owner to a native worker: the pane's box (/api/work/steer) and its mic (/api/voice with a
@@ -103,6 +135,10 @@ export async function steerWorker(o: SteerCtx, id: unknown, text: unknown): Prom
   if (!said) return { status: 400, body: { error: 'Write a message first.' } };
   const r = await o.native.reply(row.native.id, withReadLine(said), 'owner');
   if (!r.ok) return { status: 502, body: { error: r.error } };
+  // A row the owner moved to Completed with × comes back with his own message, and its request follows its worker again.
+  o.store.reopenRequest(row.id);
+  const completed = completedRows(o.store);
+  if (Object.hasOwn(completed, row.id)) o.broadcast({ type: 'completed', completed: saveCompleted(o.store, Object.entries(completed).filter(([id]) => id !== row.id)) });
   const a = o.store.addApproval({ action: 'session-type', args: JSON.stringify({ worker: row.id, text: said }), say: `Message to "${row.title.slice(0, 60)}"` });
   o.store.decide(a.id, 'approved', 'button', said); o.store.finishApproval(a.id, 'done', 'sent');
   const open = o.store.openItems().filter(i => i.source === 'native' && i.dispatch_id === row.id);
@@ -114,19 +150,25 @@ export async function steerWorker(o: SteerCtx, id: unknown, text: unknown): Prom
 }
 
 export async function workRoute(o: WorkCtx, method: string, url: string, body: Body, query: URLSearchParams): Promise<RouteResult | undefined> {
-  if (method === 'GET' && url === '/api/work') return { status: 200, body: { ...o.work(), hidden: hiddenIds(o.store), repos: o.repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL }, owner: { called: OWNER, cap: OWNER_CAP } } };
-  // Hide or show a row in the app. Only the list of hidden ids changes.
-  if (method === 'POST' && url === '/api/work/hide') {
-    const { id, hidden } = await body();
-    if (typeof id !== 'string' || !id) return { status: 400, body: { error: 'id is required' } };
-    const ids = new Set(hiddenIds(o.store));
-    ids.delete(id);
-    if (hidden !== false) ids.add(id);
-    // The newest 500 are kept, so the list cannot grow forever.
-    const next = [...ids].slice(-500);
-    o.store.setState('workHidden', JSON.stringify(next));
-    o.broadcast({ type: 'hidden', hidden: next });
-    return { status: 200, body: { hidden: next } };
+  if (method === 'GET' && url === '/api/work') return { status: 200, body: { ...o.work(), completed: completedRows(o.store), repos: o.repos(), product: { key: PRODUCT_KEY, label: PRODUCT_LABEL }, owner: { called: OWNER, cap: OWNER_CAP } } };
+  // The ×: `complete` moves a row and its request to Completed, `remove` takes them out of Completed now. Each takes { row?, request? }.
+  if (method === 'POST' && (url === '/api/work/complete' || url === '/api/work/remove')) {
+    const b = await body();
+    const row = typeof b?.row === 'string' && b.row ? b.row as string : undefined;
+    const request = Number.isInteger(b?.request) && b.request > 0 ? b.request as number : undefined;
+    if (!row && !request) return { status: 400, body: { error: 'row or request is required' } };
+    const removing = url === '/api/work/remove';
+    // A request already closed or gone is not an error when its row is moved too: the row is what the owner saw.
+    const reqOk = request ? removing ? o.requests.hide(request) : o.requests.close(request) : false;
+    let completed = completedRows(o.store, o.now?.());
+    if (row) {
+      const at = removing ? REMOVED_AT : completed[row] ?? new Date(o.now?.() ?? Date.now()).toISOString();
+      completed = saveCompleted(o.store, [...Object.entries(completed).filter(([id]) => id !== row), [row, at]]);
+      o.log(removing ? 'work row removed from Completed' : 'work row moved to Completed', { row, ...(request ? { request } : {}) });
+      o.broadcast({ type: 'completed', completed });
+    }
+    if (!row && !reqOk) return { status: 404, body: { error: 'It is not in the list any more.' } };
+    return { status: 200, body: { completed } };
   }
   // One "Worked for" row's steps, read when the owner opens it.
   const fold = method === 'GET' && url.match(/^\/api\/fold\/(\d+)$/);

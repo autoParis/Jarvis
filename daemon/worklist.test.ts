@@ -5,17 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from './store.ts';
 import { auditEntries, askCard } from './asks.ts';
-import { makeRequests, requestDetail } from './requests.ts';
-import { mergeWork, workListHtml, requestDetailHtml, groupOf, groupOpen, doneLine, approvalTag, approvalDetail, approvalButtons, approvalOutcomeText } from '../web/worklist.js';
+import { makeRequests, requestDetail, DONE_KEEP_MS } from './requests.ts';
+import { mergeWork, workListHtml, COMPLETED_KEEP_MS, requestDetailHtml, groupOf, groupOpen, doneLine, approvalTag, approvalDetail, approvalButtons, approvalOutcomeText } from '../web/worklist.js';
 import { requestListHtml } from '../web/requestlist.js';
 
 const NOW = Date.parse('2026-11-02T15:00:00Z');
 const at = (min = 5) => new Date(NOW - min * 60_000).toISOString();
 const row = (id: string, extra: object = {}) => ({ id, kind: 'worker', dispatch: id, title: `Row ${id}`, group: 'other', state: 'working', steer: 'auto', ...extra });
 const req = (id: number, status: string, extra: object = {}) => ({ id, title: `Req ${id}`, words: null, status, at: at(), startedAt: at(60), ...extra });
-const none = new Set<string>();
+const none: Record<string, string> = {};
 const itemsOf = (m: any, g: string) => m.groups.find((x: any) => x.key === g).items;
-const ctx = { hidden: none, shut: new Set<string>(), closedWaiting: new Set<string>(), folders: {}, now: NOW };
+const ctx = { shut: new Set<string>(), closedWaiting: new Set<string>(), folders: {}, now: NOW };
 
 test('a request and its row are one item, with the request\'s title, status and age', () => {
   const m = mergeWork([row('a', { group: 'story' })], [req(1, 'working', { row: 'a', title: '#1 The ask' })], none);
@@ -23,16 +23,23 @@ test('a request and its row are one item, with the request\'s title, status and 
   const html = workListHtml(m, ctx);
   assert.match(html, /#1 The ask/);
   assert.doesNotMatch(html, /Row a/);
-  assert.match(html, /data-hide-row="a" data-hide="1"/, 'Hide takes both off');
+  assert.match(html, /data-complete data-request="1" data-row-id="a"/, 'the × moves both to Completed');
 });
 
-test('a working, waiting or failed request with no row still shows, in the group its title implies, with status and Hide', () => {
+test('nothing in the work list hides a row any more: no Show hidden, no ↺', () => {
+  const out = workListHtml(mergeWork([row('a'), row('b')], [], { b: at(1) }, NOW), { ...ctx, folders: { done: true } });
+  assert.doesNotMatch(out, /data-unhide|showhidden|↺|hidden-row|Hide from this list/);
+  const page = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /hiddenCount|\/api\/work\/hide|\/api\/requests\/hide|type === 'hidden'/);
+});
+
+test('a working, waiting or failed request with no row still shows, in the group its title implies, with status and its ×', () => {
   const m = mergeWork([], [req(1, 'working', { title: '#4 Story' }), req(2, 'waiting', { title: 'Babysit PR #9' }), req(3, 'failed', { title: 'One-off' })], none);
   assert.equal(itemsOf(m, 'story')[0].req.id, 1);
   assert.equal(itemsOf(m, 'babysit')[0].req.id, 2);
   assert.equal(itemsOf(m, 'other')[0].req.id, 3);
   const html = workListHtml(m, ctx);
-  for (const id of [1, 2, 3]) assert.match(html, new RegExp(`data-hide="${id}"`));
+  for (const id of [1, 2, 3]) assert.match(html, new RegExp(`data-complete data-request="${id}"`));
   assert.match(html, /Working/);
   assert.match(html, /Waiting on you/);
   assert.match(html, /g-failed/);
@@ -52,18 +59,32 @@ test('two requests on one row: the first takes the row and the second keeps its 
   assert.match(workListHtml(m, ctx), /data-id="a"[^]*data-id="a"/);
 });
 
-test('a row the owner hid stays hidden, but its open request does not vanish', () => {
-  const m = mergeWork([row('a')], [req(1, 'waiting', { row: 'a' })], new Set(['a']));
-  assert.equal(m.hiddenCount, 1);
+test('a moved row leaves its group for good, but an open request on it does not vanish', () => {
+  const m = mergeWork([row('a')], [req(1, 'waiting', { row: 'a' })], { a: at(1) }, NOW);
   const [only] = itemsOf(m, 'other');
   assert.equal(only.row, undefined);
   assert.equal(only.req.id, 1);
+  assert.equal(m.done.length, 0, 'the open request stands for the row, so the row is not in Completed twice');
 });
 
-test('a plain row with no request stays, and hidden rows come back with Show hidden', () => {
-  const hidden = new Set(['b']);
-  assert.deepEqual(itemsOf(mergeWork([row('a'), row('b')], [], hidden), 'other').map((i: any) => i.row.id), ['a']);
-  assert.deepEqual(itemsOf(mergeWork([row('a'), row('b')], [], hidden, true), 'other').map((i: any) => i.row.id), ['a', 'b']);
+test('a moved row with no request shows in Completed for a day from the press, then nowhere', () => {
+  const rows = [row('a', { title: 'Babysit PR #12', state: 'idle' }), row('b')];
+  const fresh = mergeWork(rows, [], { a: at(10) }, NOW);
+  assert.deepEqual(itemsOf(fresh, 'other').map((i: any) => i.row.id), ['b'], 'a moved working row leaves its group too');
+  assert.deepEqual(fresh.done.map((r: any) => [r.row, r.status, r.title]), [['a', 'done', 'Babysit PR #12']]);
+  const html = workListHtml(fresh, { ...ctx, folders: { done: true } });
+  assert.match(html, /Completed<span class="n">1<\/span>/);
+  assert.match(html, /data-row="a"/, 'it still opens its conversation');
+  assert.match(html, /class="hide" data-remove data-row-id="a" aria-label="Remove Babysit PR #12 from Completed"/);
+  const later = mergeWork(rows, [], { a: at(24 * 60 + 1) }, NOW);
+  assert.equal(later.done.length, 0, 'gone from Completed after a day');
+  assert.deepEqual(itemsOf(later, 'other').map((i: any) => i.row.id), ['b'], 'and it does not come back in its group');
+  assert.equal(COMPLETED_KEEP_MS, DONE_KEEP_MS, 'the same purge as a done request');
+});
+
+test('the × on a working row whose request waits for merge moves that request to Completed too', () => {
+  const m = mergeWork([row('a', { state: 'working' })], [req(1, 'review', { row: 'a' })], none, NOW);
+  assert.match(workListHtml(m, ctx), /data-complete data-request="1" data-row-id="a"/);
 });
 
 test('a finished request moves to its folder and takes an idle row with it; a row still active stays too', () => {
@@ -113,8 +134,9 @@ test('a Waiting for merge row starts with the story number, linked to the PR; wi
   assert.match(html, />PR #8<\/a>/);
 });
 
-test('Hide on a folder row also hides its conversation row, or the row would come back in its group', () => {
-  assert.match(requestListHtml([req(1, 'review', { row: 'a' })], { review: true }, NOW), /data-hide="1" data-hide-row="a"/);
+test('the × on a folder row names its conversation row too, or the row would come back in its group', () => {
+  assert.match(requestListHtml([req(1, 'review', { row: 'a' })], { review: true }, NOW), /data-complete data-request="1" data-row-id="a"/, 'Waiting for merge moves to Completed');
+  assert.match(requestListHtml([req(1, 'done', { row: 'a' })], { done: true }, NOW), /data-remove data-request="1" data-row-id="a"/, 'Completed removes now');
 });
 
 test('the done line counts what finished today and what waits for merge', () => {
@@ -197,11 +219,11 @@ test('a row with a conversation opens that conversation and shows no closed note
   assert.doesNotMatch(html, /req:1|Conversation closed/);
 });
 
-test('a folder row with no conversation opens its record, and its × still hides it', () => {
+test('a folder row with no conversation opens its record, and its × still removes it', () => {
   const html = requestListHtml([req(1, 'done')], { done: true }, NOW);
   assert.match(html, /data-row="req:1"/);
   assert.match(html, /Conversation closed/);
-  assert.match(html, /data-hide="1"/);
+  assert.match(html, /data-remove data-request="1"/);
   assert.match(requestListHtml([req(2, 'done', { row: 'a' })], { done: true }, NOW), /data-row="a"/);
 });
 
@@ -295,14 +317,15 @@ test('a worker with no request that reported DONE goes to Completed once stopped
   assert.match(html, /Completed<span class="n">4<\/span>/);
   const entry = /<div class="rrow done" data-row="n:stopped"[^]*?<\/div><\/div>|<div class="rrow done" data-row="n:stopped"[^]*?×<\/button>/.exec(html)?.[0] ?? '';
   assert.match(entry, /side-chat-new-in-evalauto-nextjs-524/, 'it opens its chat from Completed');
-  assert.match(entry, /data-hide-row="n:stopped"/);
-  assert.doesNotMatch(entry, /data-hide=/, 'no request to hide, only the row');
+  assert.match(entry, /data-remove data-row-id="n:stopped"/, 'its × removes it from Completed now');
+  assert.doesNotMatch(entry, /data-request=/, 'no request, only the row');
 });
 
-test('a worker with no request is in Completed once, and a hidden one is not there', () => {
+test('a worker with no request is in Completed once, and one removed from Completed is not there', () => {
   const r = row('n:a', { state: 'idle', endedAt: at(10), native: { id: 'a', state: 'done', outcome: 'done' } });
   assert.equal(mergeWork([r], [], none).done.length, 1);
   assert.equal(mergeWork([r], [req(1, 'done', { row: 'n:a' })], none).done.length, 1, 'its request is the entry');
-  assert.equal(mergeWork([r], [], new Set(['n:a'])).done.length, 0);
+  assert.equal(mergeWork([r], [], { 'n:a': at(1) }, NOW).done.length, 1, 'moved with × it is still one entry');
+  assert.equal(mergeWork([r], [], { 'n:a': new Date(0).toISOString() }, NOW).done.length, 0, 'removed from Completed');
   assert.equal(mergeWork([r], [req(1, 'working', { row: 'n:a' })], none).done.length, 0, 'an open request keeps it in its group');
 });

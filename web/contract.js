@@ -34,7 +34,7 @@ export const ACTIONS = {
 export const actionsWith = prop => new Set(Object.keys(ACTIONS).filter(a => ACTIONS[a][prop]));
 
 /** The `type` of each message on the live-update stream (/api/events) from jarvisd to the page. */
-export const EVENTS = ['history', 'turn', 'event', 'ask', 'working', 'fold', 'approval', 'pane', 'work', 'hidden', 'requests',
+export const EVENTS = ['history', 'turn', 'event', 'ask', 'working', 'fold', 'approval', 'pane', 'work', 'completed', 'requests',
   'messages', 'today', 'stories', 'migration', 'brain', 'audio', 'version'];
 
 /** The status of an approval (approvals.status). */

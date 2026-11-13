@@ -43,14 +43,11 @@ test('push: the key, a subscribe that checks its shape, an unsubscribe, and a te
   assert.equal(await pushRoute(o, 'GET', '/api/requests', none), undefined, 'another concept\'s URL is not answered');
 });
 
-test('requests: the list, hide, and a report that is not stored', async () => {
+test('requests: the list, and a report that is not stored; the × is a work route now', async () => {
   const store = openStore(':memory:');
-  const hidden: number[] = [];
-  const requests = { list: () => [{ id: 3 }] as any, hide: (id: number) => { hidden.push(id); return id === 3; } };
+  const requests = { list: () => [{ id: 3 }] as any };
   assert.deepEqual(await requestsRoute({ requests, store }, 'GET', '/api/requests', none), { status: 200, body: [{ id: 3 }] });
-  assert.equal((await requestsRoute({ requests, store }, 'POST', '/api/requests/hide', body({ id: '3' })))?.status, 204);
-  assert.equal((await requestsRoute({ requests, store }, 'POST', '/api/requests/hide', body({ id: 4 })))?.status, 404);
-  assert.deepEqual(hidden, [3, 4]);
+  assert.equal(await requestsRoute({ requests, store }, 'POST', '/api/requests/hide', none), undefined, 'the × is /api/work/complete and /api/work/remove');
   assert.equal((await requestsRoute({ requests, store }, 'GET', '/api/requests/9/report', none))?.status, 404);
   assert.equal(await requestsRoute({ requests, store }, 'GET', '/api/requests/x/report', none), undefined);
 });
