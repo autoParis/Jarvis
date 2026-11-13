@@ -425,7 +425,20 @@ export function makeNative(o: {
    * no ask), and no report came since. An open ask shows as the ask instead (rows).
    */
   const waitsOnOwner = (w: NativeWorker) => w.state === 'working' && !w.outcome && !!w.report_at
-    && store.getState(ownerWaitKey(w.id)) === w.report_at;
+    && store.getState(ownerWaitKey(w.id)) === w.report_at && !answeredSince(w.id, w.report_at);
+  /**
+   * True when the worker got words after its report at `reportAt`: a reply went in (a card tap, jarvis-native reply, the
+   * steer box: all go through reply(), which records a reply item) or one of its asks was marked answered. Its WAITING
+   * line is then over until it writes a new report. Worker d2cd7334 (2026-11-13): answered at 18:58Z, working at 19:02Z,
+   * and its row and the check still said it waited on the owner, from its 18:12Z WAITING report.
+   */
+  const answeredSince = (id: string, reportAt: string): boolean => {
+    // Item times are database times, 'YYYY-MM-DD HH:MM:SS' in UTC; report_at is ISO.
+    const at = reportAt.replace('T', ' ').replace(/\.\d+Z?$|Z$/, '');
+    return !!store.db.prepare(`SELECT 1 FROM items WHERE source = 'native' AND dispatch_id = ?
+      AND ((kind = 'reply' AND created_at > ?) OR (kind IN ('question', 'escalation') AND status = 'answered' AND COALESCE(updated_at, created_at) > ?)) LIMIT 1`)
+      .get(`${ROW_PREFIX}${id}`, at, at);
+  };
   /**
    * When a stuck worker last did anything, or undefined when it is not stuck. Stuck: its task is unfinished, it is not a
    * conversation (a side chat, a phone session), no ask or permission card of its own waits on the owner, and nothing
