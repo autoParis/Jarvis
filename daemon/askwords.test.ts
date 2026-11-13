@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { askCodeWords, codeWords, codeWordsRefusal } from './workercontract.ts';
+import { askCodeWords, codeWords, codeWordsRefusal, REPORTS_DIR } from './workercontract.ts';
 
 // Real worker asks from data/jarvis.db (items 840, 843 and 847, 2026-11-13), and a plain rewrite of each.
 const ASK_5600 = `STORY: #5600 widget held-listing refusal reported as failure
@@ -24,7 +24,7 @@ OPTIONS:
 const ASK_5670 = `STORY: #5670 too few own photos warning
 WHERE: The issue's proposal 3 says a model with one shared photo and few own photos attracts duplicates. It has no acceptance criterion.
 QUESTION: Should this PR also raise or warn on min_photos.new, or should it go to a new issue?
-CONTEXT: Desjardins Subaru has min_photos.new = 1, so one render can publish alone. The issue calls it a product decision. In the account's stock, 159 of 219 units carry a manufacturer or render photo (prod-sim, 2026-11-13).
+CONTEXT: Dealer Nine has min_photos.new = 1, so one render can publish alone. The issue calls it a product decision. In the account's stock, 159 of 219 units carry a manufacturer or render photo (prod-sim, 2026-11-13).
 OPTIONS:
 - File a P3 issue because no criterion asks for it
 - Warn the seller here because it widens this PR`;
@@ -32,7 +32,7 @@ OPTIONS:
 const PLAIN_5670 = `STORY: #5670 too few own photos warning
 WHERE: The issue says a car with one stock photo and few real photos gets flagged as a duplicate. No test in the issue asks for a fix.
 QUESTION: Should this PR warn the seller when a new car has too few real photos, or should a new issue handle it?
-CONTEXT: Desjardins Subaru lets a new car publish with only 1 photo, so one stock render can go live alone. In its stock, 159 of 219 cars have a manufacturer or render photo. Stock numbers R1831, R1832 and R1933 are examples. Le concessionnaire a été prévenu.
+CONTEXT: Dealer Nine lets a new car publish with only 1 photo, so one stock render can go live alone. In its stock, 159 of 219 cars have a manufacturer or render photo. Stock numbers R1831, R1832 and R1933 are examples. Le concessionnaire a été prévenu.
 OPTIONS:
 - File a P3 issue because no test in the issue asks for it
 - Warn the seller here because it makes this PR bigger`;
@@ -79,7 +79,7 @@ test('plain words, numbers, links and names pass', () => {
     'The iPhone app, Node.js and the macOS build, e.g. the Chrome check.',
     'Sold in DMS; status: Vendu, 159 of 219 units (2026-11-13).',
     'Is this a problem? Yes, and a dealer can fix it.',
-    'The plan is in /Users/simonparis/Repos/jarvis/data/reports/4812-seller-template-design.md.',
+    `The plan is in ${REPORTS_DIR}/4812-seller-template-design.md.`,
   ]) assert.deepEqual(codeWords(text), [], text);
 });
 
