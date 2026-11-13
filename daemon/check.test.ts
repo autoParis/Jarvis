@@ -350,6 +350,20 @@ test('a worker that waits on the owner with no open ask is one finding after 30 
   assert.equal(wakes.length, 1, 'not again within 2 hours');
 });
 
+test('a wait on the owner ends with the answer: no finding once the row lost its WAITING report', async () => {
+  // Workers d2cd7334 and f3102c57 (2026-11-13): the finding came after Simon had answered. native.ts now drops waitingOn
+  // from the row when a reply or an answered ask came after the WAITING report (native.test.ts covers that row shape).
+  const since = new Date(DAY - OWNER_WAIT_MS).toISOString();
+  const native = { id: 'd2cd', sessionId: null, name: '5548-muse-seller-lines-697', state: 'working' as const, waitingFor: null, outcome: null };
+  const rows = [worker('n:d2cd', { state: 'waiting', native: { ...native, waitingOn: { text: 'Simon picks the seller line', since } } })];
+  const { check, wakes, tick } = setup(rows);
+  await check.tick();
+  assert.equal(wakes.length, 1, 'waiting 30 minutes with no open ask is a finding');
+  rows[0] = worker('n:d2cd', { state: 'working', native });
+  for (let i = 0; i < 24; i++) { tick(CHECK_MS); await check.tick(); }
+  assert.equal(wakes.length, 1, 'no finding after the answer, and none at the 2-hour repeat');
+});
+
 test('a wait on the owner is told again every 2 hours in check hours, and once at 8 AM after the night', async () => {
   // Waiting since 9:00 AM Eastern. The finding comes at 9:30, 11:30, 1:30 and 3:30, then at 8 AM the next day.
   const since = at('2026-11-02T14:00:00Z');

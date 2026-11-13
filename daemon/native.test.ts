@@ -1054,6 +1054,37 @@ test('a WAITING line that only the owner ends shows Waiting on you with its text
   assert.equal(s.native.rows()[0].native?.waitingOn, undefined);
 });
 
+test('an answered ask or a delivered reply ends a WAITING line until the worker writes a new report', async () => {
+  // Worker d2cd7334 (2026-11-13): its ask was answered at 18:58Z and it worked again at 19:02Z, but its row, the Stories
+  // count and the check still said it waited on the owner, from its 18:12Z WAITING report.
+  // Its terminal is alive, so a reply goes straight in with no resume.
+  const s = setupInteractive(undefined, { alivePgid: () => true });
+  let t = 1_800_000_000_000;
+  const later = (ms: number) => { t += ms; s.tick(ms); };
+  // The database stamps items with the real clock: put them on the test's clock.
+  const stamp = (ext: string) => { const at = new Date(t).toISOString().replace('T', ' ').slice(0, 19); s.store.db.prepare('UPDATE items SET created_at = ?, updated_at = ? WHERE external_id = ?').run(at, at, ext); };
+  const w = await s.native.start({ name: '5548-muse-seller-lines-697', cwd: '/repo', brief: 'b', interactive: true });
+  const waiting = () => { const r = s.native.rows()[0]; return { state: r.state, note: r.note, waitingOn: !!r.native?.waitingOn }; };
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: Simon picks the seller line.' });
+  assert.deepEqual(waiting(), { state: 'waiting', note: 'Simon picks the seller line.', waitingOn: true });
+  // An ask raised and answered after the WAITING report ends the wait.
+  later(60_000);
+  s.store.insertItem({ source: 'native', external_id: `ask:${w.id}:1`, kind: 'question', dispatch_id: `${ROW_PREFIX}${w.id}`, subject: 'Which line?', body: 'A or B?', status: 'spoken' });
+  s.store.markItem(`ask:${w.id}:1`, 'answered', 'A');
+  stamp(`ask:${w.id}:1`);
+  assert.deepEqual(waiting(), { state: 'working', note: undefined, waitingOn: false });
+  // A new WAITING report after that answer waits again: the answer is older than it.
+  later(60_000);
+  s.native.stopHook({ session_id: ISESSION, last_assistant_message: 'WAITING: Simon signs in to Facebook.' });
+  assert.deepEqual(waiting(), { state: 'waiting', note: 'Simon signs in to Facebook.', waitingOn: true });
+  // A reply delivered to the worker (a card tap, jarvis-native reply, the steer box) ends it too.
+  later(60_000);
+  assert.deepEqual(await s.native.reply(w.id, 'Signed in, go ahead', 'owner'), { ok: true });
+  const reply = s.store.db.prepare(`SELECT external_id FROM items WHERE kind = 'reply' AND dispatch_id = ?`).get(`${ROW_PREFIX}${w.id}`) as { external_id: string };
+  stamp(reply.external_id);
+  assert.deepEqual(waiting(), { state: 'working', note: undefined, waitingOn: false });
+});
+
 test('a follow-up that ends FAILED after DONE keeps the story done with its DONE report, and keeps the follow-up beside it', async () => {
   // Worker fe594be3 (4967), 2026-11-11 12:24Z: done with PR #5418, then a steer to change the verdict ended FAILED.
   const s = setupInteractive();
