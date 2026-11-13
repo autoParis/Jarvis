@@ -20,7 +20,7 @@ const sends = () => existsSync(calls) ? readFileSync(calls, 'utf8').trim().split
 
 const { openStore } = await import('./store.ts');
 const { makeGate } = await import('./gate.ts');
-const { makeMessages, messageCard, messageOrder, emailPush, outboxLine } = await import('./messages.ts');
+const { makeMessages, messageCard, messageOrder, emailPush, outboxLine, messagesRoute } = await import('./messages.ts');
 const { makeCheck } = await import('./check.ts');
 const { messageButton, messageHeadHtml, messageControls, otherMessagesLabel, smsHref } = await import('../web/messages.js');
 const { swipeAction } = await import('../web/swipe.js');
@@ -486,4 +486,36 @@ test('the page copies only the contact, and Text takes the words in the draft bo
   assert.match(page, /navigator\.clipboard\.writeText\(m\.address\)/);
   assert.match(page, /sms\.href = smsHref\(m\.address, \$\('msg-draft'\)\.value\.trim\(\)\)/);
   assert.match(page, /copyOnly\) return copyDraft\(msgCurrent, text\)/, 'the draft Copy still copies the draft');
+});
+
+test('message-done: refused without the owner\'s message in this turn, refused for an email card, and closes an outbox card with the brain, the reason and his words on it', async () => {
+  const { s, m } = setup([['a']]);
+  const card = m.add({ to: 'Sam', channel: 'text', reason: 'Price follow-up', text: 'The car is ready.' }).body as { id: string };
+  const twin = m.add({ to: 'Sam', channel: 'slack', reason: 'Price follow-up', text: 'The car is ready.' }).body as { id: string };
+  let fromOwner = false;
+  const told: string[] = [];
+  const route = (id: string, reason?: string) => messagesRoute({ messages: m, approved: () => {}, handled: x => told.push(x) }, 'POST', '/api/internal/messages/done',
+    async () => ({ id, reason }), { fromOwner: () => fromOwner, ownerWords: () => ['Close the duplicate card for Sam.'] });
+
+  const noTurn = await route(twin.id, 'duplicate');
+  assert.equal(noTurn?.status, 409);
+  assert.match((noTurn?.body as any).error, /in this turn/);
+  assert.equal(s.item(twin.id)?.status, 'spoken', 'without his message the card stays open');
+
+  fromOwner = true;
+  const email = await route('gmail:a', 'duplicate');
+  assert.equal(email?.status, 409);
+  assert.match((email?.body as any).error, /only outbox cards/);
+  assert.equal(s.item('gmail:a')?.status, 'spoken', 'an email card stays open');
+
+  const done = await route(twin.id, 'duplicate');
+  assert.equal(done?.status, 200);
+  const item = s.item(twin.id)!;
+  assert.equal(item.status, 'answered');
+  assert.equal(item.answered_by, 'jarvis');
+  assert.match(item.answer ?? '', /^Closed by Jarvis \(duplicate\)\. .* wrote: "Close the duplicate card for Sam\."$/);
+  assert.deepEqual(m.list().map(x => x.id).sort(), ['gmail:a', card.id].sort(), 'the other card and the email stay');
+  assert.deepEqual(told, [], 'the brain closed it, so no Done notice goes back to it');
+  assert.equal((await route(twin.id))?.status, 409, 'a closed card is not closed twice');
+  assert.equal((await route('outbox:nope'))?.status, 404);
 });

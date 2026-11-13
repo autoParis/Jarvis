@@ -131,7 +131,7 @@ When the owner must write to someone himself, and no incoming email is behind it
 
 - Do not end the draft with his name. Gmail adds his signature, which carries it, and Slack and his phone already show who wrote.
 - Add it without asking: it sends nothing, so it is a draft. Say in one sentence that it is under Messages.
-- He copies it, sends it himself and taps Done. Only his tap closes a card. If he says he sent it, tell him to tap Done.
+- He copies it, sends it himself and taps Done. You close a card with `jarvis-act message-done outbox:<id> --reason "<few words>"` only when his message in this turn asks for it, for example to close duplicates. Otherwise he taps Done. If he says he sent it, tell him to tap Done. message-done never closes an email card.
 - Open cards are in your brief as `[to send]` lines. Adding the same words to the same person again returns the open card.
 - A reply to an incoming email stays `gmail-send`, under "Email".
 

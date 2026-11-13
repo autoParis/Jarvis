@@ -140,6 +140,20 @@ export function makeMessages(d: { store: Store; gate: Gate; log: (m: string, f?:
       d.onChange();
       return { status: 200, body: { messages: list() } };
     },
+    /** `jarvis-act message-done`: the brain closes an outbox card because the owner asked in this turn, for example a duplicate.
+     * The route checks his turn. The item records that the brain closed it, the reason, and his words, read from the stored turns. */
+    closeFromChat(id: string, reason: string, words: string[]): { status: number; body: { error?: string; messages: MessageCard[] } } {
+      const item = store.item(id);
+      if (!item) return refused(404, 'That message is not known here.');
+      if (item.source !== 'outbox') return refused(409, `${id} is not a card ${OWNER} sends himself. message-done closes only outbox cards. Use email-done for an email.`);
+      if (!list().some(m => m.id === id)) return refused(409, 'That message is no longer open.');
+      const said = words.join('\n').replace(/\s+/g, ' ').trim().slice(0, 500);
+      const why = reason.replace(/\s+/g, ' ').trim().slice(0, 120);
+      store.markItem(id, 'answered', `Closed by Jarvis${why ? ` (${why})` : ''}. ${OWNER_CAP} wrote: ${JSON.stringify(said)}`, 'jarvis');
+      log('message closed by the brain', { item: id, reason: why });
+      d.onChange();
+      return { status: 200, body: { messages: list() } };
+    },
   };
 }
 
@@ -147,10 +161,10 @@ export type Messages = ReturnType<typeof makeMessages>;
 /**
  * The Messages popup's routes. Send reply is the owner's Approve for this email, with the words now in the box: `approved`
  * tells the brain the outcome. I'll handle it, or Done on a message the owner sends himself, closes the card: `handled`
- * tells the brain. jarvis-act message-add adds a card.
+ * tells the brain. jarvis-act message-add adds a card. jarvis-act message-done closes an outbox card in a turn that holds his message.
  */
-export async function messagesRoute(o: { messages: Pick<Messages, 'send' | 'handled' | 'add'>; approved: (a: Approval) => void; handled: (id: string) => void },
-  method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+export async function messagesRoute(o: { messages: Pick<Messages, 'send' | 'handled' | 'add' | 'closeFromChat'>; approved: (a: Approval) => void; handled: (id: string) => void },
+  method: string, url: string, body: Body, owner: { fromOwner: () => boolean; ownerWords?: () => string[] }): Promise<RouteResult | undefined> {
   if (method !== 'POST') return undefined;
   if (url === '/api/message/send') {
     const { id, text } = await body();
@@ -167,5 +181,12 @@ export async function messagesRoute(o: { messages: Pick<Messages, 'send' | 'hand
     return r;
   }
   if (url === '/api/internal/messages') return o.messages.add(await body());
+  if (url === '/api/internal/messages/done') {
+    // The same rule as jarvis-today start: closing a card is the owner's Done, so it needs his message in this turn.
+    if (!owner.fromOwner()) return { status: 409, body: { error: `Closing a card needs ${OWNER} asking for it in this turn. Tell him to tap Done.` } };
+    const { id, reason } = await body();
+    if (typeof id !== 'string') return { status: 400, body: { error: 'id is required' } };
+    return o.messages.closeFromChat(id, typeof reason === 'string' ? reason : '', owner.ownerWords?.() ?? []);
+  }
   return undefined;
 }

@@ -489,14 +489,14 @@ http.createServer(async (req, res) => {
     const method = req.method ?? '', body = lazyBody(() => json(req)), query = new URL(req.url ?? '/', 'http://x').searchParams;
     const post = async () => method === 'POST' ? await body() : {};
     const owner = { fromOwner: () => brain.answeringOwner };
-    // A start from the chat records his words, read from the stored turns, not from what the brain passes.
+    // A start from the chat, or a card the brain closes, records his words, read from the stored turns, not from what the brain passes.
     const todayOwner = { ...owner, ownerWords: () => brain.ownerTurns.map(id => store.turnText(id)).filter((t): t is string => !!t) };
     const routes: (() => Promise<RouteResult | undefined> | RouteResult | undefined)[] = [
       // A native worker's hooks (from its settings file) and the brain's jarvis-native commands.
       async () => url.startsWith('/api/hooks/') || url.startsWith('/api/internal/native/') ? nativeRoute({ native, store, log, askChanged }, method, url, await post()) : undefined,
       () => reportsRoute(REPORTS_DIR, method, url, query),
       () => brainModelRoute(brainModelCtx, method, url, body),
-      () => messagesRoute(messagesCtx, method, url, body),
+      () => messagesRoute(messagesCtx, method, url, body, todayOwner),
       () => pushRoute({ store, publicKey: vapid.publicKey, log, notify }, method, url, body, String(req.headers['user-agent'] ?? '')),
       () => requestsRoute({ requests, store }, method, url, body),
       () => brainAskRoute({ store, log, changed: askChanged }, method, url, body),

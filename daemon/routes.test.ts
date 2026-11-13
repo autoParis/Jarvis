@@ -83,13 +83,14 @@ test('messages: Send reply tells the brain the approval, I\'ll handle it tells i
     add: (b: any) => ({ status: 200, body: { id: `outbox:${b.to}` } }),
   } as any;
   const o = { messages, approved: (a: any) => told.push(`approved ${a.id}`), handled: (id: string) => told.push(`handled ${id}`) };
-  assert.equal((await messagesRoute(o, 'POST', '/api/message/send', body({ id: 'gmail:1' })))?.status, 400);
-  assert.equal((await messagesRoute(o, 'POST', '/api/message/send', body({ id: 'gmail:1', text: 'Merci' })))?.status, 200);
-  assert.equal((await messagesRoute(o, 'POST', '/api/message/handled', body({ id: 'gmail:1' })))?.status, 200);
-  assert.equal((await messagesRoute(o, 'POST', '/api/message/handled', body({ id: 'gmail:2' })))?.status, 404);
+  const route = (method: string, url: string, b: any) => messagesRoute(o, method, url, b, { fromOwner: () => false });
+  assert.equal((await route('POST', '/api/message/send', body({ id: 'gmail:1' })))?.status, 400);
+  assert.equal((await route('POST', '/api/message/send', body({ id: 'gmail:1', text: 'Merci' })))?.status, 200);
+  assert.equal((await route('POST', '/api/message/handled', body({ id: 'gmail:1' })))?.status, 200);
+  assert.equal((await route('POST', '/api/message/handled', body({ id: 'gmail:2' })))?.status, 404);
   assert.deepEqual(told, ['approved 7', 'handled gmail:1']);
-  assert.deepEqual(await messagesRoute(o, 'POST', '/api/internal/messages', body({ to: 'Sam' })), { status: 200, body: { id: 'outbox:Sam' } });
-  assert.equal(await messagesRoute(o, 'GET', '/api/message/send', none), undefined);
+  assert.deepEqual(await route('POST', '/api/internal/messages', body({ to: 'Sam' })), { status: 200, body: { id: 'outbox:Sam' } });
+  assert.equal(await route('GET', '/api/message/send', none), undefined);
 });
 
 test('brain asks: an ask is stored and its card changes, ask-done closes it, a one-option ask is refused', async () => {
