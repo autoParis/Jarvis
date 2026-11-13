@@ -177,6 +177,20 @@ test('a worker notice is a status line with nothing to answer, and an ask with n
   assert.equal(workerMessageKind('DONE: merged'), 'notice');
 });
 
+test('an ask with code words goes back to the worker with the words named, and makes no card', async () => {
+  const s = setup();
+  await s.native.start({ name: 'probe-1', cwd: '/tmp', brief: 'x' });
+  const route = (text: string, at: number) => routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => at }, { from: 'probe-1', text }, 'ok');
+  const r = route('STORY: #5670 photos\nWHERE: The fix is proven.\nQUESTION: Should this PR also warn on min_photos.new?\nOPTIONS:\n- File an issue because no test asks for it\n- Warn here because it widens this PR', 1000);
+  assert.equal(r.item, undefined);
+  assert.equal(r.speak, false);
+  assert.match(r.refusal ?? '', /min_photos\.new/);
+  assert.equal(s.store.openItems().length, 0, 'no ask card');
+  const ok = route('STORY: #5670 photos\nWHERE: The fix is proven.\nQUESTION: Should this PR also warn the seller when a new car has too few real photos?\nOPTIONS:\n- File an issue because no test asks for it\n- Warn here because it widens this PR', 1100);
+  assert.equal(ok.refusal, undefined);
+  assert.ok(ok.item, 'the plain ask is a card');
+});
+
 test('a one-line ask with OPTIONS after QUESTION on the same line is an ask card, its options split on semicolons', () => {
   // The live test of 2026-11-08: this exact message went back to the worker with the no-options refusal.
   const text = 'QUESTION: Test step 3. Did the test work? OPTIONS: yes because one status line and one card showed; no because something else showed';
