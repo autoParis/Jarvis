@@ -6,7 +6,7 @@ import type { Log } from './log.ts';
 import type { PeerMessage } from './brain.ts';
 import { workerMessageKind } from './asks.ts';
 export { workerMessageKind, type WorkerMessageKind } from './asks.ts';
-import { fields, NO_OPTIONS_REFUSAL, noticeLine } from './workercontract.ts';
+import { fields, NO_OPTIONS_REFUSAL, noticeLine, askCodeWords, codeWordsRefusal } from './workercontract.ts';
 export { NO_OPTIONS_REFUSAL, noticeLine } from './workercontract.ts';
 import { findSession } from './resume.ts';
 
@@ -123,7 +123,8 @@ export function matchSender(native: Pick<Native, 'get' | 'list'>, peer: PeerMess
  * - An ask with options becomes a question item (an ask card in the app, `[native question]` in the brief), and the
  *   brain's words are spoken.
  * - A notice becomes a done `event` item (a status line in the worker's pane). It gets no card and nothing is spoken.
- * - A question with no options makes no item. main.ts sends `refusal` back to the worker.
+ * - A question with no options, or an ask with code words in it (askCodeWords), makes no item. `refusal` goes back to
+ *   the worker.
  */
 export function routeWorkerTurn(o: { native: Pick<Native, 'get' | 'list'>; store: Store; log: Log; now?: () => number },
   peerIn: PeerMessage | undefined, text: string): { worker?: NativeWorker; item?: Item; notice?: string; refusal?: string; unknown?: Item; speak: boolean } {
@@ -156,6 +157,11 @@ export function routeWorkerTurn(o: { native: Pick<Native, 'get' | 'list'>; store
   if (kind === 'no-options') {
     o.log('native ask without options sent back to the worker', { worker: w.id, chars: peer.text.length });
     return { worker: w, refusal: NO_OPTIONS_REFUSAL, speak: false };
+  }
+  const codeWords = askCodeWords(peer.text);
+  if (codeWords.length) {
+    o.log('native ask with code words sent back to the worker', { worker: w.id, words: codeWords.slice(0, 8), chars: peer.text.length });
+    return { worker: w, refusal: codeWordsRefusal(codeWords), speak: false };
   }
   const item = insertWorkerAsk(o.store, w, peer.text, at);
   o.log('native question from a worker', { worker: w.id, item: item?.external_id, chars: peer.text.length });

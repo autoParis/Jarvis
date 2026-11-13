@@ -113,7 +113,18 @@ An ask or an escalation uses the fields above. The card shows them under heading
 2. WHERE is "What the worker is doing": one or two short sentences.
 3. QUESTION is "The question": one sentence, at most 25 words.
 4. OPTIONS: recommended first. Each choice is at most 5 words. Its reason says what that choice changes, in under 10 words.
-5. CONTEXT goes behind a More toggle. Put long detail, numbers, paths and links there, not in QUESTION or WHERE.
+5. CONTEXT goes behind a More toggle. Put long detail, numbers and links there, not in QUESTION or WHERE.
+
+${OWNER_CAP} reads each ask cold, with no help from the brain. Write it for a person who did not see your code:
+- Start with the problem as the dealer or the seller sees it, in plain words, in WHERE and QUESTION.
+- Use no code words in QUESTION, CONTEXT or OPTIONS: no identifiers, file paths, file names, line numbers, column names, scope strings, enum values, backticks or internal labels such as "bucket C".
+- If you need a term, explain it in a few words. Write "the listing page that the widget reads", not "census card".
+- Each option says what it changes for the dealer, the seller or the PR, and the fact it rests on.
+- PR and issue links, PR and issue numbers, stock numbers and the word VIN are allowed.
+Jarvis sends an ask with code words back to you, with the words it found, and ${OWNER} does not see it.
+
+A bad ask (story 5600): "The widget files it as a bucket C failure, so it opens a P1 issue." with the option "Move to A, file queue fix because seller fixes it". ${OWNER_CAP} cannot tell what bucket C or A is, or what changes for the seller.
+A good ask for the same story: "Facebook refused a listing because the same car is already live on the account. The widget reports this as a bug and opens an urgent issue. Should the widget tell the seller instead?" with the options "Tell the seller because no false urgent issue, seller removes the old ad" and "Close, no code because the refusal already protects the account".
 
 Your final report has this shape:
 - The first line: \`DONE: <the result in one sentence>\` or \`FAILED: <one sentence>\`. If your task gives an exact first line, use that line.
@@ -149,6 +160,62 @@ export const REPORT_NUDGE = `Jarvis got no report from this turn. Your last mess
 export const NO_OPTIONS_REFUSAL = `Jarvis did not show this message to ${OWNER}. It reads as a question, but it has no options.
 If you need a decision, send it again with an OPTIONS line: recommended first, at most 3, each "<choice> because <reason under 10 words>".
 If it is only a status update, start it with \`NOTICE:\` and ask nothing. It then shows as a status line, with nothing to answer.`;
+
+/** Sent back to a worker whose ask has code words (askCodeWords). Nothing reached the owner. */
+export const codeWordsRefusal = (words: string[]) => `Jarvis did not show this ask to ${OWNER}. It has code words that he cannot read cold: ${words.slice(0, 8).join(', ')}.
+Send it again in plain words: the problem as the dealer or the seller sees it, each term explained in a few words, and for each option what it changes for the dealer, the seller or the PR. Links and PR, issue and stock numbers are allowed.`;
+
+// Finding code words in an ask.
+const FILE_EXT = /\.(?:tsx?|jsx?|mjs|cjs|py|rb|go|rs|java|kt|swift|php|sql|sh|json|ya?ml|toml|css|scss|html|md|lock)(?::\d+(?::\d+)?)?$/i;
+// Product names that look like file names or camelCase identifiers.
+const NAME_OK = /^(?:(?:node|next|vue|nuxt|three|express)\.js|iPhone|iPad|iOS|macOS|iCloud|iMessage|eBay)$/i;
+// The punctuation a word can carry in prose, stripped before the word is judged.
+const EDGE = /^[\s"'«»“”‘’(\[{<.,;:!?*_-]+|[\s"'«»“”‘’()\[\]{}<>.,;:!?*_-]+$/g;
+// A report in data/reports: the card opens it, so it is not a code word.
+const REPORT_PATH = /^\/\S*\/data\/reports\/\S+\.md$/;
+// A lone capital letter after a lower-case word: "bucket C", "move to A".
+const LETTER_LABEL = /(?<![\p{L}\p{N}])(\p{Ll}+) ([A-Z])(?![\p{L}\p{N}'’-])/gu;
+
+/**
+ * The code words of a plain text, each once, in the order found. A code word is backticked text, a file name (.ts,
+ * .tsx, .py and the like, with or without :line), a file path (it starts with / or ~/, or has two slashes), a scope with
+ * a colon such as marketplace_settings:read, a snake_case or camelCase identifier, or a one-letter label after a
+ * lower-case word ("bucket C"). Links, PR and issue numbers, stock numbers such as R1831, VIN, accented words,
+ * "a"/"A"/"I" as words and a report path in data/reports are not.
+ */
+export function codeWords(text: string): string[] {
+  const found: string[] = [];
+  const add = (w: string) => { if (!found.includes(w)) found.push(w); };
+  let rest = text.replace(/`([^`\n]+)`/g, (_, inner: string) => { add('`' + inner + '`'); return ' '; });
+  rest = rest.replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' ');
+  for (const m of rest.matchAll(LETTER_LABEL)) {
+    const after = rest.slice(m.index! + m[0].length);
+    // "I" is a word, and "A" before a lower-case word is the article ("to A user" is rare, "a user" is not).
+    if (m[2] === 'I' || (m[2] === 'A' && /^ \p{Ll}/u.test(after))) continue;
+    add(`${m[1]} ${m[2]}`);
+  }
+  for (const raw of rest.split(/\s+/)) {
+    const w = raw.replace(EDGE, '');
+    if (!w || NAME_OK.test(w) || REPORT_PATH.test(w)) continue;
+    const ascii = /^[\w./~:-]+$/.test(w);
+    if (ascii && FILE_EXT.test(w) && /[\w-]\.\w/.test(w)) add(w);
+    else if (ascii && w.includes('/') && (/^~?\//.test(w) || (w.match(/\//g) ?? []).length >= 2) && /[a-z]/i.test(w)) add(w);
+    else if (/^[a-z][\w*-]*:[a-z][\w*-]*$/i.test(w)) add(w);
+    else if (/\p{L}[\p{L}\p{N}]*_[\p{L}\p{N}]/u.test(w)) add(w);
+    else if (/^[a-z]+[A-Z][A-Za-z0-9]*$/.test(w)) add(w);
+  }
+  return found;
+}
+
+/**
+ * The code words in an ask's QUESTION, CONTEXT and OPTIONS, or in its whole text when it has no QUESTION field. The
+ * owner reads asks cold on his phone, and workers wrote them for themselves: "bucket C", min_photos.new,
+ * components/leads/MyLeadsToggle.tsx:20 (asks 840 to 847, 2026-11-13). nativeroutes.ts sends an ask with any back.
+ */
+export function askCodeWords(body: string): string[] {
+  const f = fields(body);
+  return codeWords(f.QUESTION === undefined ? body : [f.QUESTION, f.CONTEXT, f.OPTIONS].filter(Boolean).join('\n'));
+}
 
 // Reading a worker's replies.
 /** An absolute path to a .md file in a data/reports folder, anywhere in a text. */
