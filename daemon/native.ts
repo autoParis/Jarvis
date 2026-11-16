@@ -289,6 +289,17 @@ const contractAsk = (text: string) => { const f = fields(text); return !!f.QUEST
 /** An ask written in the turn text, without its closing `WAITING:` paragraph: that line is for jarvisd, not for the card. */
 const turnAskText = (text: string) => text.trim().replace(/\n\s*\n\s*WAITING\s*:[^\n]*$/i, '').trim();
 
+/** What onReport says about a report besides its text. */
+export type ReportExtra = { followUp?: boolean; afterResume?: boolean };
+
+/**
+ * The state key set when Jarvis resumes a worker on its own with NUDGE: `{ at, after }`, the resume time and the report
+ * time before it. The first report after it is flagged `afterResume` when no message reached the worker since `after`.
+ * Side chat 552 (2026-11-16 13:44Z): resumed on a restart with the nudge long after its work ended, it wrote a new DONE
+ * that repeated an old open decision, and the brain put that stale question on a card.
+ */
+const resumedKey = (id: string) => `nativeResumed:${id}`;
+
 type Agent = { id?: string; kind?: string; sessionId?: string; name?: string; pid?: number; status?: string; state?: string; waitingFor?: string; cwd?: string };
 
 export function makeNative(o: {
@@ -296,8 +307,12 @@ export function makeNative(o: {
   /** data/, where worker-settings.json is written at makeNative time. */
   dataDir: string;
   onChange: (w: NativeWorker) => void;
-  /** A Stop hook was stored; `final` when it set the outcome. */
-  onReport: (w: NativeWorker, text: string, final: boolean, followUp?: boolean) => void;
+  /**
+   * A Stop hook was stored; `final` when it set the outcome. `followUp`: a FAILED follow-up on a story that stays done.
+   * `afterResume`: the first report after Jarvis resumed the worker on its own (a restart, a dead terminal), with no
+   * message to it since its report before, so it may repeat old state.
+   */
+  onReport: (w: NativeWorker, text: string, final: boolean, extra?: ReportExtra) => void;
   /** A worker-permission approval was created or decided. */
   onCard: (a: Approval) => void;
   /** A liveness finding for the brain: failed, blocked with no card, done without a DONE line. */
@@ -411,8 +426,19 @@ export function makeNative(o: {
       : { title: w.name };
   };
   const pendingCard = (id: string) => [...held.values()].some(h => h.worker === id);
-  /** A task still under way: the only state a dead terminal is resumed from on its own, and the one that gets the nudge. */
+  /** A task still under way (it may be idle between turns: see turnEnded). */
   const unfinished = (w: NativeWorker) => ['starting', 'working', 'blocked'].includes(w.state) && !w.outcome;
+  /**
+   * The worker's last turn ended and no message reached it since: a side chat's turn (a conversation pause), or a WAITING
+   * line that only the owner ends. Such a worker is idle, not mid-task. A message resumes it (reply), never the nudge.
+   */
+  const turnEnded = (w: NativeWorker): boolean => {
+    if (!w.report_at || answeredSince(w.id, w.report_at)) return false;
+    if (paused(w) && w.approval_id && store.approval(w.approval_id)?.action === 'side-chat') return true;
+    return waitsOnOwner(w);
+  };
+  /** In the middle of a task: the only state a dead terminal is resumed from on its own, and the one that gets the nudge. */
+  const midTask = (w: NativeWorker) => unfinished(w) && !turnEnded(w);
   /** When a finished session, or one waiting on an ask, started idling: the latest of its last report, its last resume and its newest open ask. Undefined when it is neither. */
   const idleFrom = (w: NativeWorker): number | undefined => {
     const asks = store.openItems().filter(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${w.id}`);
@@ -438,6 +464,16 @@ export function makeNative(o: {
     return !!store.db.prepare(`SELECT 1 FROM items WHERE source = 'native' AND dispatch_id = ?
       AND ((kind = 'reply' AND created_at > ?) OR (kind IN ('question', 'escalation') AND status = 'answered' AND COALESCE(updated_at, created_at) > ?)) LIMIT 1`)
       .get(`${ROW_PREFIX}${id}`, at, at);
+  };
+  /**
+   * True when this report is the first one after Jarvis resumed the worker on its own with NUDGE and no message reached it
+   * since its report before the resume. Such a report may repeat that old report's state (resumedKey).
+   */
+  const reportAfterResume = (w: NativeWorker): boolean => {
+    let r: { at?: string; after?: string | null } | null = null;
+    try { r = JSON.parse(store.getState(resumedKey(w.id)) || 'null'); } catch {}
+    if (!r?.at) return false;
+    return !answeredSince(w.id, r.after || r.at);
   };
   /**
    * When a stuck worker last did anything, or undefined when it is not stuck. Stuck: its task is unfinished, it is not a
@@ -625,13 +661,15 @@ export function makeNative(o: {
           times.push(now());
           resumeTimes.set(w.id, times);
         }
-        const nudge = unfinished(w);
+        const nudge = midTask(w);
         failHeld(w.id, `the worker's terminal died before ${OWNER} answered`);
         const resumes = w.resumes + 1;
         const fifo = fifoFor(w.name, resumes);
         const pgid = spawnPty(['claude', '--resume', w.session_id, '--name', w.name, ...(w.remote ? [`--remote-control=${w.remote}`] : []), '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
           '--settings', settingsFor(w.approval_id), ...(nudge ? [NUDGE] : [])], w.cwd, fifo);
-        update(w.id, { pgid, in_fifo: fifo, resumes, last_resume_at: iso(), waiting_for: null });
+        const resumedAt = iso();
+        update(w.id, { pgid, in_fifo: fifo, resumes, last_resume_at: resumedAt, waiting_for: null });
+        store.setState(resumedKey(w.id), nudge ? JSON.stringify({ at: resumedAt, after: w.report_at }) : '');
         const seen = await waitFor(row(w.id)!, a => !!a.pid, RESPAWN_WAIT_MS);
         if (seen) alive.add(w.id);
         update(w.id, { state: seen ? 'working' : w.state });
@@ -788,7 +826,7 @@ export function makeNative(o: {
         // than the last message sent to its worker. The report text stays the DONE report.
         const next = update(w.id, { state: 'done', report_at: t, transcript, waiting_for: null });
         log('native follow-up reported failed, the story stays done', { worker: w.id, chars: text.length });
-        o.onReport(next, text, true, true);
+        o.onReport(next, text, true, { followUp: true });
         return {};
       }
       if (outcome === 'done') store.setState(followUpKey(w.id), '');
@@ -819,11 +857,14 @@ export function makeNative(o: {
       const t = iso();
       const nudges = (nudgeTimes.get(w.id) ?? []).filter(x => now() - x < NUDGE_WINDOW_MS);
       const nudge = !outcome && !pause && !nudgedChain.has(w.id) && nudges.length < NUDGE_MAX;
+      const afterResume = reportAfterResume(w);
       const next = update(w.id, { report: text, report_at: t, transcript, ...(outcome ? { outcome, state: outcome } : w.remote ? { state: 'done' } : pause || nudge ? { state: 'working' } : {}) });
       if (pause) store.setState(quietKey(w.id), `pause:${t}`);
       store.setState(ownerWaitKey(w.id), ownerWait ? t : '');
-      log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length, ...(pause ? { pause } : {}), ...(nudge ? { sentBack: true } : {}) });
-      o.onReport(next, text, !!outcome);
+      // A turn sent back with REPORT_NUDGE is the same turn: its next stop is still the first report after the resume.
+      if (!nudge) store.setState(resumedKey(w.id), '');
+      log('native worker reported', { worker: w.id, final: !!outcome, chars: text.length, ...(pause ? { pause } : {}), ...(nudge ? { sentBack: true } : {}), ...(afterResume ? { afterResume } : {}) });
+      o.onReport(next, text, !!outcome, afterResume ? { afterResume } : undefined);
       if (turnAsk) {
         const body = turnAskText(text);
         const open = openWorkerAsk(store, w.id, body);
@@ -879,9 +920,11 @@ export function makeNative(o: {
       try { text = lastAssistantText(file); } catch (e) { log('native: transcript unreadable', { worker: w.id, error: (e as Error).message }); return false; }
       if (!text || text === (w.report ?? '').trim()) return false;
       const outcome = outcomeOf(text); if (!outcome) return false;
+      const afterResume = reportAfterResume(w);
+      store.setState(resumedKey(w.id), '');
       const next = update(w.id, { report: text, report_at: iso(), outcome, state: outcome, transcript: file, waiting_for: null });
-      log('native worker report recovered from its transcript', { worker: w.id, outcome, chars: text.length });
-      o.onReport(next, text, true);
+      log('native worker report recovered from its transcript', { worker: w.id, outcome, chars: text.length, ...(afterResume ? { afterResume } : {}) });
+      o.onReport(next, text, true, afterResume ? { afterResume } : undefined);
       return true;
     },
 
@@ -1040,7 +1083,7 @@ export function makeNative(o: {
         if (worker && row(worker)?.state === 'blocked') { update(worker, { waiting_for: null, state: 'working' }); stuck.add(worker); }
       }
       const list = await agents();
-      let kept = 0, resumed = 0, reports = 0;
+      let kept = 0, resumed = 0, idle = 0, reports = 0;
       const resumes: Promise<unknown>[] = [];
       for (const r of store.nativeWorkers()) {
         const w = asWorker(r);
@@ -1054,10 +1097,11 @@ export function makeNative(o: {
           continue;
         }
         if (a?.pid) { kept++; alive.add(w.id); if (a.cwd && a.cwd !== w.cwd) update(w.id, { cwd: a.cwd }); }
-        else if (unfinished(w)) { resumed++; resumes.push(api.resume(w.id, 'jarvisd restarted and found it gone').catch(e => log('native: resume at start failed', { worker: w.id, error: (e as Error).message }))); }
+        else if (midTask(w)) { resumed++; resumes.push(api.resume(w.id, 'jarvisd restarted and found it gone').catch(e => log('native: resume at start failed', { worker: w.id, error: (e as Error).message }))); }
+        else if (unfinished(w)) { idle++; log('native: not resumed at start, its last turn had ended', { worker: w.id, state: w.state }); }
         if (!w.outcome && (!a?.pid || a.status === 'idle') && api.recoverReport(w.id)) reports++;
       }
-      log('native: recovered', { failedPermissionCards: stale.length, workers: store.nativeWorkers().length, alive: kept, resuming: resumed, reportsFromTranscripts: reports });
+      log('native: recovered', { failedPermissionCards: stale.length, workers: store.nativeWorkers().length, alive: kept, resuming: resumed, idle, reportsFromTranscripts: reports });
       await Promise.all(resumes);
     },
   };
@@ -1107,7 +1151,7 @@ export function makeNative(o: {
             continue;
           }
           // Dead by accident: unfinished, no process, and not a stop Jarvis made. Resumed, within the backoff.
-          if (!a?.pid && unfinished(next)) {
+          if (!a?.pid && midTask(next)) {
             log('native worker died', { worker: w.id, state: next.state, pgid: w.pgid });
             await api.resume(w.id, 'its terminal died').catch(e => log('native: resume failed', { worker: w.id, error: (e as Error).message }));
           }

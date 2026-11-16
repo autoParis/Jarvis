@@ -48,7 +48,7 @@ import { SLACK_OFF, SLACK_USER_TOKEN, SLACK_APP_TOKEN } from './config.ts';
 import { makeSlack, slackRoute, type SlackStatus } from './slack.ts';
 import { cleanWorktrees, projectRepos, summarize, execIn, type Worker } from './worktrees.ts';
 import { makeChatLinks } from './chatlink.ts';
-import { wireBrain, turnAskNote } from './brainevents.ts';
+import { wireBrain, turnAskNote, workerReportLine } from './brainevents.ts';
 import { startNativePoll, startTaskSampler, startPushSweep, startCheck, startTodayBackstop, startTermPoll, startSheetSync, startStoryQueue, startWorktreeCleanup } from './timers.ts';
 import { syncDue, runSyncChild } from './sheetsync.ts';
 import { SHEET_ID } from './sheet-edit.ts';
@@ -111,13 +111,11 @@ let todayReady = false;
 const native = makeNative({
   store, log, jarvisUrl: `http://127.0.0.1:${PORT}`, dataDir: join(ROOT, 'data'),
   onChange: () => publishWork(),
-  onReport: (w, text, final, followUp) => {
+  onReport: (w, text, final, extra) => {
     if (!final) return; // a turn that ended without DONE or FAILED is the worker asking or pausing; native.stopHook reports a silent one
     // The request and the Today row move on now, not at the next poll.
     nativeSync().catch(e => log(`native sync after a report: ${e}`));
-    const line = followUp
-      ? `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) answered a follow-up with FAILED. Its story stays done with its earlier DONE report:\n${text}`
-      : `[worker event] Native worker ${w.name} (${ROW_PREFIX}${w.id}) reported ${w.outcome}:\n${text}`;
+    const line = workerReportLine(w, text, extra);
     store.addTurn({ role: 'event', text: line });
     broadcast({ type: 'event', text: line, at: new Date().toISOString() });
     fillQueue(); // its slot is free now

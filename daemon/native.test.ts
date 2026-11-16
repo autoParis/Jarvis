@@ -1218,3 +1218,77 @@ test('an interactive story worker starts and resumes with the advisor, a questio
     assert.equal(advisorOf(argvOf(spawns[1])), want, `${action} resume`);
   }
 });
+
+// ---- A restart resumes only a worker in the middle of a task (side chat 552, 2026-11-16) ----
+
+test('recover leaves an idle side chat and an owner wait alone, resumes a mid-task worker and a side chat that got a message', async () => {
+  // Fake time 10 s behind the real clock: reply items carry the database's real time, which must come after the reports.
+  let lst: any[] = [];
+  const s = setupInteractive(Date.now() - 10_000, { writeFifo: () => {}, alivePgid: pg => lst.some(a => a.pgid === pg && a.pid) });
+  lst = s.listing;
+  const side = await s.native.start({ name: 'side-chat-552', cwd: '/repo', brief: 'b', interactive: true });
+  const waits = await s.native.start({ name: 'waits-553', cwd: '/repo', brief: 'b', interactive: true });
+  const busy = await s.native.start({ name: 'busy-554', cwd: '/repo', brief: 'b', interactive: true });
+  const asked = await s.native.start({ name: 'side-chat-555', cwd: '/repo', brief: 'b', interactive: true });
+  for (const w of [side, asked]) s.store.updateNativeWorker(w.id, { approval_id: s.store.addApproval({ action: 'side-chat', args: '{}', say: '' }).id });
+  // The side chats ended a turn (a conversation pause); waits-553 ended on a WAITING line only the owner ends.
+  s.native.stopHook({ session_id: s.listing[0].sessionId, last_assistant_message: 'The video is ready. Do you want new photos?' });
+  s.native.stopHook({ session_id: s.listing[1].sessionId, last_assistant_message: 'WAITING: the owner signs in to the account' });
+  s.native.stopHook({ session_id: s.listing[3].sessionId, last_assistant_message: 'Here is the plan.' });
+  for (const w of [side, waits, asked]) assert.equal(s.native.get(w.id)?.state, 'working', 'a pause keeps the row working, with no outcome');
+  // side-chat-555 got a message after its report and was answering it when its terminal died.
+  assert.deepEqual(await s.native.reply(asked.id, 'Go ahead with the plan.', 'owner'), { ok: true });
+  for (const a of s.listing) delete a.pid;
+  const before = s.spawns.length;
+  await s.native.recover();
+  const resumedFor = (w: NativeWorker) => s.spawns.slice(before).find(x => x.argv.includes(w.session_id!));
+  assert.equal(resumedFor(side), undefined, 'an idle side chat is not resumed on a restart');
+  assert.equal(resumedFor(waits), undefined, 'a worker waiting on the owner is not resumed on a restart');
+  assert.equal(resumedFor(busy)?.argv.at(-1), NUDGE, 'a worker in the middle of its task still gets the nudge');
+  assert.equal(resumedFor(asked)?.argv.at(-1), NUDGE, 'a side chat with an unanswered message is mid-task');
+  assert.ok(s.logs.some(l => l.startsWith('native: recovered') && l.includes('"resuming":2') && l.includes('"idle":2')));
+  // The poll does not resume them either.
+  await s.native.poll();
+  assert.equal(s.spawns.length, before + 2);
+  // A message resumes the idle side chat, without the nudge, and the message goes in.
+  assert.deepEqual(await s.native.reply(side.id, 'Use the photos from Monday.', 'owner'), { ok: true });
+  const last = s.spawns.at(-1)!;
+  assert.ok(last.argv.includes(side.session_id!));
+  assert.ok(!last.argv.includes(NUDGE), 'a resume for a message has no nudge');
+});
+
+test('the first report after a nudged resume with no message since is flagged afterResume; a message clears the flag', async () => {
+  const reports: [string, boolean, any][] = [];
+  let lst: any[] = [];
+  const s = setupInteractive(Date.now() - 10_000, { writeFifo: () => {}, alivePgid: pg => lst.some(a => a.pgid === pg && a.pid), onReport: (_w, text, final, extra) => reports.push([text, final, extra]) });
+  lst = s.listing;
+  const w = await s.native.start({ name: 'video-560', cwd: '/repo', brief: 'b', interactive: true });
+  const sid = s.listing[0].sessionId;
+  // A pause on a background task: still mid-task, so a dead terminal is resumed with the nudge.
+  s.native.stopHook({ session_id: sid, last_assistant_message: 'WAITING: the render runs', background_tasks: [{ id: 't1', status: 'running', description: 'render' }] });
+  delete s.listing[0].pid;
+  await s.native.recover();
+  assert.equal(s.spawns.at(-1)!.argv.at(-1), NUDGE);
+  // The turn is sent back once with no line: the same turn, so the flag stays for its next stop.
+  assert.deepEqual(s.native.stopHook({ session_id: sid, last_assistant_message: 'Checked the render.' }), { decision: 'block', reason: REPORT_NUDGE });
+  s.native.stopHook({ session_id: sid, stop_hook_active: true, last_assistant_message: 'DONE: the video is ready. Open decision: new photos?' });
+  assert.deepEqual(reports.at(-1), ['DONE: the video is ready. Open decision: new photos?', true, { afterResume: true }]);
+  // One report only: a follow-up turn after a message is new.
+  assert.deepEqual(await s.native.reply(w.id, 'Use the Monday photos.', 'owner'), { ok: true });
+  s.native.stopHook({ session_id: sid, last_assistant_message: 'DONE: photos swapped' });
+  assert.deepEqual(reports.at(-1), ['DONE: photos swapped', true, undefined]);
+
+  // A message after the resume and before the report: the report answers it, so it is not flagged.
+  const reports2: [string, boolean, any][] = [];
+  let lst2: any[] = [];
+  const t = setupInteractive(Date.now() - 10_000, { writeFifo: () => {}, alivePgid: pg => lst2.some(a => a.pgid === pg && a.pid), onReport: (_w, text, final, extra) => reports2.push([text, final, extra]) });
+  lst2 = t.listing;
+  const w2 = await t.native.start({ name: 'video-561', cwd: '/repo', brief: 'b', interactive: true });
+  t.native.stopHook({ session_id: t.listing[0].sessionId, last_assistant_message: 'WAITING: the render runs', background_tasks: [{ id: 't1', status: 'running' }] });
+  delete t.listing[0].pid;
+  await t.native.recover();
+  assert.equal(t.spawns.at(-1)!.argv.at(-1), NUDGE);
+  assert.deepEqual(await t.native.reply(w2.id, 'Also add a title card.', 'owner'), { ok: true });
+  t.native.stopHook({ session_id: t.listing[0].sessionId, last_assistant_message: 'DONE: render and title card done' });
+  assert.deepEqual(reports2.at(-1), ['DONE: render and title card done', true, undefined]);
+});

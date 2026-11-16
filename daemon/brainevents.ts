@@ -52,6 +52,21 @@ export function turnAskNote(w: { id: string; name: string }, i: Item): string {
     + ` His tap on the card answers it. If he answers in the chat, send his words with jarvis-native reply --worker ${w.name} --text "<his words>". The ask:\n${i.body}`;
 }
 
+/** The words the brain reads when a report came after Jarvis resumed the worker on its own (native.ts reportAfterResume). */
+export const AFTER_RESUME_NOTE = 'This report came after Jarvis resumed the worker on a restart, with no new message to it since its last report. It repeats old state: do not treat it as new. Do not put a question from it on a card unless it is new since that last report.';
+
+/**
+ * The `[worker event]` line for a worker's final report. A follow-up FAILED on a done story says so; a report after a
+ * resume that no message started says it repeats old state, so the brain does not read it as new.
+ */
+export function workerReportLine(w: { id: string; name: string; outcome: string | null }, text: string, extra: { followUp?: boolean; afterResume?: boolean } = {}): string {
+  const who = `Native worker ${w.name} (${ROW_PREFIX}${w.id})`;
+  const head = extra.followUp
+    ? `[worker event] ${who} answered a follow-up with FAILED. Its story stays done with its earlier DONE report:`
+    : `[worker event] ${who} reported ${w.outcome}${extra.afterResume ? ' after a restart resume, repeating old state' : ''}:`;
+  return extra.afterResume ? `${head} ${AFTER_RESUME_NOTE}\n${text}` : `${head}\n${text}`;
+}
+
 export function wireBrain(brain: Emitter, o: BrainEventCtx) {
   const { store, broadcast, say, chatLinks, native, log } = o;
   // The proposals of a turn get Approve and Reject on the reply that asks for them (chatlink.ts).

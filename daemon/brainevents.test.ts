@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { openStore } from './store.ts';
 import { makeChatLinks } from './chatlink.ts';
-import { wireBrain } from './brainevents.ts';
+import { wireBrain, workerReportLine, AFTER_RESUME_NOTE } from './brainevents.ts';
 
 function setup() {
   const store = openStore(':memory:');
@@ -74,4 +74,14 @@ test('brain events: a worker turn with no sender is kept on an unknown-sender ca
   assert.deepEqual(said, ['Here is my answer to you.']);
   assert.equal(store.openItems().filter(i => i.subject === 'Message from an unknown sender').length, 1);
   assert.equal(told.length, 1);
+});
+
+test('a worker report line says when the report came after a restart resume and repeats old state', () => {
+  const w = { id: 'd7a49118', name: 'side-chat-552', outcome: 'done' };
+  assert.equal(workerReportLine(w, 'DONE: video ready'), '[worker event] Native worker side-chat-552 (n:d7a49118) reported done:\nDONE: video ready');
+  const after = workerReportLine(w, 'DONE: video ready', { afterResume: true });
+  assert.ok(after.startsWith('[worker event] Native worker side-chat-552 (n:d7a49118) reported done after a restart resume, repeating old state: '));
+  assert.ok(after.includes(AFTER_RESUME_NOTE));
+  assert.ok(after.endsWith('\nDONE: video ready'));
+  assert.match(workerReportLine({ ...w, outcome: 'failed' }, 'FAILED: x', { followUp: true }), /answered a follow-up with FAILED/);
 });
