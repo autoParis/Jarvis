@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { sendOut, imageParams } from '../web/compose.js';
+import { sendOut, imageParams, sentEcho, READ_PICTURES } from '../web/compose.js';
 import { voiceMessage, withPictures } from '../web/dictate.js';
 import { saveUpload, pictureLines } from './uploads.ts';
 
@@ -107,4 +107,40 @@ test('a picture whose pen marks are still being drawn in uploads only once they 
   finish();
   await sending;
   assert.deepEqual(up.calls, ['marked']);
+});
+
+// 2026-11-16, babysit-pr-5539-709: jarvisd typed the owner's message at 16:45:57.703 and the transcript had it 43 ms later.
+// The file change pushed a pane read, which drew the real line before the send's answer came back. The faded bubble
+// drawn after that answer never matched again, so the pane showed the message twice.
+const SAID = "Introuvable sur Facebook : rien n'a été changé.";
+
+test('sentEcho: a line that came back before the send answered means no faded bubble', () => {
+  const echo = sentEcho();
+  const mark = echo.mark();
+  echo.heard('n:fb44f7bd', SAID); // the pushed read, while the send is still in flight
+  assert.equal(echo.arrived(mark, 'n:fb44f7bd', SAID), true);
+});
+
+test('sentEcho: a send whose line has not come back yet draws its faded bubble', () => {
+  const echo = sentEcho();
+  echo.heard('n:fb44f7bd', SAID); // the same words, sent earlier
+  const mark = echo.mark();
+  assert.equal(echo.arrived(mark, 'n:fb44f7bd', SAID), false);
+});
+
+test('sentEcho: one line answers one send, and only in its own pane', () => {
+  const echo = sentEcho();
+  const first = echo.mark(), second = echo.mark();
+  echo.heard('n:other', SAID);
+  assert.equal(echo.arrived(first, 'n:fb44f7bd', SAID), false);
+  echo.heard('n:fb44f7bd', SAID);
+  assert.equal(echo.arrived(first, 'n:fb44f7bd', SAID), true);
+  assert.equal(echo.arrived(second, 'n:fb44f7bd', SAID), false);
+});
+
+test('sentEcho: the read line jarvisd adds under a picture does not stop the match', () => {
+  const echo = sentEcho();
+  const mark = echo.mark();
+  echo.heard('n:fb44f7bd', `${SAID}\n[image: /tmp/a.png]\n${READ_PICTURES}`);
+  assert.equal(echo.arrived(mark, 'n:fb44f7bd', `${SAID}\n[image: /tmp/a.png]`), true);
 });

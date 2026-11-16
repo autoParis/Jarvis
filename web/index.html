@@ -172,7 +172,7 @@ import { messageButton, messageHeadHtml, messageControls, otherMessagesLabel, sm
 import { todayButton, makeTodayPop, queueHtml } from '/today.js';
 import { migrationButton, meetingToast, makeMigrationPop } from '/migration.js';
 import { boxAfterSend } from '/dictate.js';
-import { sendOut, imageParams, withoutReadLine } from '/compose.js';
+import { sendOut, imageParams, withoutReadLine, sentEcho } from '/compose.js';
 import { IMAGE_MAX } from '/composer.js';
 import { chatHtml, chatParts, chatLine, makeList, makeChat } from '/chatview.js';
 import { swipeAction, SWIPE_IGNORE, REPLY_SWIPE, replyLock, replyOffset } from '/swipe.js';
@@ -1122,19 +1122,22 @@ const PANE_MAX = 400;
 // drafts are. A dictation goes to /api/voice with the worker as its target, with the typed text in front and the
 // tray's pictures after the words, as the chat's mic sends to the brain. Leaving the pane drops a clip still recording.
 let paneStream = null;
+// The owner lines the transcript gave, so a send whose line came back before its answer draws no faded copy (compose.js).
+const paneEcho = sentEcho();
 const paneChat = makeChat({
   parts: paneEls, upload: uploadPicture, pasteText, openViewer: (src, item) => openViewer(src, item), canSend: () => !!pane.id,
   notify: text => { pane.warning = text; paneHead(); },
   onError: text => { pane.error = text; paneHead(); },
   send: async (message, { key, clear }) => {
+    const mark = paneEcho.mark();
     const { ok, j } = await workPost('/api/work/steer', { id: key, text: message });
     if (!ok) { pane.error = j.error || 'Not sent'; paneHead(); return false; }
     clear();
     if (key !== pane.id) return true;
     pane.error = '';
     pane.warning = '';
-    // Shown until the same words come back from the session, which takes a few seconds.
-    if (!j.approval) paneAppend([{ role: 'user pending', text: message }]);
+    // Shown until the same words come back from the session, unless they came back before jarvisd answered.
+    if (!j.approval && !paneEcho.arrived(mark, key, message)) paneAppend([{ role: 'user pending', text: message }]);
     paneHead();
     clearTimeout(pane.timer);
     pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
@@ -1144,7 +1147,7 @@ const paneChat = makeChat({
   onStart: () => bargeIn(), // talking over Jarvis stops it
   onHint: hint => { pane.micHint = hint; paneHead(); },
   onClip: async blob => {
-    const id = pane.id, box = paneEls.box, typed = box.value;
+    const id = pane.id, box = paneEls.box, typed = box.value, mark = paneEcho.mark();
     let j = {};
     try {
       const went = await sendOut({ tray: steerBox.items(), upload: uploadPicture, post: async lines => {
@@ -1160,7 +1163,7 @@ const paneChat = makeChat({
       if (!j.text) { pane.warning = "Didn't catch that."; return paneHead(); }
       if (typed.trim()) { box.value = boxAfterSend(box.value, typed); paneChat.fit(); paneChat.changed(); }
       pane.error = pane.warning = '';
-      paneAppend([{ role: 'user pending', text: j.message }]);
+      if (!paneEcho.arrived(mark, id, j.message)) paneAppend([{ role: 'user pending', text: j.message }]);
       paneHead();
       clearTimeout(pane.timer);
       pane.timer = setTimeout(() => readPane(pane.gen, false), 500);
@@ -1346,7 +1349,12 @@ function paneAppend(lines, rise = true) {
   for (const l of lines) {
     // The faded bubble goes when the transcript has the same message. It is compared as sent, not as drawn, because a
     // picture draws as a thumbnail and jarvisd adds the read line (withReadLine in web/compose.js).
-    if (l.role === 'user') for (const p of paneLines.querySelectorAll('.line[data-sent]')) if (p.dataset.sent === withoutReadLine(l.text)) p.remove();
+    if (l.role === 'user') {
+      let drawn = false;
+      for (const p of paneLines.querySelectorAll('.line[data-sent]')) if (p.dataset.sent === withoutReadLine(l.text)) { p.remove(); drawn = true; }
+      // A line that matched no faded bubble may belong to a send whose answer has not come back yet.
+      if (!drawn) paneEcho.heard(pane.id, l.text);
+    }
     if (l.role === 'tool') { addToolRow(l.text); continue; }
     paneList.append(paneRow(l), { force: l.role === 'user pending', rise });
   }

@@ -40,6 +40,32 @@ export function withoutReadLine(text) {
   return String(text ?? '').split('\n').filter(l => l.trim() !== READ_PICTURES).join('\n').trim();
 }
 
+// The worker pane draws the owner's sent message as a faded bubble until the transcript gives it back. jarvisd types
+// the message, writes the transcript and pushes a `pane` event, and the page reads at once. The send's own answer
+// comes later, after jarvisd logs the message and wakes the brain. So the real line often arrived before the faded
+// bubble was drawn, nothing removed the bubble, and the message showed twice (2026-11-16, babysit-pr-5539-709).
+// The page takes a mark before each send and tells `heard` every owner line the transcript gives. After the send,
+// `arrived` says whether the line came back since the mark. If it did, the page draws no faded bubble. Each heard
+// line answers one send only.
+export function sentEcho(keep = 50) {
+  const heard = []; // { seq, key, text }, the newest `keep`
+  let seq = 0;
+  return {
+    mark: () => seq,
+    heard(key, text) {
+      heard.push({ seq: ++seq, key, text: withoutReadLine(text) });
+      if (heard.length > keep) heard.shift();
+    },
+    arrived(mark, key, text) {
+      const t = withoutReadLine(text);
+      const i = heard.findIndex(h => h.seq > mark && h.key === key && h.text === t);
+      if (i < 0) return false;
+      heard.splice(i, 1);
+      return true;
+    },
+  };
+}
+
 // The query a voice clip posts: one `image` parameter per picture path. The daemon makes the lines (voiceMessage).
 export function imageParams(q, lines) {
   for (const l of lines) q.append('image', l.slice('[image: '.length, -1));
