@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { openStore, type Store } from './store.ts';
 import { makeGate } from './gate.ts';
 import { IDLE_STOPPED } from './native.ts';
-import { STORY_START_HOUR, STORY_END_HOUR, STORY_ZONE, STORY_MAX } from './config.ts';
+import { STORY_START_HOUR, STORY_END_HOUR, STORY_ZONE, STORY_MAX, SUPPORT_REPO } from './config.ts';
 import { inStoryHours, makeStories, runningStories, storyRoute, storyNumberOf, queueStartSpec, STORY_HOURS } from './stories.ts';
 import { queueHtml } from '../web/today.js';
 
@@ -68,7 +68,7 @@ test('a story worker holds its slot until DONE, FAILED or a stop, also while it 
 });
 
 /** The fill rule with a fake gate that records each start and adds the worker row a real start makes. */
-function setup(o: { now: number; max?: number; status?: string; throws?: string }) {
+function setup(o: { now: number; max?: number; status?: string; throws?: string; github?: string }) {
   const s = openStore(':memory:');
   const starts: any[] = [], told: string[] = [], notices: string[] = [];
   let changes = 0;
@@ -89,7 +89,7 @@ function setup(o: { now: number; max?: number; status?: string; throws?: string 
   const stories = makeStories({
     store: s, gate, repo: () => '/repos/product', log: () => {}, paused: () => false,
     told: (line, notice) => { told.push(line); notices.push(notice); }, onChange: () => { changes++; },
-    now: () => o.now, max: o.max, skillFor: () => 'pick-and-ship-v3',
+    now: () => o.now, max: o.max, skillFor: () => 'pick-and-ship-v3', github: o.github,
   });
   return { s, stories, starts, told, notices, changes: () => changes };
 }
@@ -229,4 +229,26 @@ test('the Today popup shows the queue in order, and nothing when it is empty', (
   const html = queueHtml({ stories: [{ number: 13, topic: 'extension <ticket>' }, { number: 12, topic: 'Marketplace photos' }], running: [{ number: 1 }, { number: 2 }], max: 3, hours: { start: 8, end: 16, open: false } });
   assert.match(html, /2 of 3 running · starts 8 AM to 4 PM, closed now/);
   assert.match(html, /<li><span class="tq-n">#13<\/span> extension &lt;ticket&gt;<\/li><li><span class="tq-n">#12<\/span>/);
+});
+
+test('each queued story carries the link to its issue in the product repo setting', () => {
+  const t = setup({ now: FOUR_PM });
+  t.s.queueStory(13, 'extension ticket'); t.s.queueStory(12, 'Marketplace photos');
+  assert.deepEqual(t.stories.view().stories.map(q => [q.number, q.url]), [[13, `https://github.com/${SUPPORT_REPO}/issues/13`], [12, `https://github.com/${SUPPORT_REPO}/issues/12`]]);
+  const other = setup({ now: FOUR_PM, github: 'some-org/some.repo' });
+  other.s.queueStory(7, 'x');
+  assert.equal(other.stories.view().stories[0].url, 'https://github.com/some-org/some.repo/issues/7');
+  for (const bad of ['', 'no-slash', 'a/b/c', 'a/b?x=1', '../evil']) {
+    const b = setup({ now: FOUR_PM, github: bad });
+    b.s.queueStory(7, 'x');
+    assert.equal(b.stories.view().stories[0].url, undefined, bad);
+  }
+});
+
+test('the Today popup links each queued story to its issue in a new tab, and keeps plain text without a link', () => {
+  const html = queueHtml({ stories: [{ number: 13, topic: 'extension <ticket>', url: 'https://github.com/some-org/some-repo/issues/13' }, { number: 12, topic: 'no link' }, { number: 11, topic: 'bad link', url: 'javascript:alert(1)' }], running: [], max: 3, hours: { start: 8, end: 16, open: true } });
+  assert.match(html, /<li><a class="tq-link" href="https:\/\/github\.com\/some-org\/some-repo\/issues\/13" target="_blank" rel="noopener"><span class="tq-n">#13<\/span> extension &lt;ticket&gt;<\/a><\/li>/);
+  assert.match(html, /<li><span class="tq-n">#12<\/span> no link<\/li>/);
+  assert.match(html, /<li><span class="tq-n">#11<\/span> bad link<\/li>/);
+  assert.doesNotMatch(html, /javascript:/);
 });

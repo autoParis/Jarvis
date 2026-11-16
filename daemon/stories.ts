@@ -1,4 +1,4 @@
-import { OWNER_CAP, STORY_ZONE, STORY_START_HOUR, STORY_END_HOUR, STORY_MAX } from './config.ts';
+import { OWNER_CAP, STORY_ZONE, STORY_START_HOUR, STORY_END_HOUR, STORY_MAX, SUPPORT_REPO } from './config.ts';
 import type { Store, QueuedStory, Approval } from './store.ts';
 import { isQuietHours } from './push.ts';
 import { IDLE_STOPPED } from './native.ts';
@@ -46,6 +46,8 @@ export function runningStories(store: Pick<Store, 'nativeWorkers' | 'approval'>)
 
 /** The task of a story started from the queue. The gate adds the issue rule and the report format of every worker-start. */
 export const queueStartSpec = (n: number, skill: string) => `Run the ${skill} skill on issue #${n} (do not pick a different issue). ${OWNER_CAP} put this story on the Jarvis story queue, and Jarvis started it from there. Done when the PR is marked ready with its evidence, or you are blocked.`;
+/** The GitHub page of issue `n` in `repo` (owner/name). Undefined when the setting is not an owner/name pair. */
+export const issueUrl = (repo: string, n: number) => /^\w[\w.-]*\/\w[\w.-]*$/.test(repo) ? `https://github.com/${repo}/issues/${n}` : undefined;
 export const queueTitle = (q: Pick<QueuedStory, 'number' | 'topic'>) => `#${q.number} ${q.topic.slice(0, 70)}`;
 
 export type StoriesOptions = {
@@ -60,10 +62,12 @@ export type StoriesOptions = {
   told: (line: string, brain: string) => void;
   onChange: () => void;
   now?: () => number; hours?: StoryHours; max?: number; skillFor?: (repo: string) => string;
+  /** The product repo's GitHub owner/name, for each queued story's issue link. The default is the product repo setting. */
+  github?: string;
 };
 
 export function makeStories(o: StoriesOptions) {
-  const now = o.now ?? Date.now, hours = o.hours ?? STORY_HOURS, max = o.max ?? STORY_MAX, skillFor = o.skillFor ?? storySkill;
+  const now = o.now ?? Date.now, github = o.github ?? SUPPORT_REPO, hours = o.hours ?? STORY_HOURS, max = o.max ?? STORY_MAX, skillFor = o.skillFor ?? storySkill;
   let filling = false;
 
   /** Starts queued stories, one at a time, until the slots are full, the queue is empty or the hours end. Returns how many started. */
@@ -108,7 +112,7 @@ export function makeStories(o: StoriesOptions) {
     return started;
   }
 
-  const view = () => ({ stories: o.store.storyQueue(), running: runningStories(o.store), max, hours: { ...hours, open: inStoryHours(now(), hours) } });
+  const view = () => ({ stories: o.store.storyQueue().map(q => ({ ...q, url: issueUrl(github, q.number) })), running: runningStories(o.store), max, hours: { ...hours, open: inStoryHours(now(), hours) } });
   return { fill, view };
 }
 

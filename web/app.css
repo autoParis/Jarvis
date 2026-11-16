@@ -260,6 +260,9 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .tq-head span, .tq-empty { color: var(--muted); }
 .tq-list { margin: 0; padding-left: 20px; max-height: 7.5em; overflow-y: auto; }
 .tq-list li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+.tq-link { display: block; overflow: hidden; text-overflow: ellipsis; color: inherit; text-decoration: none; border-radius: 4px; transition: color .12s; }
+.tq-link:hover, .tq-link:focus-visible { color: var(--accent); }
+.tq-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tq-n { font-variant-numeric: tabular-nums; font-weight: 600; }
 .tq-empty { margin: 0; }
 .t-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }

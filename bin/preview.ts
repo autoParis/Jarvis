@@ -75,7 +75,7 @@ const previewReportOf = (p: string) => REPORT_FILE ? reportSummary(p, REPORT_DIR
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const PORT = Number(process.env.PREVIEW_PORT ?? 7718);
 /** The story queue the Today scene shows above its list (stories.ts view). */
-const SAMPLE_QUEUE = { stories: [{ number: 4890, topic: 'Extension: photos missing on publish' }, { number: 4871, topic: 'Muse reply language' }, { number: 4866, topic: 'Marketplace price sync' }], running: [{ number: 4812, worker: 'a' }, { number: 4840, worker: 'b' }, { number: 4855, worker: 'c' }], max: 3, hours: { zone: 'America/Toronto', start: 8, end: 16, open: true } };
+const SAMPLE_QUEUE = { stories: [{ number: 4890, url: 'https://github.com/example-org/acmeapp_nextjs/issues/4890', topic: 'Extension: photos missing on publish' }, { number: 4871, url: 'https://github.com/example-org/acmeapp_nextjs/issues/4871', topic: 'Muse reply language' }, { number: 4866, url: 'https://github.com/example-org/acmeapp_nextjs/issues/4866', topic: 'Marketplace price sync' }], running: [{ number: 4812, worker: 'a' }, { number: 4840, worker: 'b' }, { number: 4855, worker: 'c' }], max: 3, hours: { zone: 'America/Toronto', start: 8, end: 16, open: true } };
 // The web code version, as jarvisd sends it. `curl -XPOST localhost:7718/api/preview/restart` acts as a restart with
 // new web code: a new version and every stream closed, so each open page reconnects and reloads (web/reload.js).
 let webVer = webVersion(WEB);

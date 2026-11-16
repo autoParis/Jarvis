@@ -84,11 +84,16 @@ export function todayListHtml(list, s = {}, now = Date.now()) {
 }
 
 const hourWords = h => h === 0 || h === 24 ? 'midnight' : h === 12 ? 'noon' : h < 12 ? `${h} AM` : `${h - 12} PM`;
+/** One queued story, a link to its GitHub issue when the daemon gives one (`url`), opened in a new tab. */
+const queueRow = q => {
+  const text = `<span class="tq-n">#${esc(q.number)}</span> ${esc(q.topic)}`;
+  return /^https:\/\/github\.com\//.test(q.url ?? '') ? `<li><a class="tq-link" href="${esc(q.url)}" target="_blank" rel="noopener">${text}</a></li>` : `<li>${text}</li>`;
+};
 /** The story queue from daemon/stories.ts, above the list: the next stories in order and the slots in use. Nothing when it is empty and no story runs. */
 export function queueHtml(v) {
   if (!v || (!v.stories?.length && !v.running?.length)) return '';
   const head = `<p class="tq-head"><b>Story queue</b><span>${esc(v.running.length)} of ${esc(v.max)} running · starts ${esc(hourWords(v.hours.start))} to ${esc(hourWords(v.hours.end))}${v.hours.open ? '' : ', closed now'}</span></p>`;
-  const rows = v.stories.length ? `<ol class="tq-list">${v.stories.map(q => `<li><span class="tq-n">#${esc(q.number)}</span> ${esc(q.topic)}</li>`).join('')}</ol>` : '<p class="tq-empty">Nothing queued.</p>';
+  const rows = v.stories.length ? `<ol class="tq-list">${v.stories.map(queueRow).join('')}</ol>` : '<p class="tq-empty">Nothing queued.</p>';
   return head + rows;
 }
 
