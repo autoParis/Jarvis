@@ -1151,12 +1151,12 @@ body:not(.term-open) .term-act { display: none; }
 .ask-opt.rec .tag { color: var(--ac-text); font-weight: 800; }
 .ask-report { border-color: var(--ac-line); border-radius: 14px; }
 .ask-report-k { color: var(--ac-text); }
-/* The main action is one flat accent pill. The others are pills with a thin ring */
-.yes, .t-act.primary, #pop-migration .act.primary, .tk-fix, .ink-done { background: var(--ac); border: 1px solid var(--ac); color: var(--ac-ink); }
-.yes:hover, .t-act.primary:hover, #pop-migration .act.primary:hover, .tk-fix:hover:not(:disabled) { background: var(--ac); filter: brightness(1.08); }
+/* The owner chose (2026-11-16) to keep the main actions (Approve, Copy, a Today or Leads primary) a dark fill with an accent
+   border, not solid accent. Solid accent stays on the counts and the send button. The others are pills with a thin ring */
+.yes, .t-act.primary, #pop-migration .act.primary, .tk-fix { background: var(--raised); border: 1px solid var(--ac); color: var(--ink); }
+.yes:hover, .t-act.primary:hover, #pop-migration .act.primary:hover, .tk-fix:hover:not(:disabled) { background: var(--hover); filter: none; }
 .yes, .no, .t-act, #pop-migration .act, .ghost, .stop, .term-act, .tk-fix, .tk-save, .rp-all, .line.started .undo, .ink-done { border-radius: 999px; }
 .no, .t-act:not(.primary), #pop-migration .act:not(.primary), .stop, .tk-save, .rp-all { border-color: rgb(255 255 255 / .15); }
-.chat-yes { border-color: var(--ac-line); background: var(--ac-soft); }
 #req-free, .field { border-radius: 16px; }
 #req-free, #pop-migration .in, .t-note input, .draft textarea, .tk-f input, .term-pair-row input { background: rgb(255 255 255 / .04); }
 .tk-card { background: var(--glass); border-color: var(--glass-line); border-radius: 18px; box-shadow: var(--card-shadow); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
