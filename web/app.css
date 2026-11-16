@@ -1,35 +1,29 @@
-/* B3: the work list and the conversation on one flat ground, split by a 1 px rule. Requests and messages wait behind two buttons. Teal marks what waits for the owner. */
+/* Board I, "Soft prism, greener" (approved 2026-11-16): a near-black ground with a navy cast, frosted glass panels, the work
+   list as one floating glass bubble, and one flat accent with no gradients. Dark only: the board has no light version.
+   Every colour lives here. To change the accent, change the one line under "The accent"; the tints and edges follow it. */
 :root {
-  color-scheme: light dark;
-  --ground: #EDF3F2; --raised: rgb(20 45 45 / .06); --hover: rgb(20 45 45 / .045); --line: rgb(20 45 45 / .1); --control: #BFC8C7;
-  --ink: #111213; --muted: #56605D; --bad: #B3261E; --on-ink: #FFFFFF;
-  --need: #0B6B5D; --on-need: #FFFFFF; --need-ink: #0B6B5D; --need-soft: #DDEBE8;
-  --on-bad: #FFFFFF; --pop: rgb(255 255 255 / .94); --pop-line: rgb(17 18 19 / .08); --pop-shadow: 0 24px 64px rgb(20 80 70 / .22), 0 2px 8px rgb(20 80 70 / .1); --scrim: rgb(17 18 19 / .42);
-  --bad-soft: #FBE6E3; --warn: #84500A; --warn-soft: #FAEEDB; --good: #1C6B3B; --good-soft: #DFF1E5;
-  /* Option I, teal and mint floating glass: the aurora ground, the glass cards on it, the fade under the top bar */
-  --aur: radial-gradient(900px 700px at 0% 100%, #C6E3E0 0%, transparent 65%), #EDF3F2;
-  --glass: rgb(255 255 255 / .6); --glass-strong: rgb(255 255 255 / .92); --glass-line: rgb(255 255 255 / .9);
-  --card-shadow: 0 10px 30px rgb(20 80 70 / .1), 0 1px 2px rgb(20 80 70 / .08); --float: 0 18px 44px rgb(20 80 70 / .16); --toast-shadow: 0 12px 32px rgb(20 80 70 / .14);
-  --sel: rgb(255 255 255 / .95); --accent: #0B6B5D; --fade: #DCEBE8; --head-solid: #DCEBE8;
-  --bubble: rgb(20 60 60 / .07); --bubble-ink: #111213;
-  --wave: linear-gradient(135deg, #0B7F76, #0A6E7C); --wave-ink: #FFFFFF; --wave-shadow: 0 6px 16px rgb(10 110 124 / .3);
-  --r: 10px; --r-s: 8px;
-  --font: "Instrument Sans", system-ui, sans-serif; --mono: ui-monospace, Menlo, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ground: #070B0B; --raised: rgb(215 240 236 / .055); --hover: rgb(215 240 236 / .04); --line: rgb(215 240 236 / .08); --control: #66726F;
-    --ink: #F1F5F4; --muted: #A3AEAB; --bad: #FF8373; --on-ink: #070B0B;
-    --need: #22A88E; --on-need: #021A15; --need-ink: #4CC9AE; --need-soft: #0D1A19;
-    --on-bad: #2A0A06; --pop: rgb(14 21 19 / .95); --pop-line: rgb(255 255 255 / .1); --pop-shadow: 0 24px 64px rgb(0 0 0 / .7), 0 2px 8px rgb(0 0 0 / .5); --scrim: rgb(0 0 0 / .62);
-    --bad-soft: #341512; --warn: #F0B866; --warn-soft: #2E2211; --good: #72D596; --good-soft: #11291B;
-    --aur: radial-gradient(900px 700px at 0% 100%, rgb(20 150 150 / .14) 0%, transparent 65%), #070B0B;
-    --glass: rgb(255 255 255 / .045); --glass-strong: rgb(255 255 255 / .085); --glass-line: rgb(255 255 255 / .08);
-    --card-shadow: 0 10px 30px rgb(0 0 0 / .35); --float: 0 18px 44px rgb(0 0 0 / .5); --toast-shadow: 0 12px 32px rgb(0 0 0 / .5);
-    --sel: rgb(255 255 255 / .08); --accent: #22A88E; --fade: #0A1312; --head-solid: #0A1312;
-    --bubble: rgb(205 235 230 / .075); --bubble-ink: #F1F5F4;
-    --wave: linear-gradient(135deg, #2BB5A8, #1A8FA0); --wave-ink: #021A1A; --wave-shadow: 0 0 14px rgb(30 170 165 / .25);
-  }
+  color-scheme: dark;
+  /* The accent: the fill (buttons, counts, marks), the light text accent (labels, Recommended, the story name), the ink on a fill */
+  --ac: #28AEAD; --ac-text: #7ED6D2; --ac-ink: #031716;
+  --ac-soft: color-mix(in srgb, var(--ac) 13%, transparent); --ac-line: color-mix(in srgb, var(--ac) 45%, transparent);
+  --ground: #05080F; --raised: rgb(255 255 255 / .06); --hover: rgb(255 255 255 / .05); --line: rgb(255 255 255 / .09); --control: #4E5A6B;
+  --ink: #EEF2F5; --ink-2: #C5CED9; --muted: #929DAD; --bad: #FF8373; --on-ink: #05080F;
+  --need: var(--ac); --on-need: var(--ac-ink); --need-ink: var(--ac-text); --need-soft: var(--ac-soft); --accent: var(--ac);
+  --run: #8FC6F0;
+  --on-bad: #2A0A06; --scrim: rgb(1 3 6 / .38);
+  --bad-soft: #341512; --warn: #F0B866; --warn-soft: #2E2211; --good: #72D596; --good-soft: #11291B;
+  /* The ground: two faint lights, navy at the top left and the accent at the right, so the glass has something to blur */
+  --aur: radial-gradient(ellipse 50% 40% at 18% 2%, rgb(70 100 190 / .13), transparent 70%), radial-gradient(ellipse 40% 40% at 98% 60%, color-mix(in srgb, var(--ac) 8%, transparent), transparent 70%), #05080F;
+  /* Glass: a flat see-through fill, a 20 px blur, a light top edge. No sheen gradient, no halo */
+  --glass: rgb(20 28 44 / .46); --glass-strong: rgb(28 38 58 / .6); --glass-line: rgb(255 255 255 / .09);
+  --glass-blur: blur(20px) saturate(140%); --glass-edge: inset 0 1px rgb(255 255 255 / .12);
+  --card-shadow: var(--glass-edge), 0 24px 48px -28px rgb(0 0 0 / .95); --float: var(--glass-edge), 0 18px 44px -20px rgb(0 0 0 / .9); --toast-shadow: var(--glass-edge), 0 12px 32px rgb(0 0 0 / .5);
+  --pop: rgb(16 23 37 / .9); --pop-line: rgb(255 255 255 / .09); --pop-shadow: var(--glass-edge), 0 24px 64px -16px rgb(0 0 0 / .85);
+  --sel: rgb(255 255 255 / .06); --fade: rgb(0 0 0 / 0); --head-solid: #0A0F19;
+  --bubble: rgb(255 255 255 / .07); --bubble-ink: var(--ink);
+  --wave: var(--ac); --wave-ink: var(--ac-ink); --wave-shadow: none;
+  --r: 14px; --r-s: 10px;
+  --font: "Manrope", system-ui, sans-serif; --font-head: "Outfit", "Manrope", system-ui, sans-serif; --mono: ui-monospace, Menlo, monospace;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; }
@@ -905,8 +899,7 @@ a.num:hover { color: var(--ink); }
 /* Below 780 px: just the chat. The work list slides in from the left, the buttons sit in a row under the title, the popup is the whole screen */
 /* The new-session picker under the plus (web/newpick.js). Two segmented rows, the Worktree switch and Start. */
 #newchat[aria-expanded="true"] { background: var(--ink); color: var(--on-ink); }
-@media (prefers-color-scheme: dark) { #newpick { --np-thumb: #2A2C2E; } }
-#newpick { position: fixed; z-index: 35; display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--pop); border: 1px solid var(--pop-line); border-radius: 14px; box-shadow: var(--pop-shadow); transform-origin: var(--tip, 90%) -8px; animation: np-in .17s cubic-bezier(.2, .9, .3, 1.15); }
+#newpick { --np-thumb: rgb(255 255 255 / .1); position: fixed; z-index: 35; display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--pop); border: 1px solid var(--pop-line); border-radius: 14px; box-shadow: var(--pop-shadow); transform-origin: var(--tip, 90%) -8px; animation: np-in .17s cubic-bezier(.2, .9, .3, 1.15); }
 #newpick::before { content: ""; position: absolute; top: -6px; left: calc(var(--tip, 90%) - 6px); width: 11px; height: 11px; background: var(--pop); border: solid var(--pop-line); border-width: 1px 0 0 1px; border-top-left-radius: 2px; transform: rotate(45deg); }
 @keyframes np-in { from { opacity: 0; transform: translateY(-4px) scale(.96); } to { opacity: 1; transform: none; } }
 .np-seg { --n: 3; --i: 0; position: relative; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); padding: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--ground); isolation: isolate; }
@@ -1093,45 +1086,87 @@ body:not(.term-open) .term-act { display: none; }
 }
 .g-term { width: 16px; height: 16px; flex: none; color: var(--muted); }
 
-/* Option I, teal and mint floating glass (data/design/app-color/OptionI.dc.html). The work list and the chat bar float as glass
-   over the aurora. The top bar has no surface: a soft teal tint at the top fades out. The counts stay solid teal. */
+/* Board I shapes (docs/screens/artifacts/jarvis-midnight-prism-09-i-soft-prism-greener.png). The work list floats as one big
+   glass bubble, the chat bar and the popups are glass, the top buttons are round pills. Colours come only from :root. */
+.w-head b, .pop-head b, #pane-title, .ms-head b, .ask-q, .say, .rp-title, .tk-top h1, .clear-t { font-family: var(--font-head); }
 @media (min-width: 780px) {
-  #app { padding: 10px; gap: 10px; }
-  #work { border: 1px solid var(--glass-line); border-radius: 18px; background: var(--glass); box-shadow: var(--card-shadow); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); overflow: hidden; }
+  #app { padding: 12px; gap: 12px; }
+  #work { border: 1px solid var(--glass-line); border-radius: 24px; background: var(--glass); box-shadow: var(--card-shadow); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); overflow: hidden; }
   #center { border-radius: 14px 14px 0 0; }
+  /* The top buttons: round pills with a thin ring. Requests and Messages, shown only when something waits, carry the accent tint */
+  #needbar { gap: 6px; }
+  .need-btn { border-radius: 999px; padding: 0 12px; background: rgb(255 255 255 / .04); box-shadow: inset 0 0 0 1px var(--glass-line); color: var(--ink-2); }
+  .need-btn.has-count, .need-btn:hover, .need-btn.is-open { color: var(--ink); }
+  .need-btn:hover, .need-btn.is-open { background: rgb(255 255 255 / .08); }
+  .need-btn em { min-width: 0; height: auto; padding: 0; background: none; color: var(--muted); font-weight: 600; }
+  .need-req, .need-msg { background: var(--ac-soft); box-shadow: inset 0 0 0 1px var(--ac-line); }
+  .need-req:hover, .need-msg:hover, .need-req.is-open, .need-msg.is-open { background: color-mix(in srgb, var(--ac) 22%, transparent); }
+  .need-req em, .need-msg em { background: none; color: var(--ac-text); }
+  .need-urgent em { background: none; color: var(--bad); }
+  body.pane-open .need-btn { padding: 0 10px; }
 }
-/* The top tint starts at the very top of the column, above the header too, so the status bar (theme-color, the same as --fade) meets it with no line */
+/* The top bar has no surface: the ground's navy light shows through */
 :root { --top-fade: linear-gradient(180deg, var(--fade), rgb(0 0 0 / 0) calc(env(safe-area-inset-top) + 64px)) no-repeat; }
 #center { background: var(--top-fade); }
-#tojarvis.here, .wrow.reading { background: var(--sel); }
-.g-working { border-top-color: var(--accent); }
-/* the owner: the top bar icons are white (full ink: white in dark mode, near black in light). Only the count badges carry color */
-.c-head .ib, .need-btn, .need-btn.has-count { color: var(--ink); }
-.owner { background: var(--bubble); color: var(--bubble-ink); border-radius: 16px; }
+.c-head .ib { border-radius: 999px; background: rgb(255 255 255 / .04); box-shadow: inset 0 0 0 1px var(--glass-line); }
+.c-head .ib:hover { background: rgb(255 255 255 / .08); }
+#newchat[aria-expanded="true"] { box-shadow: none; }
+.c-head .ib, .need-btn.has-count { color: var(--ink); }
+/* The work list: the Jarvis row and the open row are a soft white lift with a light top edge */
+#tojarvis { border-radius: 16px; }
+#tojarvis.here, .wrow.reading { background: var(--sel); box-shadow: inset 0 1px rgb(255 255 255 / .08); }
+.wrow, .rrow { border-radius: 12px; }
+.g-working { border-color: rgb(255 255 255 / .14); border-top-color: var(--run); }
+/* The conversation */
+.owner { background: var(--bubble); color: var(--bubble-ink); border-radius: 18px 18px 6px 18px; box-shadow: inset 0 1px rgb(255 255 255 / .07); padding: 10px 15px; }
 .quote { background: var(--glass); }
-.chat-bar { min-height: 58px; padding: 0 7px; border-radius: 30px; background: var(--glass-strong); border: 1px solid var(--glass-line); box-shadow: var(--float); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
-.chat-bar:focus-within { border-color: var(--glass-line); }
+.chat-bar { min-height: 58px; padding: 0 7px; border-radius: 30px; background: var(--glass); border: 1px solid var(--glass-line); box-shadow: var(--float); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
+.chat-bar:focus-within { border-color: var(--ac-line); }
 .chat-bar textarea { min-height: 56px; padding: 17px 6px; }
-.chat-bar .chat-add, .chat-mic { margin-bottom: 10px; }
+.chat-bar .chat-add, .chat-mic { margin-bottom: 10px; border-radius: 999px; }
 .chat-go, .chat-go.send { width: 44px; height: 44px; margin: 0 0 6px 2px; background: var(--wave); color: var(--wave-ink); box-shadow: var(--wave-shadow); }
 #bar.hands #wave:not(.send) { background: var(--need); color: var(--on-need); }
-/* Hands-free stays solid teal: white text on the green end of the gradient is only 3.3:1 */
-#bar[data-mode="voice"] { background: var(--need); border-color: transparent; }
-.pop, #menu, #newpick, .m-popover, .mtoast, #model-sheet { -webkit-backdrop-filter: blur(24px) saturate(1.2); backdrop-filter: blur(24px) saturate(1.2); }
-#menu { background: var(--pop); border-color: var(--pop-line); }
-.mtoast { border-radius: 12px; border-color: var(--glass-line); box-shadow: var(--toast-shadow); }
-#model-sheet { background: var(--pop); }
-.ms-list { background: var(--raised); }
+#bar[data-mode="voice"] { background: var(--need); color: var(--on-need); border-color: transparent; }
+/* Glass on everything that floats */
+.pop, #menu, #newpick, .m-popover, .mtoast, #model-sheet { border-color: var(--glass-line); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
+.pop { border-radius: 22px; }
+.pop-head { height: 52px; padding: 0 8px 0 20px; border-bottom-color: transparent; }
+.pop-head b { font-size: 15px; }
+.pop-body { padding: 4px 20px 20px; }
+#menu { background: var(--pop); border-radius: 16px; box-shadow: var(--pop-shadow); }
+#menu button { border-radius: 10px; }
+#newpick { border-radius: 18px; }
+.mtoast { border-radius: 14px; box-shadow: var(--toast-shadow); }
+#model-sheet { background: var(--pop); border-radius: 24px 24px 0 0; }
+.ms-list { background: var(--raised); border-radius: 14px; }
 .rp-bar, .rp-sec:not(.sub)[open] > summary { background: var(--head-solid); }
-/* the owner chose option two: the Recommended answer and the main actions (Copy, Send reply, approve, a Today or Leads primary)
-   are a neutral fill with a teal border, not solid teal. Strong color stays on counts and the send button */
-.ask-opt.rec, .yes, .t-act.primary, #pop-migration .act.primary, .tk-fix { background: var(--raised); border: 1px solid var(--need); color: var(--ink); }
-.ask-opt.rec:not(:disabled):hover, .yes:hover, .t-act.primary:hover, .tk-fix:hover:not(:disabled) { background: var(--hover); filter: none; }
-.ask-opt.rec .tag { color: var(--need-ink); }
+/* The ask card: options are soft glass tiles, the Recommended one carries the accent tint and line */
+.card-h { text-transform: none; letter-spacing: 0; font-weight: 700; color: var(--muted); }
+.ask-q, .say { letter-spacing: 0; }
+.ask-opt { border-radius: 14px; border-color: rgb(255 255 255 / .09); background: rgb(255 255 255 / .04); }
+.ask-opt:not(:disabled):hover { background: rgb(255 255 255 / .07); }
+.ask-opt .d { color: #9EAABB; opacity: 1; }
+.ask-opt.rec { background: var(--ac-soft); border-color: var(--ac-line); color: var(--ink); }
+.ask-opt.rec:not(:disabled):hover { background: color-mix(in srgb, var(--ac) 20%, transparent); filter: none; }
+.ask-opt.rec .tag { color: var(--ac-text); font-weight: 800; }
+.ask-report { border-color: var(--ac-line); border-radius: 14px; }
+.ask-report-k { color: var(--ac-text); }
+/* The main action is one flat accent pill. The others are pills with a thin ring */
+.yes, .t-act.primary, #pop-migration .act.primary, .tk-fix, .ink-done { background: var(--ac); border: 1px solid var(--ac); color: var(--ac-ink); }
+.yes:hover, .t-act.primary:hover, #pop-migration .act.primary:hover, .tk-fix:hover:not(:disabled) { background: var(--ac); filter: brightness(1.08); }
+.yes, .no, .t-act, #pop-migration .act, .ghost, .stop, .term-act, .tk-fix, .tk-save, .rp-all, .line.started .undo, .ink-done { border-radius: 999px; }
+.no, .t-act:not(.primary), #pop-migration .act:not(.primary), .stop, .tk-save, .rp-all { border-color: rgb(255 255 255 / .15); }
+.chat-yes { border-color: var(--ac-line); background: var(--ac-soft); }
+#req-free, .field { border-radius: 16px; }
+#req-free, #pop-migration .in, .t-note input, .draft textarea, .tk-f input, .term-pair-row input { background: rgb(255 255 255 / .04); }
+.tk-card { background: var(--glass); border-color: var(--glass-line); border-radius: 18px; box-shadow: var(--card-shadow); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 @media (max-width: 779.98px) {
-  #work, body.rail-closed #work { background: var(--top-fade), var(--aur); background-color: var(--ground); border-radius: 0 18px 18px 0; }
-  .pop { background: var(--top-fade), var(--aur); background-color: var(--ground); -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .need-btn em { box-shadow: 0 0 0 2px var(--head-solid); }
+  #work, body.rail-closed #work { background: var(--top-fade), var(--aur); background-color: var(--ground); border-radius: 0 24px 24px 0; box-shadow: var(--glass-edge), 0 16px 48px rgb(0 0 0 / .6); }
+  .pop { background: var(--top-fade), var(--aur); background-color: var(--ground); border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .pop-body { padding: 4px 16px 16px; }
+  /* The phone's top buttons: round, with a ring, and a solid accent count */
+  .need-btn { border-radius: 999px; }
+  .need-btn em { box-shadow: 0 0 0 2px var(--ground); }
   .dock { padding: 0 12px calc(10px + env(safe-area-inset-bottom)); }
   .chat-bar { padding: 0 6px 0 4px; }
   .chat-bar .chat-add, .chat-bar .chat-mic { margin-bottom: 8px; }
@@ -1139,8 +1174,7 @@ body:not(.term-open) .term-act { display: none; }
 }
 
 /* Scheduled tasks (design option A, round 3): one flat list, a run strip per task, an open row with the last error and edit fields */
-#tasks { position: fixed; z-index: 45; inset: 0; overflow-y: auto; overscroll-behavior: contain; background: var(--aur); background-color: var(--ground); padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); --tk-mark: rgb(20 45 45 / .2); }
-@media (prefers-color-scheme: dark) { #tasks { --tk-mark: rgb(215 240 236 / .17); } }
+#tasks { position: fixed; z-index: 45; inset: 0; overflow-y: auto; overscroll-behavior: contain; background: var(--aur); background-color: var(--ground); padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); --tk-mark: rgb(255 255 255 / .17); }
 .tk-wrap { max-width: 1400px; margin: 0 auto; padding: 48px 40px 40px; }
 .tk-top { display: flex; align-items: baseline; gap: 14px; margin-bottom: 24px; }
 .tk-top h1 { font-size: 32px; font-weight: 600; letter-spacing: -.01em; line-height: 1.15; }
