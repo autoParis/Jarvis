@@ -21,7 +21,7 @@ function linkHtml(l) {
   if (!l) return '';
   if (l.open !== undefined) return `<button type="button" class="t-link" data-open="${esc(l.open)}">${esc(l.label)}</button>`;
   // Only what the daemon wrote: a PR, or the app's own report page. A link in any other scheme stays out.
-  if (!/^(https?:\/\/|#report\/)/.test(l.url ?? '')) return '';
+  if (!/^(https?:\/\/|#reports?\/)/.test(l.url ?? '')) return '';
   return `<a class="t-link" href="${esc(l.url)}"${l.url.startsWith('#') ? '' : ' target="_blank" rel="noopener"'}>${esc(l.label)}</a>`;
 }
 /** The answer showing on a question: The owner's pick in this page, his saved answer, or the recommended one. */
@@ -164,7 +164,7 @@ export function makeTodayPop(d) {
     if (e.target.closest('[data-history]')) { s.history = !s.history; return draw(); }
     const openLink = e.target.closest('[data-open]');
     if (openLink) return d.openConversation(Number(openLink.dataset.open));
-    if (e.target.closest('a.t-link[href^="#report/"]')) return d.closePop();
+    if (e.target.closest('a.t-link[href^="#report"]')) return d.closePop();
     if (e.target.closest('[data-toggle]')) {
       const same = s.open === id;
       closeRow();

@@ -14,6 +14,8 @@ import { ISSUE_RULE, readReport } from './workercontract.ts';
 import { requestReport } from './requests.ts';
 import { ROW_PREFIX, IDLE_STOPPED, DESKTOP_WAITING } from './native.ts';
 import { QUIET_HOURS, sqlTime } from './push.ts';
+import { reportFile } from './reports.ts';
+import { docHref } from '../web/contract.js';
 import type { Log } from './log.ts';
 
 /** At most this many items have something running. Story drafts count. */
@@ -159,6 +161,16 @@ export const storyStartSpec = (n: string, skill: string) => `Run the ${skill} sk
 
 export const issueUrlIn = (text: string | null | undefined) => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/.exec(text ?? '')?.[0];
 /**
+ * The address a row's link button opens. A web link stays as it is. A .md file in the reports folder becomes the app's
+ * report page, the same address the chat's report cards use. Anything else is an error, because the page cannot open a bare path.
+ */
+export function rowLink(link: string, reportsDir: string | undefined): { url: string; label: string } | { error: string } {
+  if (/^https?:\/\/\S+$/.test(link)) return { url: link, label: 'Link' };
+  if (reportsDir && reportFile(link, reportsDir)) return { url: docHref(link), label: 'Report' };
+  return { error: `--link must be an http(s) link or a .md file in ${reportsDir ?? 'the reports folder'}. Got: ${link}` };
+}
+
+/**
  * A native worker that will not go on by itself: it reported DONE or FAILED, failed, was abandoned, or the owner stopped
  * it. A stop Jarvis made (the idle reaper, the Desktop handoff) is not an end: a message resumes it.
  */
@@ -201,6 +213,8 @@ export function makeToday(o: {
   /** A released item with a worker behind it, so the brain can close the loop. */
   released?: (i: TodayRow) => void;
   load?: () => number; cores?: () => number; now?: () => number; skillFor?: (repo: string) => string;
+  /** data/reports. A row link may point at a .md file in it. */
+  reportsDir?: string;
 }) {
   const { store, gate, log } = o;
   const now = o.now ?? Date.now, load = o.load ?? (() => loadavg()[0]), cores = o.cores ?? (() => cpus().length), skillFor = o.skillFor ?? storySkill;
@@ -555,10 +569,26 @@ export function makeToday(o: {
       const i = store.todayItem(id);
       if (!i) return refuse(404, `no today item ${id}`);
       if (i.status !== 'new' && i.status !== 'waiting') return refuse(409, `Item ${id} is ${i.status}.`);
-      const result = text(b?.result), notProven = text(b?.notProven), link = text(b?.link);
+      const result = text(b?.result), notProven = text(b?.notProven), given = text(b?.link);
       if (!result || !notProven) return refuse(400, 'result and not-proven are both required');
-      store.setToday(id, { status: 'ready', kind: i.kind ?? 'task', result, not_proven: notProven, link: link || null, link_label: link ? 'Link' : null, owed: null, reason: null, told_at: null, tries: 0 });
+      const link = given ? rowLink(given, o.reportsDir) : undefined;
+      if (link && 'error' in link) return refuse(400, link.error);
+      store.setToday(id, { status: 'ready', kind: i.kind ?? 'task', result, not_proven: notProven, link: link?.url ?? null, link_label: link?.label ?? null, owed: null, reason: null, told_at: null, tries: 0 });
       log('today result from the brain', { item: id });
+      changed();
+      return reply(200, { item: todayView(store.todayItem(id)!, store) });
+    },
+    /** `jarvis-today link`. Sets or replaces the link on a ready row. Nothing else on the row changes. */
+    link(id: number, b: any): RouteResult {
+      const i = store.todayItem(id);
+      if (!i) return refuse(404, `no today item ${id}`);
+      if (i.status !== 'ready') return refuse(409, `Item ${id} is ${i.status}. Only a ready row takes a new link. Use result on a new or waiting row.`);
+      const given = text(b?.link);
+      if (!given) return refuse(400, '--link is required');
+      const link = rowLink(given, o.reportsDir);
+      if ('error' in link) return refuse(400, link.error);
+      store.setToday(id, { link: link.url, link_label: link.label });
+      log('today link from the brain', { item: id });
       changed();
       return reply(200, { item: todayView(store.todayItem(id)!, store) });
     },
@@ -587,8 +617,8 @@ export type Today = ReturnType<typeof makeToday>;
 
 /**
  * The routes. `/api/today/*` act as the owner and sit behind the open-page secret in main.ts. `/api/internal/today*` is what the
- * brain's CLI calls: it can add, write a work-up, ask for a draft, record a chat answer or a result, and start a waiting row in a turn
- * that holds the owner's message. It has no route to release or drop.
+ * brain's CLI calls: it can add, write a work-up, ask for a draft, record a chat answer or a result, fix a ready row's link, and start a
+ * waiting row in a turn that holds the owner's message. It has no route to release or drop.
  * Undefined when the URL is not one of these.
  */
 export async function todayRoute(t: Today, method: string, url: string, b: any, ctx: { fromOwner: () => boolean; ownerWords?: () => string[] }): Promise<RouteResult | undefined> {
@@ -601,7 +631,7 @@ export async function todayRoute(t: Today, method: string, url: string, b: any, 
     if (b?.go === true && !ctx.fromOwner()) return { status: 409, body: { error: `Go needs ${OWNER} saying so in this turn. Add it without --go.` } };
     return t.add(b);
   }
-  const m = /^\/api\/internal\/today\/(\d+)\/(workup|draft|answer|result|start)$/.exec(url);
+  const m = /^\/api\/internal\/today\/(\d+)\/(workup|draft|answer|result|link|start)$/.exec(url);
   if (!m) return undefined;
   const id = Number(m[1]);
   if (m[2] === 'start') {
@@ -609,5 +639,5 @@ export async function todayRoute(t: Today, method: string, url: string, b: any, 
     if (!ctx.fromOwner()) return { status: 409, body: { error: `Start needs ${OWNER} saying so in this turn. Tell him the row waits for his tap.` } };
     return t.startFromChat(id, ctx.ownerWords?.() ?? []);
   }
-  return m[2] === 'workup' ? t.workup(id, b) : m[2] === 'draft' ? t.draft(id, b) : m[2] === 'answer' ? t.answer(id, b) : t.result(id, b);
+  return m[2] === 'workup' ? t.workup(id, b) : m[2] === 'draft' ? t.draft(id, b) : m[2] === 'answer' ? t.answer(id, b) : m[2] === 'link' ? t.link(id, b) : t.result(id, b);
 }
