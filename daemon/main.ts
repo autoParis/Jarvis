@@ -357,7 +357,7 @@ startCheck({ check, everyMs: CHECK_MS, record: tasks.record, log });
 
 // ---- Today list: The owner's thoughts, worked up in code-decided passes. Nothing outward without his tap (rules in today.ts) ----
 const today = makeToday({
-  store, gate, log, repos,
+  store, gate, log, repos, reportsDir: reportsDir(ROOT),
   wake: text => brain.send(text),
   paused: () => existsSync(KILL_FILE),
   onChange: () => broadcast({ type: 'today', today: today.list() }),

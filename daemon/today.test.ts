@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -16,7 +18,7 @@ const T0 = Date.parse('2026-11-04T15:00:00Z');
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
 
 type Press = { action: string; args: any; say: string };
-function setup(o: { load?: number; cores?: number; result?: (p: Press) => { status: string; result: string } } = {}) {
+function setup(o: { load?: number; cores?: number; result?: (p: Press) => { status: string; result: string }; reportsDir?: string } = {}) {
   const store = openStore(':memory:');
   const pressed: Press[] = [], wakes: string[] = [], logs: string[] = [], discussed: string[] = [], released: number[] = [];
   let n = 0, clock = T0, changes = 0;
@@ -32,7 +34,7 @@ function setup(o: { load?: number; cores?: number; result?: (p: Press) => { stat
   const today = makeToday({
     store, gate, log: m => { logs.push(m); }, wake: t => { wakes.push(t); }, repos: () => [{ path: REPO }], paused: () => state.paused,
     onChange: () => { changes++; }, discuss: w => { discussed.push(w); }, released: i => { released.push(i.id); },
-    load: () => state.load, cores: () => state.cores, now: () => clock, skillFor: () => 'pick-and-ship-v3',
+    load: () => state.load, cores: () => state.cores, now: () => clock, skillFor: () => 'pick-and-ship-v3', reportsDir: o.reportsDir,
   });
   return { store, today, pressed, wakes, logs, discussed, released, state, advance: (ms: number) => { clock += ms; }, changes: () => changes };
 }
@@ -637,6 +639,61 @@ test('a result from the brain still waits for Release and must say what was not 
   assert.deepEqual(v.link, { label: 'Link', url: 'https://x.test/a' });
 });
 
+/** A data/reports folder with one report in it, and a .md file outside it. */
+function reportsFolder() {
+  const root = mkdtempSync(join(tmpdir(), 'today-reports-')), dir = join(root, 'data', 'reports');
+  mkdirSync(dir, { recursive: true });
+  const report = join(dir, 'pick-and-ship-v3-insights.md'), outside = join(root, 'notes.md');
+  writeFileSync(report, '# Insights\n');
+  writeFileSync(outside, '# Not a report\n');
+  return { dir, report, outside };
+}
+
+test('a result turns a report path into the app\'s report page, keeps a web link, and refuses any other path', () => {
+  const f = reportsFolder(), t = setup({ reportsDir: f.dir });
+  const a = addItem(t, 'a'), b = addItem(t, 'b'), c = addItem(t, 'c');
+  assert.equal(t.today.result(a, { result: 'r', notProven: 'n', link: f.report }).status, 200);
+  assert.deepEqual(t.today.list().find(i => i.id === a)!.link, { label: 'Report', url: `#reports/${encodeURIComponent(f.report)}` });
+  t.today.result(b, { result: 'r', notProven: 'n', link: 'https://github.com/o/r/pull/7' });
+  assert.deepEqual(t.today.list().find(i => i.id === b)!.link, { label: 'Link', url: 'https://github.com/o/r/pull/7' });
+  for (const bad of [f.outside, join(f.dir, 'missing.md'), join(f.dir, '..', '..', 'notes.md'), 'data/reports/pick-and-ship-v3-insights.md', 'file:///etc/passwd', 'javascript:alert(1)']) {
+    const r = t.today.result(c, { result: 'r', notProven: 'n', link: bad });
+    assert.equal(r.status, 400, bad);
+    assert.match(r.body.error, /reports/);
+    assert.equal(status(t, c), 'new', bad);
+  }
+  // Without a reports folder, no path is a report.
+  const u = setup(), d = addItem(u, 'd');
+  assert.equal(u.today.result(d, { result: 'r', notProven: 'n', link: f.report }).status, 400);
+});
+
+test('link sets or replaces the link on a ready row and changes nothing else', async () => {
+  const f = reportsFolder(), t = setup({ reportsDir: f.dir });
+  const id = addItem(t, 'x');
+  assert.equal(t.today.link(id, { link: f.report }).status, 409, 'a new row takes its link with result');
+  t.today.result(id, { result: 'Top three', notProven: 'n' });
+  const before = t.store.todayItem(id)!;
+  const r = await route(t, 'POST', `/api/internal/today/${id}/link`, { link: f.report });
+  assert.equal(r!.status, 200);
+  const after = t.store.todayItem(id)!;
+  assert.deepEqual({ ...after, link: null, link_label: null }, { ...before, link: null, link_label: null });
+  assert.equal(after.link, `#reports/${encodeURIComponent(f.report)}`);
+  assert.equal(after.link_label, 'Report');
+  t.today.link(id, { link: 'https://x.test/b' });
+  assert.deepEqual(t.today.list().find(i => i.id === id)!.link, { label: 'Link', url: 'https://x.test/b' });
+  assert.equal(t.today.link(id, { link: f.outside }).status, 400);
+  assert.equal(t.today.link(id, {}).status, 400);
+  assert.equal(t.store.todayItem(id)!.link, 'https://x.test/b', 'a refused link leaves the old one');
+  assert.equal(t.today.link(999, { link: f.report }).status, 404);
+});
+
+test('the row draws a report page link and keeps a bare path out', () => {
+  const report = todayListHtml([view({ status: 'ready', link: '#reports/%2Fd%2Fdata%2Freports%2Fa.md', link_label: 'Report' })]);
+  assert.match(report, /<a class="t-link" href="#reports\/%2Fd%2Fdata%2Freports%2Fa\.md">Report<\/a>/);
+  const bare = todayListHtml([view({ status: 'ready', link: '/d/data/reports/a.md' })]);
+  assert.doesNotMatch(bare, /t-link/);
+});
+
 // ---- the brief ----
 test('the morning line reads as the design says, once a day, after 8 AM Eastern, and only if there is something', async () => {
   assert.equal(morningLine([{ status: 'ready' }, { status: 'ready' }, { status: 'ready' }, { status: 'ready' }, { status: 'waiting' }, { status: 'waiting' }]), 'four items ready to check, two waiting on you');
@@ -841,6 +898,8 @@ test('the real CLI relays to the real routes, has no way to release or drop, and
     const started = await cli('start', String(id));
     assert.equal(started.code, 0, started.err);
     assert.equal(JSON.parse(started.out).history[0].words, 'start it');
+    assert.equal((await cli('link', String(id), '--link', 'https://x.test/a')).code, 1, 'a waiting row is not ready');
+    assert.equal((await cli('link', 'x', '--link', 'https://x.test/a')).code, 2);
   } finally { server.close(); }
 });
 
@@ -928,5 +987,5 @@ test('the list folds Released under a count, shows the moved line, and has an em
 
 test('the brain\'s file names the events, the command and the hard limits', () => {
   const v = read('../vault/CLAUDE.md');
-  for (const s of ['[today pass]', '[today brief]', 'jarvis-today workup', 'jarvis-today draft', 'jarvis-today answer', 'jarvis-today start', 'Go never covers', 'exactly one question']) assert.ok(v.includes(s), s);
+  for (const s of ['[today pass]', '[today brief]', 'jarvis-today workup', 'jarvis-today draft', 'jarvis-today answer', 'jarvis-today start', 'jarvis-today link', 'Go never covers', 'exactly one question']) assert.ok(v.includes(s), s);
 });

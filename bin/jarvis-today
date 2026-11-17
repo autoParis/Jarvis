@@ -7,12 +7,13 @@
 //                 a story has "story":{"github":"owner/name","title":"...","body":"..."} and "repo" in place of "spec"
 //   jarvis-today draft <id> --repo <abs path> --brief "<your reading>" [--title <title>]   a read-only worker drafts it
 //   jarvis-today answer <id> --question <n> --text "<the owner's answer>"
-//   jarvis-today result <id> --result "<what happened>" --not-proven "<what was not checked>" [--link <url>]
+//   jarvis-today result <id> --result "<what happened>" --not-proven "<what was not checked>" [--link <url or data/reports .md path>]
+//   jarvis-today link <id> --link <url or data/reports .md path>   sets or replaces the link on a ready row, nothing else
 //   jarvis-today start <id>     the owner said "do it" about a waiting row in this turn
 const [cmd, ...rest] = process.argv.slice(2);
 const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
 const base = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/today`;
-const usage = 'usage: jarvis-today add --words <text> [--go] | list | workup <id> --json <json> | draft <id> --repo <path> --brief <text> [--title <text>] | answer <id> --question <n> --text <text> | result <id> --result <text> --not-proven <text> [--link <url>] | start <id>';
+const usage = 'usage: jarvis-today add --words <text> [--go] | list | workup <id> --json <json> | draft <id> --repo <path> --brief <text> [--title <text>] | answer <id> --question <n> --text <text> | result <id> --result <text> --not-proven <text> [--link <url>] | link <id> --link <url> | start <id>';
 const fail = () => { console.error(usage); process.exit(2); };
 const id = rest[0];
 let req;
@@ -25,6 +26,7 @@ else if (cmd === 'workup') {
   req = [`${base}/${id}/workup`, body];
 } else if (cmd === 'draft') req = [`${base}/${id}/draft`, { repo: flag('repo'), brief: flag('brief'), title: flag('title') }];
 else if (cmd === 'answer') req = [`${base}/${id}/answer`, { question: flag('question'), text: flag('text') }];
+else if (cmd === 'link') req = [`${base}/${id}/link`, { link: flag('link') }];
 else if (cmd === 'result') req = [`${base}/${id}/result`, { result: flag('result'), notProven: flag('not-proven'), link: flag('link') }];
 else if (cmd === 'start' && rest.length === 1) req = [`${base}/${id}/start`, {}];
 else fail();

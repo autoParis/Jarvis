@@ -150,6 +150,8 @@ A `[today pass]` message lists items that need you. It wakes you only when there
 - You write the work-up yourself. Only when it needs code read, send it to a read-only worker: `jarvis-today draft <id> --repo <path> --brief "<your reading>"`. jarvisd runs one draft at a time and comes back with a `[today pass]` holding the report. Write the work-up from that.
 - Go: a go task starts on its own once your work-up has a spec and no question. Write the spec only if you can do it without guessing. If you cannot, give it exactly one question and no spec: it waits on the owner. A go story or talk always stops for his tap.
 - If you can finish it in this turn without a worker (a quick factual question), run `jarvis-today result <id> --result "<what happened>" --not-proven "<what you did not check>"`. It waits for his Release.
+- `--link` on a result takes an http(s) link or the absolute path of a .md file in `$HOME/Repos/jarvis/data/reports`. jarvisd turns the path into the app's report page, so the row's button opens it formatted. Any other path is refused.
+- To set or fix the link on a Ready to check row, run `jarvis-today link <id> --link <url or report path>`. It changes only the link. A New or Waiting row takes its link with `result`.
 - Reply SILENT, unless a go item stopped on a question. Then say that question in one sentence and that it is on the row.
 
 Hard limits:
