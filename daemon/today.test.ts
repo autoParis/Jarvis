@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { openStore, type TodayRow } from './store.ts';
 import { makeToday, todayRoute, decidePass, buttons, todayOrder, todayView, parseReport, morningLine, todayBrief, draftSpec, runSpec, storyStartSpec, CAP, MAX_TRIES, BACKSTOP_MS, STUCK_MS } from './today.ts';
-import { PRESSED, buildCommand } from './gate.ts';
+import { PRESSED, buildCommand, makeGate } from './gate.ts';
 import { sqlTime } from './push.ts';
 import { todayButton, todayListHtml, detailHtml, answersChanged, shownAnswer } from '../web/today.js';
 
@@ -16,7 +18,7 @@ const T0 = Date.parse('2026-11-04T15:00:00Z');
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
 
 type Press = { action: string; args: any; say: string };
-function setup(o: { load?: number; cores?: number; result?: (p: Press) => { status: string; result: string } } = {}) {
+function setup(o: { load?: number; cores?: number; result?: (p: Press) => { status: string; result: string }; reportsDir?: string } = {}) {
   const store = openStore(':memory:');
   const pressed: Press[] = [], wakes: string[] = [], logs: string[] = [], discussed: string[] = [], released: number[] = [];
   let n = 0, clock = T0, changes = 0;
@@ -32,7 +34,7 @@ function setup(o: { load?: number; cores?: number; result?: (p: Press) => { stat
   const today = makeToday({
     store, gate, log: m => { logs.push(m); }, wake: t => { wakes.push(t); }, repos: () => [{ path: REPO }], paused: () => state.paused,
     onChange: () => { changes++; }, discuss: w => { discussed.push(w); }, released: i => { released.push(i.id); },
-    load: () => state.load, cores: () => state.cores, now: () => clock, skillFor: () => 'pick-and-ship-v3',
+    load: () => state.load, cores: () => state.cores, now: () => clock, skillFor: () => 'pick-and-ship-v3', reportsDir: o.reportsDir,
   });
   return { store, today, pressed, wakes, logs, discussed, released, state, advance: (ms: number) => { clock += ms; }, changes: () => changes };
 }
@@ -40,15 +42,15 @@ const settle = () => new Promise(r => setImmediate(r));
 const STORY = { kind: 'story', title: 'Photo order', reading: 'A re-shoot breaks the order.', repo: REPO, story: { github: 'o/r', title: 'Photo order', body: 'Story text' } };
 const TASK = { kind: 'task', title: 'Read the logs', reading: 'Read them.', repo: REPO, spec: 'Read the logs and report.' };
 const TALK = { kind: 'talk', title: 'A talk', reading: 'To discuss.' };
-const row = (f: Partial<TodayRow>): TodayRow => ({ id: 1, words: 'w', title: null, kind: null, go: 0, status: 'new', status_at: '2026-11-04 15:00:00', reading: null, questions: null, assumptions: null, reason: null, result: null, not_proven: null, link: null, link_label: null, note: null, repo: null, spec: null, story: null, phase: null, brief: null, draft_report: null, dispatch: null, worktree: null, line: null, issue_url: null, issue_state: null, owed: null, told_at: null, tries: 0, created_at: '2026-11-04 15:00:00', released_at: null, ...f });
+const row = (f: Partial<TodayRow>): TodayRow => ({ id: 1, words: 'w', title: null, kind: null, go: 0, status: 'new', status_at: '2026-11-04 15:00:00', reading: null, questions: null, assumptions: null, reason: null, result: null, not_proven: null, link: null, link_label: null, note: null, repo: null, spec: null, story: null, phase: null, brief: null, draft_report: null, dispatch: null, worktree: null, line: null, issue_url: null, issue_state: null, owed: null, told_at: null, tries: 0, created_at: '2026-11-04 15:00:00', released_at: null, history: null, ...f });
 const addItem = (t: ReturnType<typeof setup>, words: string, go = false) => t.today.add({ words, go }).body.item.id as number;
 const status = (t: ReturnType<typeof setup>, id: number) => t.store.todayItem(id)!.status;
-/** A request and a worker_done, as the poller and the watcher would have left them. */
+/** A request and a stored report, as an earlier sync would have left them. */
 function finish(t: ReturnType<typeof setup>, dispatch: string, f: { status?: string; subject?: string; body?: string; outcome?: string; pr_url?: string } = {}) {
   t.store.addRequest({ dispatch_id: dispatch, action: 'worker-start', title: 'x' });
   const r = t.store.requestOf(dispatch)!;
   t.store.updateRequest(r.id, { status: f.status ?? 'done', ...(f.pr_url ? { pr: 'PR #7', pr_url: f.pr_url } : {}) });
-  if (f.body !== undefined) t.store.insertItem({ source: 'orca', external_id: `done_${dispatch}_${Math.random()}`, kind: 'worker_done', dispatch_id: dispatch, subject: f.subject ?? 'Finished', body: f.body, meta: JSON.stringify({ outcome: f.outcome ?? 'succeeded' }), status: 'done' });
+  if (f.body !== undefined) t.store.insertItem({ source: 'native', external_id: `done_${dispatch}_${Math.random()}`, kind: 'worker_done', dispatch_id: dispatch, subject: f.subject ?? 'Finished', body: f.body, meta: JSON.stringify({ outcome: f.outcome ?? 'succeeded' }), status: 'done' });
 }
 
 // ---- the store ----
@@ -160,8 +162,12 @@ test('Not right on a finished run reruns it with the note in its own folder; Not
   const id = addItem(t, 'a', true);
   t.today.workup(id, TASK);
   await settle();
-  finish(t, 'ctx_1', { body: 'All done.\n\nNot proven: the phone.' });
-  t.today.sync([{ dispatch: 'ctx_1', path: '/wt/a', outcome: 'succeeded' }], true);
+  // Its worker ran in its own worktree, which its native row records.
+  const at = new Date(T0).toISOString();
+  t.store.addNativeWorker({ id: 'w1', session_id: 's-w1', name: 'a-1', cwd: '/wt/a', approval_id: null, state: 'done', waiting_for: null, report: null, report_at: null, outcome: 'done', transcript: null, created_at: at, updated_at: at });
+  t.store.setToday(id, { dispatch: 'n:w1' });
+  finish(t, 'n:w1', { body: 'All done.\n\nNot proven: the phone.' });
+  t.today.sync();
   await settle();
   assert.equal(status(t, id), 'ready');
   assert.equal((await t.today.act({ id, action: 'not-right', note: ' ' })).status, 400);
@@ -293,7 +299,7 @@ test('four go items through the real flow: three run, the fourth queues and star
   assert.equal(t.pressed.length, 3);
   const first = t.store.todayItem(ids[0])!.dispatch!;
   finish(t, first, { body: 'Done.\n\nNot proven: nothing' });
-  t.today.sync([], true);
+  t.today.sync();
   await settle(); await settle();
   assert.equal(status(t, ids[0]), 'ready');
   assert.equal(status(t, ids[3]), 'working');
@@ -424,7 +430,7 @@ test('a refused filing stays on the row with the reason, and Accept can try agai
 
 test('when the worker does not start, the issue is kept and a second Accept never files again', async () => {
   let starts = 0;
-  const t = setup({ result: p => p.action === 'today-issue' ? { status: 'done', result: 'https://github.com/o/r/issues/5' } : ++starts === 1 ? { status: 'failed', result: 'orca down' } : { status: 'done', result: '{"dispatchId":"d"}' } });
+  const t = setup({ result: p => p.action === 'today-issue' ? { status: 'done', result: 'https://github.com/o/r/issues/5' } : ++starts === 1 ? { status: 'failed', result: 'start failed' } : { status: 'done', result: '{"dispatchId":"d"}' } });
   const id = addItem(t, 'x');
   t.today.workup(id, STORY);
   assert.equal((await t.today.act({ id, action: 'accept' })).status, 502);
@@ -474,7 +480,7 @@ test('a finished run goes to Ready with its result, what was not proven, and its
   t.today.workup(id, TASK);
   await settle();
   finish(t, 'ctx_1', { body: 'I read the logs. The job runs late.\n\nDetails here.\n\n**Not proven:** the weekend runs.', pr_url: 'https://github.com/o/r/pull/7' });
-  t.today.sync([], true);
+  t.today.sync();
   const v = t.today.list().find(i => i.id === id)!;
   assert.equal(v.status, 'ready');
   assert.equal(v.result, 'I read the logs. The job runs late.');
@@ -489,7 +495,7 @@ test('ending with no report, or failing, is Waiting on you with a reason, never 
   await settle(); await settle();
   finish(t, t.store.todayItem(a)!.dispatch!, {});
   finish(t, t.store.todayItem(b)!.dispatch!, { status: 'failed', subject: 'Tests broke', body: 'It broke.', outcome: 'failed' });
-  t.today.sync([], true);
+  t.today.sync();
   assert.equal(status(t, a), 'waiting');
   assert.match(t.store.todayItem(a)!.reason!, /without reporting/);
   assert.equal(status(t, b), 'waiting');
@@ -510,7 +516,7 @@ test('a finished draft goes back to the brain with its report and frees the draf
   assert.deepEqual([status(t, a), status(t, b)], ['working', 'queued']);
   t.wakes.length = 0;
   finish(t, t.store.todayItem(a)!.dispatch!, { subject: 'Drafted', body: 'Story: the draft' });
-  t.today.sync([], true);
+  t.today.sync();
   await settle(); await settle();
   const r = t.store.todayItem(a)!;
   assert.equal(r.status, 'new');
@@ -519,19 +525,37 @@ test('a finished draft goes back to the brain with its report and frees the draf
   assert.equal(status(t, b), 'working', 'the next draft starts when the last finishes');
 });
 
-test('a request the owner hid does not hold a slot, while a still-running worker keeps it', async () => {
+test('a hidden request on a native worker: its own row decides', async () => {
   const t = setup();
   const id = addItem(t, 'x', true);
   t.today.workup(id, TASK);
   await settle();
-  t.store.addRequest({ dispatch_id: 'ctx_1', action: 'worker-start', title: 'x' });
-  t.store.hideRequest(t.store.requestOf('ctx_1')!.id);
-  t.today.sync([{ dispatch: 'ctx_1', outcome: 'in_progress' }], true);
+  const at = new Date(T0).toISOString();
+  t.store.addNativeWorker({ id: 'nat1', session_id: 's-nat1', name: 'x-1', cwd: '/wt/x-1', approval_id: null, state: 'working', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: at, updated_at: at });
+  t.store.setToday(id, { dispatch: 'n:nat1' });
+  t.store.addRequest({ dispatch_id: 'n:nat1', action: 'today-start', title: 'x' });
+  t.store.hideRequest(t.store.requestOf('n:nat1')!.id);
+  t.today.sync();
+  assert.equal(status(t, id), 'working', 'a running native worker keeps its slot');
+  // The idle reaper's stop is not an end: a message resumes it.
+  t.store.updateNativeWorker('nat1', { state: 'stopped', waiting_for: 'Idle, resumes on a message' });
+  t.today.sync();
   assert.equal(status(t, id), 'working');
-  t.today.sync([], false);
-  assert.equal(status(t, id), 'working', 'an incomplete poll proves nothing');
-  t.today.sync([], true);
-  assert.equal(status(t, id), 'waiting');
+  t.store.updateNativeWorker('nat1', { state: 'done', outcome: 'done', report: 'DONE: the list sorts by date.\n\nNot proven: the phone.', report_at: at });
+  t.today.sync();
+  const r = t.store.todayItem(id)!;
+  assert.equal(r.status, 'ready');
+  assert.equal(r.result, 'the list sorts by date.');
+  // The owner stopping it ends it too, with no report.
+  const t2 = setup();
+  const id2 = addItem(t2, 'y', true);
+  t2.today.workup(id2, TASK);
+  await settle();
+  t2.store.addNativeWorker({ id: 'nat2', session_id: 's-nat2', name: 'y-1', cwd: '/wt/y-1', approval_id: null, state: 'stopped', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: at, updated_at: at });
+  t2.store.setToday(id2, { dispatch: 'n:nat2' });
+  t2.today.sync();
+  assert.equal(status(t2, id2), 'waiting');
+  assert.match(t2.store.todayItem(id2)!.reason!, /ended without reporting/);
 });
 
 test('a start that lost its answer, or a crash mid-start, never retries on its own', async () => {
@@ -545,11 +569,11 @@ test('a start that lost its answer, or a crash mid-start, never retries on its o
   const c = setup();
   const stuck = addItem(c, 'y');
   c.store.setToday(stuck, { status: 'working', owed: null, repo: REPO, spec: 's' });
-  c.today.sync([], true);
+  c.today.sync();
   assert.equal(status(c, stuck), 'working', 'not yet');
   c.advance(STUCK_MS + 1000);
   c.store.db.prepare('UPDATE today_items SET status_at = ? WHERE id = ?').run(sqlTime(T0), stuck);
-  c.today.sync([], true);
+  c.today.sync();
   assert.equal(status(c, stuck), 'waiting');
   assert.equal(c.pressed.length, 0);
 });
@@ -562,7 +586,7 @@ test('a working row shows its worker link and one line, including a question fro
   t.store.addRequest({ dispatch_id: 'ctx_1', action: 'worker-start', title: 'x' });
   const req = t.store.requestOf('ctx_1')!;
   t.store.updateRequest(req.id, { status: 'waiting' });
-  t.today.sync([{ dispatch: 'ctx_1' }], true);
+  t.today.sync();
   const v = t.today.list().find(i => i.id === id)!;
   assert.deepEqual(v.link, { label: 'Worker', open: req.id });
   assert.match(v.line, /see Requests/);
@@ -615,6 +639,61 @@ test('a result from the brain still waits for Release and must say what was not 
   assert.deepEqual(v.link, { label: 'Link', url: 'https://x.test/a' });
 });
 
+/** A data/reports folder with one report in it, and a .md file outside it. */
+function reportsFolder() {
+  const root = mkdtempSync(join(tmpdir(), 'today-reports-')), dir = join(root, 'data', 'reports');
+  mkdirSync(dir, { recursive: true });
+  const report = join(dir, 'pick-and-ship-v3-insights.md'), outside = join(root, 'notes.md');
+  writeFileSync(report, '# Insights\n');
+  writeFileSync(outside, '# Not a report\n');
+  return { dir, report, outside };
+}
+
+test('a result turns a report path into the app\'s report page, keeps a web link, and refuses any other path', () => {
+  const f = reportsFolder(), t = setup({ reportsDir: f.dir });
+  const a = addItem(t, 'a'), b = addItem(t, 'b'), c = addItem(t, 'c');
+  assert.equal(t.today.result(a, { result: 'r', notProven: 'n', link: f.report }).status, 200);
+  assert.deepEqual(t.today.list().find(i => i.id === a)!.link, { label: 'Report', url: `#reports/${encodeURIComponent(f.report)}` });
+  t.today.result(b, { result: 'r', notProven: 'n', link: 'https://github.com/o/r/pull/7' });
+  assert.deepEqual(t.today.list().find(i => i.id === b)!.link, { label: 'Link', url: 'https://github.com/o/r/pull/7' });
+  for (const bad of [f.outside, join(f.dir, 'missing.md'), join(f.dir, '..', '..', 'notes.md'), 'data/reports/pick-and-ship-v3-insights.md', 'file:///etc/passwd', 'javascript:alert(1)']) {
+    const r = t.today.result(c, { result: 'r', notProven: 'n', link: bad });
+    assert.equal(r.status, 400, bad);
+    assert.match(r.body.error, /reports/);
+    assert.equal(status(t, c), 'new', bad);
+  }
+  // Without a reports folder, no path is a report.
+  const u = setup(), d = addItem(u, 'd');
+  assert.equal(u.today.result(d, { result: 'r', notProven: 'n', link: f.report }).status, 400);
+});
+
+test('link sets or replaces the link on a ready row and changes nothing else', async () => {
+  const f = reportsFolder(), t = setup({ reportsDir: f.dir });
+  const id = addItem(t, 'x');
+  assert.equal(t.today.link(id, { link: f.report }).status, 409, 'a new row takes its link with result');
+  t.today.result(id, { result: 'Top three', notProven: 'n' });
+  const before = t.store.todayItem(id)!;
+  const r = await route(t, 'POST', `/api/internal/today/${id}/link`, { link: f.report });
+  assert.equal(r!.status, 200);
+  const after = t.store.todayItem(id)!;
+  assert.deepEqual({ ...after, link: null, link_label: null }, { ...before, link: null, link_label: null });
+  assert.equal(after.link, `#reports/${encodeURIComponent(f.report)}`);
+  assert.equal(after.link_label, 'Report');
+  t.today.link(id, { link: 'https://x.test/b' });
+  assert.deepEqual(t.today.list().find(i => i.id === id)!.link, { label: 'Link', url: 'https://x.test/b' });
+  assert.equal(t.today.link(id, { link: f.outside }).status, 400);
+  assert.equal(t.today.link(id, {}).status, 400);
+  assert.equal(t.store.todayItem(id)!.link, 'https://x.test/b', 'a refused link leaves the old one');
+  assert.equal(t.today.link(999, { link: f.report }).status, 404);
+});
+
+test('the row draws a report page link and keeps a bare path out', () => {
+  const report = todayListHtml([view({ status: 'ready', link: '#reports/%2Fd%2Fdata%2Freports%2Fa.md', link_label: 'Report' })]);
+  assert.match(report, /<a class="t-link" href="#reports\/%2Fd%2Fdata%2Freports%2Fa\.md">Report<\/a>/);
+  const bare = todayListHtml([view({ status: 'ready', link: '/d/data/reports/a.md' })]);
+  assert.doesNotMatch(bare, /t-link/);
+});
+
 // ---- the brief ----
 test('the morning line reads as the design says, once a day, after 8 AM Eastern, and only if there is something', async () => {
   assert.equal(morningLine([{ status: 'ready' }, { status: 'ready' }, { status: 'ready' }, { status: 'ready' }, { status: 'waiting' }, { status: 'waiting' }]), 'four items ready to check, two waiting on you');
@@ -647,7 +726,69 @@ test('the session brief lists open rows and nothing when the list is empty', () 
 });
 
 // ---- the routes ----
-const route = (t: ReturnType<typeof setup>, method: string, url: string, b: any = {}, fromOwner = false) => todayRoute(t.today, method, url, b, { fromOwner: () => fromOwner });
+const route = (t: ReturnType<typeof setup>, method: string, url: string, b: any = {}, fromOwner = false, words: string[] = []) => todayRoute(t.today, method, url, b, { fromOwner: () => fromOwner, ownerWords: () => words });
+const start = (t: ReturnType<typeof setup>, id: number, fromOwner = true, words = ['do it']) => route(t, 'POST', `/api/internal/today/${id}/start`, {}, fromOwner, words);
+
+test('a start from the chat needs the owner\'s message in the turn, then does what Do it does and records his words', async () => {
+  const t = setup();
+  const id = addItem(t, 'Read the logs');
+  t.today.workup(id, TASK);
+  await settle();
+  const refused = await start(t, id, false);
+  assert.equal(refused!.status, 409);
+  assert.match(refused!.body.error, /saying so in this turn/);
+  assert.equal(status(t, id), 'waiting');
+  assert.equal(t.store.todayItem(id)!.history, null, 'a refused start records nothing');
+  assert.deepEqual(t.pressed, []);
+  const ok = await start(t, id, true, ['yes, do it']);
+  assert.equal(ok!.status, 200);
+  await settle(); await settle();
+  assert.equal(status(t, id), 'working');
+  assert.deepEqual(t.pressed.map(p => p.action), ['today-start']);
+  assert.equal(t.store.todayItem(id)!.go, 1, 'the same as his tap on Do it');
+  const h = ok!.body.item.history;
+  assert.equal(h.length, 1);
+  assert.match(h[0].event, /started from the chat \(Do it\)/);
+  assert.equal(h[0].words, 'yes, do it');
+  assert.ok(t.logs.includes('today item started from the chat'));
+});
+
+test('a story started from the chat files the issue and starts it, as Accept does', async () => {
+  const t = setup();
+  const id = addItem(t, 'photo order');
+  t.today.workup(id, STORY);
+  const ok = await start(t, id, true, ['go']);
+  assert.equal(ok!.status, 200);
+  assert.deepEqual(t.pressed.map(p => p.action), ['today-issue', 'today-start']);
+  assert.equal(status(t, id), 'moved');
+  assert.deepEqual(ok!.body.moved, { number: 4890, url: 'https://github.com/o/r/issues/4890' });
+  assert.equal(JSON.parse(t.store.todayItem(id)!.history!)[0].words, 'go');
+});
+
+test('a start from the chat refuses a talk, an unanswered question, a row not waiting on him, and a story that may be filed', async () => {
+  const t = setup();
+  const talk = addItem(t, 'talk');
+  t.today.workup(talk, TALK);
+  assert.match((await start(t, talk))!.body.error, /is a talk/);
+  const asked = addItem(t, 'asked');
+  t.today.workup(asked, { ...TASK, questions: [{ q: 'Which log?', options: ['jarvisd', 'brain'], recommended: 0 }] });
+  const open = await start(t, asked);
+  assert.equal(open!.status, 409);
+  assert.match(open!.body.error, /not answered: 0 "Which log\?"/);
+  t.today.answer(asked, { question: 0, text: 'jarvisd' });
+  assert.equal(status(t, asked), 'waiting', 'the recommended answer keeps it waiting');
+  assert.equal((await start(t, asked))!.status, 200, 'answered, it starts');
+  const fresh = addItem(t, 'not worked up');
+  assert.match((await start(t, fresh))!.body.error, /is New, not waiting/);
+  const lost = addItem(t, 'lost story');
+  t.today.workup(lost, STORY);
+  t.store.setToday(lost, { issue_state: 'unknown', reason: 'Check GitHub.' });
+  assert.match((await start(t, lost))!.body.error, /cannot be accepted now: Check GitHub/);
+  assert.equal((await start(t, 999))!.status, 404);
+  for (const id of [talk, fresh, lost]) assert.equal(t.store.todayItem(id)!.history, null, `item ${id} records nothing`);
+  await settle(); await settle();
+  assert.deepEqual(t.pressed.map(p => p.action), ['today-start'], 'only the answered task started');
+});
 
 test('the routes list, add and act', async () => {
   const t = setup();
@@ -682,29 +823,55 @@ test('in main.ts the routes that act as the owner need an open page, and the bra
   const set = /const AS_OWNER = new Set\(\[(.*?)\]\)/s.exec(main)![1];
   for (const r of ['/api/today/add', '/api/today/act', '/api/today/voice']) assert.ok(set.includes(`'${r}'`), r);
   for (const a of ['today-issue', 'today-start', 'today-draft']) assert.ok(PRESSED.has(a), a);
-  assert.match(main, /'\/today\.js': 'today\.js'/);
+  assert.match(read('./webfiles.ts'), /'\/today\.js': 'today\.js'/);
 });
 
-test('the gate builds the three commands, with the footer on workers and no merge anywhere', () => {
-  const id = { run: 'run_x', handle: 'term_x' };
-  const issue = buildCommand('today-issue', { item: 1, repo: 'o/r', title: 'T', body: 'B' }, id);
+test('the gate files the issue with gh, and merges nothing', () => {
+  const issue = buildCommand('today-issue', { item: 1, repo: 'o/r', title: 'T', body: 'B' });
   assert.deepEqual(issue, ['gh', 'issue', 'create', '--repo', 'o/r', '--title', 'T', '--body', 'B']);
-  const start = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T' }, id);
-  assert.ok(start.includes('new-top-level'));
-  assert.match(start[start.indexOf('--spec') + 1], /Asking the coordinator/);
-  const again = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:/wt/a', keepOpen: true }, id);
-  assert.deepEqual(again.slice(again.indexOf('--worktree'), again.indexOf('--worktree') + 2), ['--worktree', 'path:/wt/a']);
-  assert.ok(again.includes('--keep-open'));
-  const draft = buildCommand('today-draft', { repo: REPO, spec: 'S', taskTitle: 'Draft: T' }, id);
-  assert.ok(draft.includes(`path:${REPO}`));
-  assert.throws(() => buildCommand('today-draft', { repo: 'relative', spec: 'S', taskTitle: 'T' }, id));
+  assert.throws(() => buildCommand('today-draft', { repo: 'relative', spec: 'S', taskTitle: 'T' }));
 });
 
-test('the real CLI relays to the real routes, and has no way to press a button', async () => {
+test('Today starts and drafts are native workers, and a rerun runs in its first folder', () => {
+  const start = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T' });
+  assert.deepEqual(start.slice(0, 3), ['native', 'start', REPO]);
+  assert.match(start[3], /## You are a Jarvis worker/);
+  const again = buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:/wt/a', keepOpen: true });
+  assert.deepEqual(again.slice(0, 3), ['native', 'start', '/wt/a']);
+  assert.throws(() => buildCommand('today-start', { repo: REPO, spec: 'S', taskTitle: 'T', worktree: 'path:relative' }), /absolute/);
+  const draft = buildCommand('today-draft', { repo: REPO, spec: 'S', taskTitle: 'Draft: T' });
+  assert.deepEqual(draft.slice(0, 3), ['native', 'start', REPO]);
+  // A story's spec carries the issue rule.
+  const story = buildCommand('today-start', { repo: REPO, spec: storyStartSpec('12', 'pick-and-ship'), taskTitle: '#12 T' });
+  assert.match(story[3], /One exception to not posting on GitHub/);
+});
+
+test('terminal-send to a native session types through native.ts', async () => {
+  assert.deepEqual(buildCommand('terminal-send', { terminal: 'n:abc', text: 'go on' }), ['native', 'type', 'n:abc', 'go on']);
+  assert.throws(() => buildCommand('terminal-send', { terminal: 'n:a b', text: 'x' }), /not a native worker row/);
+  const store = openStore(':memory:');
+  const typed: [string, string, string][] = [];
+  const native = { start: async () => { throw new Error('no'); }, stop: async () => {}, abandon: async () => {},
+    reply: async (w: string, text: string, by: 'owner' | 'jarvis') => { typed.push([w, text, by]); return { ok: true as const }; } };
+  const gate = makeGate(store, () => {}, () => {}, undefined, undefined, native as any);
+  const a = await gate.propose('terminal-send', { terminal: 'n:abc', text: 'go on' }, 'Tell it to go on?');
+  const done = await gate.button(a.id, true);
+  assert.equal(done.status, 'done');
+  assert.deepEqual(typed, [['abc', 'go on', 'owner']]);
+});
+
+test('a native report: its DONE sentence is the result, and Not proven is read the same way', () => {
+  const p = parseReport('w-1', 'DONE: Fixed the date parser.\n- branch fix-1\n\nNot proven: the phone view.');
+  assert.equal(p.result, 'Fixed the date parser.');
+  assert.equal(p.notProven, 'the phone view.');
+});
+
+test('the real CLI relays to the real routes, has no way to release or drop, and starts only in his turn', async () => {
   const t = setup();
+  let owner = false;
   const server = http.createServer(async (req, res) => {
     let s = ''; for await (const c of req) s += c;
-    const r = await route(t, req.method!, req.url!, s ? JSON.parse(s) : {});
+    const r = await route(t, req.method!, req.url!, s ? JSON.parse(s) : {}, owner, ['start it']);
     res.writeHead(r?.status ?? 404, { 'content-type': 'application/json' });
     res.end(JSON.stringify(r?.body ?? { error: 'not found' }));
   }).listen(0, '127.0.0.1');
@@ -722,6 +889,17 @@ test('the real CLI relays to the real routes, and has no way to press a button',
     assert.equal((await cli('answer', String(id), '--question', '3', '--text', 'x')).code, 1);
     assert.equal((await cli('workup', String(id), '--json', 'not json')).code, 2);
     for (const c of ['accept', 'release', 'drop', 'do']) assert.equal((await cli(c, String(id))).code, 2, c);
+    assert.equal((await cli('start')).code, 2, 'start needs an id');
+    const refused = await cli('start', String(id));
+    assert.equal(refused.code, 1, 'start is refused outside his turn');
+    assert.match(refused.err, /saying so in this turn/);
+    assert.equal(status(t, id), 'waiting');
+    owner = true;
+    const started = await cli('start', String(id));
+    assert.equal(started.code, 0, started.err);
+    assert.equal(JSON.parse(started.out).history[0].words, 'start it');
+    assert.equal((await cli('link', String(id), '--link', 'https://x.test/a')).code, 1, 'a waiting row is not ready');
+    assert.equal((await cli('link', 'x', '--link', 'https://x.test/a')).code, 2);
   } finally { server.close(); }
 });
 
@@ -768,6 +946,12 @@ test('a failed row shows its reason, a ready row its result and what was not pro
   assert.match(html, /data-act="release"/);
 });
 
+test('a row shows its history with his words, escaped', () => {
+  const html = detailHtml(view({ status: 'working', history: JSON.stringify([{ at: '2026-11-12T15:00:00Z', event: 'started from the chat (Do it)', words: 'do <it>' }]) }));
+  assert.match(html, /<h4>History<\/h4><ul><li>started from the chat \(Do it\), you said: <q>do &lt;it&gt;<\/q><\/li>/);
+  assert.doesNotMatch(detailHtml(view({})), /History/);
+});
+
 test('a working row has no buttons, and a link with another scheme is not drawn', () => {
   const html = detailHtml({ ...view({ status: 'working', line: 'Running' }), link: { label: 'x', url: 'javascript:alert(1)' } });
   assert.doesNotMatch(html, /data-act/);
@@ -803,5 +987,5 @@ test('the list folds Released under a count, shows the moved line, and has an em
 
 test('the brain\'s file names the events, the command and the hard limits', () => {
   const v = read('../vault/CLAUDE.md');
-  for (const s of ['[today pass]', '[today brief]', 'jarvis-today workup', 'jarvis-today draft', 'jarvis-today answer', 'Go never covers', 'exactly one question']) assert.ok(v.includes(s), s);
+  for (const s of ['[today pass]', '[today brief]', 'jarvis-today workup', 'jarvis-today draft', 'jarvis-today answer', 'jarvis-today start', 'jarvis-today link', 'Go never covers', 'exactly one question']) assert.ok(v.includes(s), s);
 });

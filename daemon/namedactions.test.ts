@@ -4,19 +4,17 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fakeTool, fakeOrca } from './fakeorca.ts';
+import { fakeTool } from './faketool.ts';
 
 // Stand-ins on PATH, set before gate.ts copies the environment. The stand-in node records the folder it ran in.
 const REAL_NODE = process.execPath;
 const gh = fakeTool('gh');
 const node = fakeTool('node');
-const orca = fakeOrca();
 const { openStore } = await import('./store.ts');
 const { makeGate, BUTTON_ONLY, buildCommand } = await import('./gate.ts');
 const { FBM_REPO, namedActionIn, refusedByPermissionLayer } = await import('./namedactions.ts');
-const { askCard, answerAsk, NAMED_ACTION } = await import('./asks.ts');
+const { askCard, NAMED_ACTION } = await import('./asks.ts');
 const { approvalDetail, approvalOutcomeText, approvalTag } = await import('../web/worklist.js');
-const id = { run: 'run_x', handle: 'term_x' };
 
 const CLOSE = { repo: 'example-org/acmeapp_nextjs', number: 4667, comment: "Closed as superseded by #4733, the owner's decision." };
 const PAUSE = { client: 'dealereleven', hours: 720 };
@@ -25,7 +23,7 @@ const later = (hours: number) => new Date(Date.now() + hours * 3_600_000 + 5_000
 const state = (fields: object) => JSON.stringify({ found: true, name: 'Dealer Eleven', enabled: true, ...fields });
 
 async function approve(action: string, args: any) {
-  const gate = makeGate(openStore(':memory:'), id, () => {});
+  const gate = makeGate(openStore(':memory:'), () => {});
   const p = await gate.propose(action, args, 'Do it?');
   return { p, a: await gate.button(p.id, true) };
 }
@@ -108,7 +106,7 @@ test('a failed pause never copies a credential from the script\'s output into th
   const leak = 'SyntaxError: Unexpected token in "private_key": "-----BEGIN PRIVATE KEY-----abc"';
   node.answers(`EXIT1:${leak}`, JSON.stringify({ error: 'read failed' }));
   const lines: string[] = [];
-  const gate = makeGate(openStore(':memory:'), id, () => {}, (m, f) => lines.push(`${m} ${JSON.stringify(f)}`));
+  const gate = makeGate(openStore(':memory:'), () => {}, (m, f) => lines.push(`${m} ${JSON.stringify(f)}`));
   const a = await gate.button((await gate.propose('fbm-client-pause', PAUSE, 'Pause?')).id, true);
   assert.equal(a.status, 'unknown');
   for (const text of [a.result!, lines.join('\n')]) assert.doesNotMatch(text, /PRIVATE KEY|private_key|abc/);
@@ -132,7 +130,7 @@ test('both are button only: a spoken yes and jarvis-act confirm are refused and 
   for (const [action, args] of [['gh-pr-close', CLOSE], ['fbm-client-pause', PAUSE]] as const) {
     assert.ok(BUTTON_ONLY.has(action));
     const s = openStore(':memory:');
-    const gate = makeGate(s, id, () => {});
+    const gate = makeGate(s, () => {});
     const runs = gh.calls().length + node.calls().length;
     const p = await gate.propose(action, args, 'Do it?');
     s.addTurn({ role: 'owner', text: 'yes' });
@@ -144,7 +142,7 @@ test('both are button only: a spoken yes and jarvis-act confirm are refused and 
 
 test('bad input is refused before anything is stored, and the brain cannot put its own words on the card', async () => {
   const s = openStore(':memory:');
-  const gate = makeGate(s, id, () => {});
+  const gate = makeGate(s, () => {});
   for (const [action, args, why] of [
     ['gh-pr-close', { ...CLOSE, repo: '--help' }, /owner\/name/],
     ['gh-pr-close', { ...CLOSE, number: '4667; rm -rf x' }, /PR number/],
@@ -161,13 +159,12 @@ test('bad input is refused before anything is stored, and the brain cannot put i
 
   const p = await gate.propose('gh-pr-close', { ...CLOSE, runs: 'echo harmless', extra: 'x' }, 'Close?');
   assert.doesNotMatch(p.args, /echo harmless|extra/);
-  assert.deepEqual(buildCommand('fbm-client-pause', { client: 'x', hours: '48', runs: 'rm -rf /' }, id), ['node', 'functions/scripts/reusable/pause-client.js', '--client', 'x', '--hours', '48']);
-  assert.throws(() => buildCommand('gh-pr-merge', { repo: 'a/b', number: 1 }, id), /unknown action/);
-  assert.throws(() => buildCommand('git-push-force', {}, id), /unknown action/);
+  assert.deepEqual(buildCommand('fbm-client-pause', { client: 'x', hours: '48', runs: 'rm -rf /' }), ['node', 'functions/scripts/reusable/pause-client.js', '--client', 'x', '--hours', '48']);
+  assert.throws(() => buildCommand('gh-pr-merge', { repo: 'a/b', number: 1 }), /unknown action/);
+  assert.throws(() => buildCommand('git-push-force', {}), /unknown action/);
 });
 
 const item = (over: object): any => ({ external_id: 'msg_1', kind: 'escalation', dispatch_id: 'ctx_1', status: 'new', subject: 'Blocked', body: '', options: null, created_at: '2026-11-04 12:00:00', updated_at: null, answer: null, meta: null, ...over });
-const stopNotice = (output: string) => `Worker term_a ended its turn without sending worker_done for task "Babysit PR #4667" (task_1).\nThe Dispatch is still open. Answer it with your Orca CLI's \`orchestration send\`, retry it, or stop the worker.\nLast output:\n${output}\nFull output: orchestration worker-read --dispatch ctx_1`;
 
 test('the refusals of 2026-11-04 read as refusals, and other denials do not', () => {
   for (const said of [
@@ -195,9 +192,7 @@ test('a refused escalation offers no Retry, says why, and offers the named actio
   assert.equal(c.suggested, true, 'nobody recommended these');
 });
 
-test('a refused stop notice finds a PR close, its repo from a link, and without a whole command offers Stop and Tell', () => {
-  const full = askCard(item({ external_id: 'msg_stop_1', subject: 'Worker stopped without reporting', body: stopNotice('I could not close [#4667](https://github.com/example-org/acmeapp_nextjs/pull/4667). The permission system refused `gh pr close` and I did not get around it.\nType this: `! gh pr close 4667 --comment "Closed as superseded by #4733."`') }))!;
-  assert.deepEqual(full.options.map(o => o.label), ['Close PR 4667', 'Stop', 'Tell it what to do']);
+test('a refused escalation without a whole command offers Stop and Tell', () => {
   const noRepo = askCard(item({ subject: 'Blocked: permission denied closing PR 4667', body: "The permission classifier refused gh pr close. To close it, the owner runs: gh pr close 4667 --comment 'Superseded.'" }))!;
   assert.deepEqual(noRepo.options.map(o => o.label), ['Stop', 'Tell it what to do'], 'Jarvis does not guess the repo');
   assert.match(noRepo.refused!, /retry cannot/);
@@ -212,34 +207,4 @@ test('a worker\'s own Retry goes, its other options stay, and an escalation with
   assert.deepEqual(namedActionIn('gh pr close 12 --repo a/b'), undefined, 'no comment, no action');
   const asked = askCard(item({ kind: 'question', subject: 'Which?', body: 'The permission check refused it. Which next?' }))!;
   assert.equal(asked.refused, undefined);
-});
-
-test('tapping the named action opens one Approve card and tells the worker not to retry; nothing runs until Approve', async () => {
-  const s = openStore(':memory:');
-  const gate = makeGate(s, id, () => {});
-  s.insertItem({ source: 'orca', external_id: 'm1', kind: 'escalation', dispatch_id: 'ctx_1', subject: 'Blocked: permission denied', body: 'The permissions layer denied gh pr close 4667 --repo a/b --comment "Superseded."' });
-  const sends: string[][] = [];
-  const answers = { id: 'm1', value: NAMED_ACTION, run: 'r', handle: 'h', store: s, log: () => {}, note: () => {}, gate };
-  const runs = gh.calls().length;
-
-  const lost = await answerAsk({ ...answers, orca: async () => { throw new Error('down'); } });
-  assert.equal(lost.status, 502);
-  const r = await answerAsk({ ...answers, orca: async (a: string[]) => { sends.push(a); return { ok: true } as any; } });
-  assert.equal(r.status, 200);
-  assert.match(sends[0].at(-1)!, /Do not retry the refused step.*Close PR 4667/);
-  assert.equal(s.item('m1')!.answer, NAMED_ACTION);
-  assert.equal(s.approval(1)!.action, 'gh-pr-close');
-  assert.equal(s.approval(1)!.status, 'pending');
-  assert.equal(s.approval(2), undefined, 'the retried tap found the same card');
-  assert.equal(gh.calls().length, runs, 'nothing ran');
-  assert.equal((await answerAsk({ ...answers, orca: async () => ({ ok: true }) as any })).status, 409);
-});
-
-test('the named value does nothing on a card that offers no action', async () => {
-  const s = openStore(':memory:');
-  s.insertItem({ source: 'orca', external_id: 'm2', kind: 'escalation', dispatch_id: 'ctx_1', subject: 'Blocked: CI is down', body: 'gh pr close 4667 --repo a/b --comment "x"' });
-  const r = await answerAsk({ id: 'm2', value: NAMED_ACTION, run: 'r', handle: 'h', store: s, log: () => {}, note: () => {}, gate: makeGate(s, id, () => {}), orca: async () => ({ ok: true }) as any });
-  assert.equal(r.status, 409);
-  assert.equal(s.approval(1), undefined);
-  assert.equal(orca.calls().length, 0);
 });

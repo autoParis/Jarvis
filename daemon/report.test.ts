@@ -35,10 +35,10 @@ test('Completed: Report sits where the PR link would be, and the title keeps its
 });
 
 test('an open row in a work group gets the link too, and a plain conversation row does not', () => {
-  const ctxList = { hidden: new Set(), shut: new Set(), closedWaiting: new Set(), folders: {}, now: AT };
+  const ctxList = { shut: new Set(), closedWaiting: new Set(), folders: {}, now: AT };
   const row = { id: 'ctx_1', kind: 'worker', title: 'Plain', group: 'other', state: 'idle' };
   const failed = req({ id: 3, status: 'failed', report: true, title: 'Lead import' });
-  const html = workListHtml(mergeWork([row], [failed], new Set()), ctxList);
+  const html = workListHtml(mergeWork([row], [failed], {}), ctxList);
   assert.match(html, /href="#report\/3"/);
   assert.equal(html.match(/#report/g)!.length, 1);
 });
@@ -51,7 +51,7 @@ function withRequest() {
   store.addRequest({ dispatch_id: 'ctx_a', approval_id: a.id, action: 'question', title: 'Request: why slow', words: null });
   const id = store.requests()[0].id;
   const reqs = makeRequests({ store, log: () => {}, repoOf: async () => undefined, onChange: () => {} });
-  const done = (n: string, body: string, outcome = 'succeeded') => store.insertItem({ source: 'orca', external_id: n, kind: 'worker_done', dispatch_id: 'ctx_a', subject: `Subject ${n}`, body, meta: JSON.stringify({ outcome }) });
+  const done = (n: string, body: string, outcome = 'succeeded') => store.insertItem({ source: 'native', external_id: n, kind: 'worker_done', dispatch_id: 'ctx_a', subject: `Subject ${n}`, body, meta: JSON.stringify({ outcome }) });
   return { store, id, reqs, done };
 }
 

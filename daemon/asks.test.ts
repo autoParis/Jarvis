@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { openStore, type Item } from './store.ts';
-import { askCard, answerAsk, auditEntries, closeSteeredAsks, fields, markedList } from './asks.ts';
+import { askCard, answerAsk, auditEntries, fields, markedList } from './asks.ts';
 import { sentences } from './voice.ts';
 
 const item = (extra: Partial<Item>): Item => ({
-  id: 1, source: 'orca', external_id: 'msg_1', kind: 'question', dispatch_id: 'd_1', subject: '', body: '', options: null,
+  id: 1, source: 'native', external_id: 'msg_1', kind: 'question', dispatch_id: 'd_1', subject: '', body: '', options: null,
   status: 'spoken', answer: null, created_at: '', pushes: 0, pushed_at: null, meta: null, ...extra,
 });
 
@@ -43,8 +43,8 @@ test('a free-form ask: short --options are matched to the (a) (b) wording, and t
   assert.equal(c.body, '#4531-engine, holding the drive slot. Doctor fails on 1000001 (provider 15).\n\nReply GO plus a/b/c.');
 });
 
-test('a repeated --options flag loses choices in Orca, so the card builds its buttons from the OPTIONS field', () => {
-  // msg_81728794bdde: --options "Merged" --options "Not yet" reached Jarvis as ["Not yet"].
+test('a short options list that lost choices: the card builds its buttons from the OPTIONS field', () => {
+  // msg_81728794bdde: two short choices reached Jarvis as ["Not yet"].
   const body = `STORY: 4828 bilingual migration needs merging
 WHERE: ready to prove the onboarding on staging data
 QUESTION: Can you merge migration PR #4858 into staging?
@@ -153,18 +153,6 @@ test('a worker with its own options gets those, recommended first, and no defaul
   assert.match(html(c), /Recommended/);
 });
 
-test('a default button sends its words to the worker as a message', async () => {
-  const t = setup(() => ({ ok: true }));
-  t.store.insertItem({ source: 'orca', external_id: 'msg_w', kind: 'escalation', dispatch_id: 'd_w', subject: 'Blocked: x', body: 'y', status: 'spoken' });
-  const [retry] = askCard(t.store.item('msg_w')!)!.options;
-  assert.deepEqual(await t.go('msg_w', retry.value), { status: 200 });
-  assert.deepEqual(t.calls[0].slice(0, 2), ['orchestration', 'send']);
-  assert.equal(t.calls[0][t.calls[0].indexOf('--body') + 1], retry.value);
-  assert.equal(t.store.item('msg_w')!.answer, retry.value);
-  const after = askCard(t.store.item('msg_w')!)!;
-  assert.match(html(after), /class="ask-opt chosen"[^>]*disabled/);
-});
-
 test('field and list parsing', () => {
   assert.deepEqual(fields('STORY: a\nQUESTION: one\ntwo'), { STORY: 'a', QUESTION: 'one\ntwo' });
   assert.deepEqual(markedList('just text (a) only one').items, []);
@@ -173,38 +161,37 @@ test('field and list parsing', () => {
   assert.equal(askCard(item({ status: 'replying' }))!.status, 'sending');
 });
 
-function setup(answer: (args: string[]) => any) {
+function setup(reply: (id: string, text: string) => { ok: true } | { ok: false; error: string } = () => ({ ok: true })) {
   const store = openStore(':memory:');
-  const calls: string[][] = [], notes: string[] = [];
-  const orca = async (args: string[]) => { calls.push(args); return answer(args); };
-  const go = (id: string, value: string) => answerAsk({ id, value, run: 'run_j', handle: 'term_j', store, orca, log: () => {}, note: n => notes.push(n) });
+  const calls: [string, string][] = [], notes: string[] = [];
+  const native = { reply: async (id: string, text: string) => { calls.push([id, text]); return reply(id, text); } };
+  const go = (id: string, value: string) => answerAsk({ id, value, store, native, log: () => {}, note: n => notes.push(n) });
   return { store, calls, notes, go };
 }
 
-test('a tapped option is the same reply as jarvis-orca reply, sent once, and marks the ask answered', async () => {
-  const t = setup(() => ({ ok: true, result: {} }));
-  t.store.insertItem({ source: 'orca', external_id: 'msg_q', kind: 'question', dispatch_id: 'd_1', status: 'spoken' });
+test('a tapped option goes to the native worker once, and marks the ask answered', async () => {
+  const t = setup();
+  t.store.insertItem({ source: 'native', external_id: 'msg_q', kind: 'question', dispatch_id: 'n:1', status: 'spoken' });
   assert.equal((await t.go('msg_q', 'skip it')).status, 200);
-  assert.deepEqual(t.calls[0], ['orchestration', 'reply', '--run', 'run_j', '--from', 'term_j', '--id', 'msg_q', '--body', 'skip it']);
+  assert.deepEqual(t.calls[0], ['n:1', 'skip it']);
   assert.equal(askCard(t.store.item('msg_q')!)!.status, 'answered');
   assert.equal(t.store.item('msg_q')!.answer, 'skip it');
   assert.match(t.notes[0], /msg_q.*Reply SILENT/);
-  // A second tap (another page, or after a spoken answer) never reaches Orca.
+  // A second tap (another page, or after a spoken answer) never reaches the worker.
   const again = await t.go('msg_q', 'block the wizard');
   assert.equal(again.status, 409);
   assert.equal(t.calls.length, 1);
 });
 
-test('Orca refusing a tapped answer reopens the ask; an escalation tap goes to the worker as a message', async () => {
-  const t = setup(args => args[1] === 'reply' ? { ok: false, error: { code: 'busy', message: 'busy' } } : { ok: true, result: {} });
-  t.store.insertItem({ source: 'orca', external_id: 'msg_q', kind: 'question', dispatch_id: 'd_1', status: 'spoken' });
+test('a reply that does not reach the worker reopens the ask; an ask of any other source is refused', async () => {
+  const t = setup(() => ({ ok: false, error: 'busy' }));
+  t.store.insertItem({ source: 'native', external_id: 'msg_q', kind: 'question', dispatch_id: 'n:1', status: 'spoken' });
   const r = await t.go('msg_q', 'skip it');
   assert.equal(r.status, 502);
   assert.equal(t.store.item('msg_q')!.status, 'spoken');
-  t.store.insertItem({ source: 'orca', external_id: 'msg_e', kind: 'escalation', dispatch_id: 'd_2', status: 'spoken' });
-  assert.equal((await t.go('msg_e', '1) delete it')).status, 200);
-  assert.deepEqual(t.calls.at(-1), ['orchestration', 'send', '--run', 'run_j', '--from', 'term_j', '--to', 'dispatch:d_2', '--subject', 'From the owner', '--body', '1) delete it']);
-  assert.equal(t.store.item('msg_e')!.status, 'answered');
+  t.store.insertItem({ source: 'old', external_id: 'msg_e', kind: 'escalation', dispatch_id: 'd_2', status: 'spoken' });
+  assert.equal((await t.go('msg_e', '1) delete it')).status, 409);
+  assert.equal(t.calls.length, 1);
   assert.equal((await t.go('nope', 'x')).status, 404);
 });
 
@@ -277,9 +264,9 @@ test('speech is unchanged: Jarvis still reads the options; the card adds nothing
 });
 
 test('an ask with a picture shows it first in the card body, as the usual image marker', () => {
-  const c = askCard(item({ body: `${SHAPED.replace('CONTEXT: The extension flow skips it.', 'CONTEXT: Two layouts.\n[image: /Users/owner/orca/workspaces/x/docs/screens/muse.png]')}` }))!;
-  assert.equal(c.body, '[image: /Users/owner/orca/workspaces/x/docs/screens/muse.png]\n\nAdding the Muse step, step 3 of 5\n\nShould the step be skipped when the dealer has **no Muse key**?\n\nTwo layouts.');
-  assert.match(html(c), /^<div class="ask-tag">.*?<\/div><div class="ask-body md"><p><SHOT \/Users\/owner\/orca\/workspaces\/x\/docs\/screens\/muse.png><\/p><\/div><h3 class="card-h">What the worker is doing<\/h3><div class="ask-body md"><p>Adding/);
+  const c = askCard(item({ body: `${SHAPED.replace('CONTEXT: The extension flow skips it.', 'CONTEXT: Two layouts.\n[image: /Users/owner/Repos/x/docs/screens/muse.png]')}` }))!;
+  assert.equal(c.body, '[image: /Users/owner/Repos/x/docs/screens/muse.png]\n\nAdding the Muse step, step 3 of 5\n\nShould the step be skipped when the dealer has **no Muse key**?\n\nTwo layouts.');
+  assert.match(html(c), /^<div class="ask-tag">.*?<\/div><div class="ask-body md"><p><SHOT \/Users\/owner\/Repos\/x\/docs\/screens\/muse.png><\/p><\/div><h3 class="card-h">What the worker is doing<\/h3><div class="ask-body md"><p>Adding/);
   const free = askCard(item({ body: 'Which layout? [image: /tmp/a.png] Options: (a) left; (b) right' }))!;
   assert.equal(free.body, '[image: /tmp/a.png]\n\nWhich layout?');
   assert.equal(askCard(item({ body: 'No picture here.' }))!.body, 'No picture here.');
@@ -301,9 +288,9 @@ test('an IMAGE field attaches a picture: a thumbnail at the top, the path gone f
 });
 
 test('a plain screenshot path in the ask also shows as a thumbnail; the text keeps it', () => {
-  const c = askCard(item({ body: SHAPED.replace('CONTEXT: The extension flow skips it.', 'CONTEXT: Mock at /Users/owner/orca/workspaces/x/docs/screens/muse.jpeg, left side.') }))!;
-  assert.match(c.body, /^\[image: \/Users\/owner\/orca\/workspaces\/x\/docs\/screens\/muse.jpeg\]\n\nAdding/);
-  assert.match(c.body, /Mock at \/Users\/owner\/orca\/workspaces\/x\/docs\/screens\/muse.jpeg, left side\.$/);
+  const c = askCard(item({ body: SHAPED.replace('CONTEXT: The extension flow skips it.', 'CONTEXT: Mock at /Users/owner/Repos/x/docs/screens/muse.jpeg, left side.') }))!;
+  assert.match(c.body, /^\[image: \/Users\/owner\/Repos\/x\/docs\/screens\/muse.jpeg\]\n\nAdding/);
+  assert.match(c.body, /Mock at \/Users\/owner\/Repos\/x\/docs\/screens\/muse.jpeg, left side\.$/);
   assert.equal(askCard(item({ body: 'See https://example.com/a.png and docs/screens/b.png' }))!.body, 'See https://example.com/a.png and docs/screens/b.png', 'a URL or a relative path is not a picture to attach');
 });
 
@@ -319,22 +306,17 @@ test('a picture outside the allowed folders shows as text, not as a broken thumb
   assert.equal(askCard(item({ body: SHAPED }), undefined, allowed)!.body, askCard(item({ body: SHAPED }))!.body);
 });
 
-test('a steer closes that worker\'s escalations and records whose words they were, for the card and the audit log', () => {
+test('who answered shows on the card and in the audit log', () => {
   const store = openStore(':memory:');
-  const add = (external_id: string, dispatch_id: string, kind = 'escalation') => store.insertItem({ source: 'orca', external_id, kind, dispatch_id, subject: 'Blocked', body: 'QUESTION: Go on?' });
-  add('own', 'd1'); add('spoken', 'd2'); add('question', 'd1', 'question'); add('other', 'd3');
-
-  assert.deepEqual(closeSteeredAsks(store, 'd1', 'Keep going', false), ['own'], 'a question waits for a reply, and other workers are untouched');
-  assert.deepEqual(closeSteeredAsks(store, 'd2', 'Use the second one', true), ['spoken']);
-  assert.equal(store.item('question')!.status, 'new');
-  assert.equal(store.item('other')!.status, 'new');
-
-  const own = askCard(store.item('own')!);
+  const add = (external_id: string) => store.insertItem({ source: 'native', external_id, kind: 'question', dispatch_id: 'n:1', subject: 'Go on?', body: 'QUESTION: Go on?' });
+  add('own'); add('spoken');
+  store.markItem('own', 'answered', 'Keep going', 'jarvis');
+  store.markItem('spoken', 'answered', 'Use the second one');
+  const own = askCard(store.item('own')!)!;
   assert.equal(own.status, 'answered');
   assert.equal(own.answer, 'Keep going');
   assert.equal(own.answeredBy, 'jarvis');
-  assert.equal(askCard(store.item('spoken')!).answeredBy, undefined, "The owner's spoken answer stays his");
-
+  assert.equal(askCard(store.item('spoken')!)!.answeredBy, undefined, "The owner's spoken answer stays his");
   const audit = auditEntries(store, i => askCard(i), new Set());
   assert.equal(audit.find(x => x.key === 'ask:own')!.by, 'jarvis');
   assert.equal(audit.find(x => x.key === 'ask:spoken')!.by, undefined);
@@ -342,8 +324,8 @@ test('a steer closes that worker\'s escalations and records whose words they wer
 
 test('a later status change keeps who answered', () => {
   const store = openStore(':memory:');
-  store.insertItem({ source: 'orca', external_id: 'a', kind: 'escalation', dispatch_id: 'd', subject: 'Blocked', body: 'x' });
-  closeSteeredAsks(store, 'd', 'Keep going', false);
+  store.insertItem({ source: 'native', external_id: 'a', kind: 'question', dispatch_id: 'n:1', subject: 'Go on?', body: 'x' });
+  store.markItem('a', 'answered', 'Keep going', 'jarvis');
   store.markItem('a', 'done');
   assert.equal(store.item('a')!.answered_by, 'jarvis');
   assert.equal(store.item('a')!.answer, 'Keep going');

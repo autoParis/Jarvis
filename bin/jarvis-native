@@ -2,10 +2,15 @@
 // The brain's way to a background Claude worker (a `claude --bg` session jarvisd started). jarvisd holds the rules; this only relays.
 //   jarvis-native reply --worker <name or n:id> --text "<the owner's answer, or the brain's instruction>" [--item <ask id> | --answers]
 //                       jarvisd respawns the worker if its process was stopped and carries the words in with SendMessage.
-//                       --item closes that ask card (its message_id in the brief). --answers closes the worker's only open
-//                       ask, and refuses when it has more than one. Without either, every ask card stays open.
+//                       --item closes that ask card (its message_id in the brief), or the card of a message jarvisd could
+//                       not match to a worker (unknown:<n>). --answers closes the worker's only open ask, and refuses when
+//                       it has more than one. Without either, every ask card of the worker stays open.
 //                       Starting, stopping and abandoning go through jarvis-act.
 //   jarvis-native list   every native worker: id, name, state, report
+//   jarvis-native phone --session <session id or worker> [--title "<Remote Control name>"]
+//                       Continue on phone: jarvisd resumes that same session (never a copy) in its own terminal with
+//                       Remote Control on, so the owner reaches it from the Claude app. It refuses, and names the process,
+//                       when another process has the session open; only the owner's button can stop that process.
 const [cmd, ...rest] = process.argv.slice(2);
 const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
 const has = n => rest.includes(`--${n}`);
@@ -13,7 +18,8 @@ const url = `${process.env.JARVIS_URL ?? 'http://127.0.0.1:7717'}/api/internal/n
 let req;
 if (cmd === 'reply' && flag('worker') && flag('text')) req = [`${url}/reply`, { method: 'POST', body: JSON.stringify({ worker: flag('worker'), text: flag('text'), item: flag('item'), answers: has('answers') }) }];
 else if (cmd === 'list') req = [`${url}/list`, { method: 'POST' }];
-else { console.error('usage: jarvis-native reply --worker <name or n:id> --text <text> [--item <ask id> | --answers] | list'); process.exit(2); }
+else if (cmd === 'phone' && flag('session')) req = [`${url}/phone`, { method: 'POST', body: JSON.stringify({ session: flag('session'), title: flag('title') }) }];
+else { console.error('usage: jarvis-native reply --worker <name or n:id> --text <text> [--item <ask id or unknown:<n>> | --answers] | list | phone --session <id> [--title <name>]'); process.exit(2); }
 try {
   const res = await fetch(...req);
   const text = await res.text();

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cleanEnv } from './orca.ts';
+import { cleanEnv } from './config.ts';
 import type { SupportReply } from './store.ts';
 import { PROD_MCP_URL, PRODUCT_KEY } from './config.ts';
 

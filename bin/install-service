@@ -1,9 +1,10 @@
 #!/bin/bash
-# Installs jarvisd as a login service (launchd local.jarvis, 127.0.0.1:7717) that loads .env (run bin/setup first),
+# Installs jarvisd as a login service (launchd label JARVIS_SERVICE_LABEL, default local.jarvis, on 127.0.0.1:7717) that
+# loads .env (run bin/setup first),
 # then serves it on your tailnet with `tailscale serve`. JARVIS_TS_SOCKET in .env points at a userspace tailscaled
 # (for example a personal tailnet kept apart from a work one). Leave it empty to use the Tailscale app.
 # App: the JARVIS_TERM_ORIGIN URL in .env, https://<host>.<tailnet>.ts.net:7717
-# Uninstall: launchctl bootout gui/$(id -u)/local.jarvis; tailscale serve --https=7717 off
+# Restart: bin/jarvis-restart. Uninstall: launchctl bootout gui/$(id -u)/$(bin/jarvis-restart --label); tailscale serve --https=7717 off
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$ROOT/.env" ] || { echo "No .env: run bin/setup first." >&2; exit 1; }
@@ -25,7 +26,7 @@ agent() { # label, log file, program args...
 $args  </array>
   <key>WorkingDirectory</key><string>$ROOT</string>
   <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>/Applications/Orca.app/Contents/Resources/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>HOME</key><string>$HOME</string>
     <key>LANG</key><string>en_US.UTF-8</string>
   </dict>
@@ -40,7 +41,9 @@ PL
   launchctl bootstrap "gui/$UID_" "$plist"
 }
 
-agent local.jarvis "$ROOT/data/jarvisd.log" \
+# The label comes from daemon/config.ts, so bin/jarvis-restart and the Scheduled tasks screen name the same job.
+LABEL="$("$ROOT/bin/jarvis-restart" --label)"
+agent "$LABEL" "$ROOT/data/jarvisd.log" \
   "$(command -v node)" "--env-file-if-exists=$ROOT/.env" --disable-warning=ExperimentalWarning "$ROOT/daemon/main.ts"
 
 TS_BIN="$(command -v tailscale || echo /opt/homebrew/bin/tailscale)"

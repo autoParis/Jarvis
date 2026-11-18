@@ -1,16 +1,21 @@
 // The Today list: The owner drops a thought, Jarvis works it up, and it waits on the row until he taps.
 // Hard limits, enforced here and not only in the prompt:
-// - Nothing outward without a tap. Go only starts a local worker. The issue is filed only by Accept, which the brain cannot call.
-// - The brain's routes can write a work-up or a result. They cannot release, drop, accept or run anything.
+// - Nothing outward without the owner's yes. Go only starts a local worker. The issue is filed only by Accept: his tap, or
+//   his "do it" in the chat (startFromChat), which the route allows only in a turn that holds his message.
+// - The brain's routes can write a work-up or a result, and start a waiting row in his turn. They cannot release or drop.
 // - A pass decides in code first, so a pass with nothing to do makes no model call.
 import { OWNER_CAP, OWNER } from './config.ts';
 import { cpus, loadavg } from 'node:os';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Store, TodayRow, Approval } from './store.ts';
-import { ISSUE_RULE, type Gate } from './gate.ts';
+import type { Gate } from './gate.ts';
+import { ISSUE_RULE, readReport } from './workercontract.ts';
 import { requestReport } from './requests.ts';
+import { ROW_PREFIX, IDLE_STOPPED, DESKTOP_WAITING } from './native.ts';
 import { QUIET_HOURS, sqlTime } from './push.ts';
+import { reportFile } from './reports.ts';
+import { docHref } from '../web/contract.js';
 import type { Log } from './log.ts';
 
 /** At most this many items have something running. Story drafts count. */
@@ -29,9 +34,12 @@ const KINDS = ['story', 'task', 'talk'];
 
 export type Question = { q: string; options: string[]; recommended: number; answer?: string };
 export type Story = { github: string; title: string; body: string };
+/** One line of a row's history: what happened to it outside a tap, with the owner's words when he said it. */
+export type HistoryEntry = { at: string; event: string; words?: string };
 export type TodayView = {
   id: number; words: string; title: string; kind: string | null; go: boolean; status: string; statusWords: string; at: string;
   reading: string; questions: Question[]; assumptions: string[]; reason: string; result: string; notProven: string; note: string; line: string;
+  history: HistoryEntry[];
   /** `url` opens a page; `open` is the request whose conversation a tap opens. */
   link?: { label: string; url?: string; open?: number };
   buttons: string[];
@@ -62,7 +70,7 @@ export function todayView(i: TodayRow, store?: Pick<Store, 'requestOf'>): TodayV
   return {
     id: i.id, words: i.words, title: i.title || i.words.replace(/\s+/g, ' ').slice(0, 80), kind: i.kind, go: !!i.go, status: i.status, statusWords: STATUS_WORDS[i.status] ?? i.status,
     at: iso(i.status_at), reading: i.reading ?? '', questions: parse(i.questions, []), assumptions: parse(i.assumptions, []), reason: i.reason ?? '',
-    result: i.result ?? '', notProven: i.not_proven ?? '', note: i.note ?? '', line: i.line ?? '', ...(link ? { link } : {}), buttons: buttons(i),
+    result: i.result ?? '', notProven: i.not_proven ?? '', note: i.note ?? '', line: i.line ?? '', history: parse(i.history, []), ...(link ? { link } : {}), buttons: buttons(i),
   };
 }
 
@@ -101,7 +109,10 @@ export function decidePass(s: { items: TodayRow[]; load: number; cores: number; 
 export function parseReport(subject: string, body: string): { result: string; notProven: string } {
   const m = /^[\s*_#-]*not proven[\s*_]*:[\s*_]*(.*(?:\n(?!\s*\n).*)*)/im.exec(body);
   const rest = m ? body.replace(m[0], '') : body;
-  const first = rest.split(/\n\s*\n/).map(p => p.trim()).find(Boolean) ?? '';
+  const para = rest.split(/\n\s*\n/).map(p => p.trim()).find(Boolean) ?? '';
+  // A native worker's report opens with its `DONE: <one sentence>` line, and that sentence is the result.
+  const r = readReport(para);
+  const first = (r.label === 'DONE' || r.label === 'FAILED') && r.line ? r.line : para;
   return { result: (first || subject || 'The worker reported no result.').slice(0, 600), notProven: m?.[1].trim() || 'The worker did not say what it left unproven.' };
 }
 
@@ -129,7 +140,7 @@ export function draftSpec(i: TodayRow): string {
 ${OWNER_CAP}'s exact words:
 ${i.words}
 ${i.brief ? `\nJarvis's reading:\n${i.brief}\n` : ''}${i.note ? `\nOwner said the last draft was not right:\n${i.note}\n` : ''}
-Run the repo's prove-it skill in light mode on this idea, if the repo has one, then draft it as a story. Report worker_done with these parts in the body: a title; the story text, ready to file as a GitHub issue, written as if your recommended answers stand; each open question with its choices and your recommended answer; your assumptions; what you checked and what was not proven. Jarvis reads this and writes it onto ${OWNER}'s list. You file nothing.`;
+Run the repo's prove-it skill in light mode on this idea, if the repo has one, then draft it as a story. Your final report has these parts after its DONE line: a title; the story text, ready to file as a GitHub issue, written as if your recommended answers stand; each open question with its choices and your recommended answer; your assumptions; what you checked and what was not proven. Jarvis reads this and writes it onto ${OWNER}'s list. You file nothing.`;
 }
 
 /** The worker for a task. The limits repeat in the spec, because Go never covers an outward action. */
@@ -141,7 +152,7 @@ ${i.words}
 ${i.note ? `\nYour earlier result was:\n${i.result ?? '(none)'}\n\nOwner tapped Not right and said:\n${i.note}\n` : ''}
 Hard limits: send nothing to anyone, file no issues, open or merge no PRs, push nothing to a remote, change no client data. Do local work and commit on your own branch. If the job needs an outward step, leave it out and say so in your report: ${OWNER_CAP} decides those.
 
-Report worker_done. The first paragraph of its body is one or two sentences on what happened. Then one line starting exactly "Not proven:" that says what you did not check. Say "Not proven: nothing" only if that is true.`;
+In your final report, the DONE or FAILED line says in one sentence what happened. Then put one line starting exactly "Not proven:" that says what you did not check. Say "Not proven: nothing" only if that is true.`;
 }
 
 /** Which skill runs an accepted story. Only AcmeApp has pick-and-ship-v3 today; FBM has plain pick-and-ship. */
@@ -149,7 +160,29 @@ export const storySkill = (repo: string) => existsSync(join(repo, '.claude', 'sk
 export const storyStartSpec = (n: string, skill: string) => `Run the ${skill} skill on issue #${n} (do not pick a different issue). ${OWNER_CAP} accepted this story from his Today list. Done when the PR is marked ready with its evidence, or you are blocked.${ISSUE_RULE}`;
 
 export const issueUrlIn = (text: string | null | undefined) => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/.exec(text ?? '')?.[0];
-const dispatchIn = (a: Approval): string | undefined => parse<{ dispatchId?: string }>(a.result, {}).dispatchId;
+/**
+ * The address a row's link button opens. A web link stays as it is. A .md file in the reports folder becomes the app's
+ * report page, the same address the chat's report cards use. Anything else is an error, because the page cannot open a bare path.
+ */
+export function rowLink(link: string, reportsDir: string | undefined): { url: string; label: string } | { error: string } {
+  if (/^https?:\/\/\S+$/.test(link)) return { url: link, label: 'Link' };
+  if (reportsDir && reportFile(link, reportsDir)) return { url: docHref(link), label: 'Report' };
+  return { error: `--link must be an http(s) link or a .md file in ${reportsDir ?? 'the reports folder'}. Got: ${link}` };
+}
+
+/**
+ * A native worker that will not go on by itself: it reported DONE or FAILED, failed, was abandoned, or the owner stopped
+ * it. A stop Jarvis made (the idle reaper, the Desktop handoff) is not an end: a message resumes it.
+ */
+function nativeEnded(w: { state: string; outcome: string | null; waiting_for: string | null }): boolean {
+  return !!w.outcome || w.state === 'failed' || w.state === 'abandoned' || (w.state === 'stopped' && w.waiting_for !== IDLE_STOPPED && w.waiting_for !== DESKTOP_WAITING);
+}
+
+/** The started worker: a native worker's `n:<id>` (gate.ts runNative), which its request also uses. An older start named a dispatch id. */
+const dispatchIn = (a: Approval): string | undefined => {
+  const r = parse<{ dispatchId?: string; worker?: string }>(a.result, {});
+  return r.dispatchId ?? (typeof r.worker === 'string' && r.worker.startsWith(ROW_PREFIX) ? r.worker : undefined);
+};
 
 function questionsFrom(v: unknown): Question[] | string {
   if (v === undefined || v === null) return [];
@@ -180,6 +213,8 @@ export function makeToday(o: {
   /** A released item with a worker behind it, so the brain can close the loop. */
   released?: (i: TodayRow) => void;
   load?: () => number; cores?: () => number; now?: () => number; skillFor?: (repo: string) => string;
+  /** data/reports. A row link may point at a .md file in it. */
+  reportsDir?: string;
 }) {
   const { store, gate, log } = o;
   const now = o.now ?? Date.now, load = o.load ?? (() => loadavg()[0]), cores = o.cores ?? (() => cpus().length), skillFor = o.skillFor ?? storySkill;
@@ -211,7 +246,7 @@ export function makeToday(o: {
         store.setToday(id, { dispatch, reason: null, line: draft ? 'Drafting the story' : 'Running', note: draft ? i.note : null });
         log('today item started', { item: id, dispatch, approval: a.id, draft });
       } else {
-        failItem(id, a.status === 'unknown' ? `Orca lost the answer, so a worker may be running. Check the work list before trying again. ${a.result ?? ''}`.trim() : `The worker did not start: ${a.result ?? 'no reason given'}`);
+        failItem(id, a.status === 'unknown' ? `The start lost its answer, so a worker may be running. Check the work list before trying again. ${a.result ?? ''}`.trim() : `The worker did not start: ${a.result ?? 'no reason given'}`);
         again = true;
       }
     } catch (e) {
@@ -254,9 +289,8 @@ export function makeToday(o: {
   }
   const soon = (trigger: string) => { pass(trigger).catch(e => log(`today pass: ${e}`)); };
 
-  /** After each work poll: a worker that ended frees its slot, and its report goes on the row. */
-  function sync(workers: { dispatch: string; outcome?: string; path?: string }[], complete: boolean) {
-    const byDispatch = new Map(workers.map(w => [w.dispatch, w]));
+  /** After each native poll: a worker that ended frees its slot, and its report goes on the row. */
+  function sync() {
     let freed = false, touched = false;
     for (const i of store.todayItems()) {
       if (i.status !== 'working') continue;
@@ -264,14 +298,19 @@ export function makeToday(o: {
         if (!starting.has(i.id) && now() - time(i.status_at) >= STUCK_MS) { failItem(i.id, 'Jarvis restarted while starting this. A worker may be running, so check the work list before trying again.'); freed = true; }
         continue;
       }
-      const w = byDispatch.get(i.dispatch), r = store.requestOf(i.dispatch);
+      const r = store.requestOf(i.dispatch);
       // A later Not right reruns the worker in the same folder. A draft runs in the main checkout, which is not its own.
-      if (w?.path && i.phase !== 'draft' && i.worktree !== `path:${w.path}`) { store.setToday(i.id, { worktree: `path:${w.path}` }); }
+      // A native worker's folder is on its own row: its worktree once Claude Code lists it, never the repo's main checkout.
+      const own = i.dispatch.startsWith(ROW_PREFIX) && i.phase !== 'draft' ? store.nativeWorker(i.dispatch.slice(ROW_PREFIX.length))?.cwd : undefined;
+      if (own && own.replace(/\/+$/, '') !== (i.repo ?? '').replace(/\/+$/, '') && i.worktree !== `path:${own}`) store.setToday(i.id, { worktree: `path:${own}` });
       const report = r ? requestReport(store, r.id) : undefined;
-      const settled = !!w?.outcome && w.outcome !== 'in_progress';
-      // A request the owner hid stops updating, so its worker is read directly. A hidden row must not hold a slot forever.
+      // A request the owner hid stops updating, so its worker is read directly from its own row. A hidden row must not
+      // hold a slot forever. A dispatch with no native worker behind it is gone.
+      const nw = i.dispatch.startsWith(ROW_PREFIX) ? store.nativeWorker(i.dispatch.slice(ROW_PREFIX.length)) : undefined;
+      const settled = !!nw && nativeEnded(nw);
+      const gone = !nw;
       const off = !r || !!r.hidden_at || !!r.removed_at;
-      const over = r && !off ? ['done', 'review', 'failed'].includes(r.status) : !!report || settled || (complete && !w);
+      const over = r && !off ? ['done', 'review', 'failed'].includes(r.status) : !!report || settled || gone;
       if (!over) {
         const line = r?.status === 'waiting' ? 'Its worker is asking you something, see Requests' : i.phase === 'draft' ? 'Drafting the story' : 'Running';
         if (line !== i.line) { store.setToday(i.id, { line }); touched = true; }
@@ -330,7 +369,7 @@ export function makeToday(o: {
       const dispatch = dispatchIn(a);
       if (a.status !== 'done' || !dispatch) {
         const lost = a.status !== 'failed';
-        const reason = `Issue #${n} is filed. ${lost ? 'Orca lost the answer, so a worker may be running. Check the work list.' : `The worker did not start, and Accept will try only that again: ${a.result ?? 'no reason given'}`}`;
+        const reason = `Issue #${n} is filed. ${lost ? 'The start lost its answer, so a worker may be running. Check the work list.' : `The worker did not start, and Accept will try only that again: ${a.result ?? 'no reason given'}`}`;
         store.setToday(i.id, { reason, ...(lost ? { issue_state: 'unknown' } : {}) });
         changed();
         return refuse(502, reason);
@@ -420,6 +459,28 @@ export function makeToday(o: {
       }
       return refuse(400, `unknown action ${action}`);
     },
+    /**
+     * `jarvis-today start`. The owner said "do it" (or "start it", "go") in the chat about this row, so it does what his tap
+     * does: Do it on a task, Accept on a story. The route checks that his message is in the turn. This checks the row:
+     * it must wait on him, not be a talk, and have no question he has not answered.
+     */
+    async startFromChat(id: number, words: string[]): Promise<RouteResult> {
+      const i = store.todayItem(id);
+      if (!i || i.status === 'dropped' || i.status === 'moved') return refuse(404, `no today item ${id}`);
+      if (i.status !== 'waiting') return refuse(409, `Item ${id} is ${STATUS_WORDS[i.status] ?? i.status}, not waiting on ${OWNER}. Only a waiting row starts.`);
+      if (i.kind === 'talk') return refuse(409, `Item ${id} is a talk. A talk does not start: discuss it with ${OWNER}.`);
+      const open = parse<Question[]>(i.questions, []).map((q, n) => ({ q, n })).filter(x => x.q.answer === undefined);
+      if (open.length) return refuse(409, `Item ${id} still has a question ${OWNER} has not answered: ${open.map(x => `${x.n} ${JSON.stringify(x.q.q)}`).join(', ')}. Record his answer with jarvis-today answer first.`);
+      const action = i.kind === 'story' ? 'accept' : 'do';
+      if (!buttons(i).includes(action)) return refuse(409, i.kind === 'story' && i.story ? `Item ${id} cannot be accepted now: ${i.reason ?? 'the last filing lost its answer'}. ${OWNER_CAP} checks it on the row.` : `Item ${id} has no work-up to start. Write one first.`);
+      // Written before the start, so the record stays even if the start fails or jarvisd stops halfway.
+      const said = words.join('\n').trim().slice(0, 2000);
+      const history = [...parse<HistoryEntry[]>(i.history, []), { at: new Date(now()).toISOString(), event: `started from the chat (${action === 'accept' ? 'Accept' : 'Do it'})`, ...(said ? { words: said } : {}) }];
+      store.setToday(id, { history: JSON.stringify(history) });
+      log('today item started from the chat', { item: id, action });
+      const r = await api.act({ id, action });
+      return r.status === 200 ? { ...r, body: { ...r.body, item: todayView(store.todayItem(id)!, store) } } : r;
+    },
     /** the owner changed the kind. A kind whose path needs a work-up it does not have goes back to Jarvis. */
     setKind(i: TodayRow, kind: unknown): RouteResult {
       if (i.status !== 'new' && i.status !== 'waiting') return refuse(409, 'The kind can change only before work starts.');
@@ -508,10 +569,26 @@ export function makeToday(o: {
       const i = store.todayItem(id);
       if (!i) return refuse(404, `no today item ${id}`);
       if (i.status !== 'new' && i.status !== 'waiting') return refuse(409, `Item ${id} is ${i.status}.`);
-      const result = text(b?.result), notProven = text(b?.notProven), link = text(b?.link);
+      const result = text(b?.result), notProven = text(b?.notProven), given = text(b?.link);
       if (!result || !notProven) return refuse(400, 'result and not-proven are both required');
-      store.setToday(id, { status: 'ready', kind: i.kind ?? 'task', result, not_proven: notProven, link: link || null, link_label: link ? 'Link' : null, owed: null, reason: null, told_at: null, tries: 0 });
+      const link = given ? rowLink(given, o.reportsDir) : undefined;
+      if (link && 'error' in link) return refuse(400, link.error);
+      store.setToday(id, { status: 'ready', kind: i.kind ?? 'task', result, not_proven: notProven, link: link?.url ?? null, link_label: link?.label ?? null, owed: null, reason: null, told_at: null, tries: 0 });
       log('today result from the brain', { item: id });
+      changed();
+      return reply(200, { item: todayView(store.todayItem(id)!, store) });
+    },
+    /** `jarvis-today link`. Sets or replaces the link on a ready row. Nothing else on the row changes. */
+    link(id: number, b: any): RouteResult {
+      const i = store.todayItem(id);
+      if (!i) return refuse(404, `no today item ${id}`);
+      if (i.status !== 'ready') return refuse(409, `Item ${id} is ${i.status}. Only a ready row takes a new link. Use result on a new or waiting row.`);
+      const given = text(b?.link);
+      if (!given) return refuse(400, '--link is required');
+      const link = rowLink(given, o.reportsDir);
+      if ('error' in link) return refuse(400, link.error);
+      store.setToday(id, { link: link.url, link_label: link.label });
+      log('today link from the brain', { item: id });
       changed();
       return reply(200, { item: todayView(store.todayItem(id)!, store) });
     },
@@ -540,10 +617,11 @@ export type Today = ReturnType<typeof makeToday>;
 
 /**
  * The routes. `/api/today/*` act as the owner and sit behind the open-page secret in main.ts. `/api/internal/today*` is what the
- * brain's CLI calls: it can add, write a work-up, ask for a draft, record a chat answer or a result. It has no route to release, drop, accept or run.
+ * brain's CLI calls: it can add, write a work-up, ask for a draft, record a chat answer or a result, fix a ready row's link, and start a
+ * waiting row in a turn that holds the owner's message. It has no route to release or drop.
  * Undefined when the URL is not one of these.
  */
-export async function todayRoute(t: Today, method: string, url: string, b: any, ctx: { fromOwner: () => boolean }): Promise<RouteResult | undefined> {
+export async function todayRoute(t: Today, method: string, url: string, b: any, ctx: { fromOwner: () => boolean; ownerWords?: () => string[] }): Promise<RouteResult | undefined> {
   if (method === 'GET' && (url === '/api/today' || url === '/api/internal/today')) return { status: 200, body: { today: t.list() } };
   if (method !== 'POST') return undefined;
   if (url === '/api/today/add') return t.add(b);
@@ -553,8 +631,13 @@ export async function todayRoute(t: Today, method: string, url: string, b: any, 
     if (b?.go === true && !ctx.fromOwner()) return { status: 409, body: { error: `Go needs ${OWNER} saying so in this turn. Add it without --go.` } };
     return t.add(b);
   }
-  const m = /^\/api\/internal\/today\/(\d+)\/(workup|draft|answer|result)$/.exec(url);
+  const m = /^\/api\/internal\/today\/(\d+)\/(workup|draft|answer|result|link|start)$/.exec(url);
   if (!m) return undefined;
   const id = Number(m[1]);
-  return m[2] === 'workup' ? t.workup(id, b) : m[2] === 'draft' ? t.draft(id, b) : m[2] === 'answer' ? t.answer(id, b) : t.result(id, b);
+  if (m[2] === 'start') {
+    // The same rule as Go: a start is the owner's yes, so it needs his message in this turn. An event or a check wakes no start.
+    if (!ctx.fromOwner()) return { status: 409, body: { error: `Start needs ${OWNER} saying so in this turn. Tell him the row waits for his tap.` } };
+    return t.startFromChat(id, ctx.ownerWords?.() ?? []);
+  }
+  return m[2] === 'workup' ? t.workup(id, b) : m[2] === 'draft' ? t.draft(id, b) : m[2] === 'answer' ? t.answer(id, b) : m[2] === 'link' ? t.link(id, b) : t.result(id, b);
 }

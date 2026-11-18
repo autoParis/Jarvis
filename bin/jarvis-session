@@ -2,7 +2,7 @@
 // Prints the human-readable turns of an agent session transcript (Claude Code or Codex jsonl),
 // newest last, without tool calls, tool output or injected instructions.
 //   jarvis-session <transcript.jsonl> [--last 20] [--chars 1500]
-// Find transcripts with: jarvis-orca search "<words>"  (each hit has source.filePath)
+// Claude Code keeps its transcripts under ~/.claude/projects, Codex under ~/.codex/sessions.
 import { readFileSync } from 'node:fs';
 
 const [file, ...rest] = process.argv.slice(2);

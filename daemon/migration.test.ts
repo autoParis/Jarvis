@@ -8,8 +8,8 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './store.ts';
-import { makeMigration, migrationRoute, migrationBrief, readDealerFile, statusOf, fold, meetingOf, createTables } from './migration.ts';
-import { migrationButton, migrationSub, listHtml, rowHtml, dealerOptions, addFormHtml, when, editedAgo, byLine, since, meetingWords, easternIso, easternFields, readBack, groups, order, byDealership, pickerHtml, nextMeeting, addReady, meetingToast, toastKey, untilWords } from '../web/migration.js';
+import { makeMigration, migrationRoute, migrationBrief, readDealerFile, statusOf, fold, meetingOf, createTables, contactOf } from './migration.ts';
+import { migrationButton, migrationSub, listHtml, rowHtml, contactHtml, rowTap, ROW_TAPS, REMOVE_WAIT_MS, dealerOptions, addFormHtml, when, editedAgo, byLine, since, meetingWords, easternIso, easternFields, readBack, groups, order, byDealership, pickerHtml, nextMeeting, addReady, meetingToast, toastKey, untilWords } from '../web/migration.js';
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
 const SEED = fileURLToPath(new URL('../docs/migration/dealerships.json', import.meta.url));
@@ -239,7 +239,9 @@ test('each status is a heading that folds with its count, Migrated starts folded
   assert.match(open, /data-note/);
   assert.match(open, /data-save/);
   assert.match(open, /data-remove>Remove</);
-  assert.match(listHtml(list, { open: 1, confirmRemove: true }, NOW), /Tap again to remove/);
+  const asking = listHtml(list, { open: 1, confirmRemove: NOW }, NOW);
+  assert.match(asking, /Remove Open from the list\?<\/span><button type="button" class="act danger" data-remove-yes>Remove<\/button><button type="button" class="act" data-remove-keep>Keep<\/button>/, 'Keep sits where Remove was');
+  assert.doesNotMatch(asking, /data-remove>/);
   assert.match(listHtml([], {}, NOW), /Nobody yet/);
 });
 
@@ -277,7 +279,11 @@ test('option H: four icon buttons in the bar, Leads among them, New session in t
   const bar = page.slice(page.indexOf('<div id="needbar">'), page.indexOf('<div class="tools">'));
   const ids = [...bar.matchAll(/id="([a-z]+-btn)"/g)].map(m => m[1]);
   assert.deepEqual(ids, ['req-btn', 'msg-btn', 'today-btn', 'mig-btn'], 'Requests, Messages, Today, Leads');
-  for (const b of bar.matchAll(/<button [^>]*>/g)) assert.doesNotMatch(b[0], /\bhidden\b/, 'every button stays at zero, so the four never move');
+  for (const b of bar.matchAll(/<button [^>]*>/g)) {
+    const id = b[0].match(/id="([a-z]+-btn)"/)![1];
+    if (id === 'req-btn' || id === 'msg-btn') assert.match(b[0], /\bhidden\b/, `${id} starts hidden: nothing is open before the first data`);
+    else assert.doesNotMatch(b[0], /\bhidden\b/, `${id} stays at zero`);
+  }
   for (const label of ['Requests', 'Messages', 'Today', 'Leads']) assert.match(bar, new RegExp(`<svg [^>]*aria-hidden="true">.*?</svg><span class="nl">${label}</span><em hidden></em>`));
   assert.doesNotMatch(page, /mig-ib|mig-strip|mig-next/, 'the old icon, strip and chip are gone');
   assert.match(page, /<div id="menu" hidden><button id="menu-new" type="button">New session<\/button>/);
@@ -290,8 +296,19 @@ test('option H: four icon buttons in the bar, Leads among them, New session in t
   assert.match(phone, /\.need-btn \{ width: 44px; height: 44px; padding: 0; \}/, '44 px to tap');
   assert.match(phone, /\.need-btn \.nl \{ display: none; \}/);
   assert.match(phone, /#newchat \{ display: none; \}[\s\S]*#menu #menu-new \{ display: flex; \}/);
-  assert.match(read('./main.ts'), /'\/migration\.js': 'migration\.js'/);
+  assert.match(read('./webfiles.ts'), /'\/migration\.js': 'migration\.js'/);
   assert.match(read('./main.ts'), /'\/api\/migration\/add', '\/api\/migration\/act', '\/api\/migration\/dealer', '\/api\/migration\/toast-close'/, 'the page routes need the open-page secret');
+});
+
+test('Requests and Messages hide at zero, and a popup closes when its button goes', () => {
+  const page = read('../web/index.html'), css = read('../web/app.css');
+  const paint = page.slice(page.indexOf('function paintNeedbar()'), page.indexOf('function setPop('));
+  assert.match(paint, /\$\('req-btn'\)\.hidden = !n;/, 'Requests shows only with an open request');
+  assert.match(paint, /msg\.hidden = !b;/, 'Messages shows only with an open message');
+  assert.match(paint, /if \(POPS\[popOpen\]\?\.btn\.hidden\) setPop\(null\);/, 'an open popup closes with its button');
+  assert.doesNotMatch(paint, /today-btn'\)\.hidden|mig-btn'\)\.hidden/, 'Today and Leads stay');
+  // The button's own display would beat the hidden attribute without this rule.
+  assert.match(css, /\.need-btn\[hidden\] \{ display: none; \}/);
 });
 
 test('the brain\'s file says when to add a person, the short confirmation, and lists the CLI', () => {
@@ -532,7 +549,7 @@ test('the button names the next meeting ahead within a week', () => {
 
 test('the meeting toast: its markup, its x, and the styles at 40 px on the Mac and 32 px on the phone', () => {
   const page = read('../web/index.html'), css = read('../web/app.css');
-  const toast = page.slice(page.indexOf('<div class="mtoast-row">'), page.indexOf('<div id="doneline"'));
+  const toast = page.slice(page.indexOf('<div class="mtoast-row">'), page.indexOf('<section id="pop-requests"'));
   assert.match(toast, /<div class="mtoast" id="mtoast" role="status" hidden>/);
   assert.match(toast, /<button type="button" class="mt-x" id="mtoast-x" aria-label="Close the meeting reminder"/);
   assert.equal((toast.match(/<button/g) ?? []).length, 1, 'the x is the only control');
@@ -662,4 +679,166 @@ test('the source is an icon with a label, never the words, so a row is two lines
   assert.match(text, /<span class="m-src" role="img" aria-label="Text message" title="Text message"><svg[^>]*aria-hidden="true"><path d="M5 5h14/);
   assert.doesNotMatch(mail.replace(/<[^>]+>/g, '|'), /\|Email\|/, 'the word Email is not shown');
   assert.match(mail, /<button type="button" class="m-who" data-toggle aria-expanded="false"><span class="m-name">Max<\/span><\/button><div class="m-line"><span class="m-age"[^>]*>2h<\/span><span class="m-src"[^]*?<\/span><span class="m-sub" data-toggle>Dealer One<\/span><\/div>/);
+});
+
+// ---- edit mode: name, dealership, source and contact ----
+test('the owner edits a person from the page: name, dealership by id, source and contact; status, note, history and uid stay', () => {
+  const t = setup();
+  const id = addId(t, { name: 'Samuel', dealership: 'Dealer One', note: 'Called' });
+  t.m.status(id, { status: 'contacted' }, 'jarvis');
+  const before = t.m.view(id)!;
+  const bravo = t.m.state().dealers.find(d => d.name === 'Bravo Garage')!;
+  const n = t.changes();
+  const r = migrationRoute(t.m, 'POST', '/api/migration/act', { id, action: 'edit', name: '  Samuel   Thibault ', dealerId: bravo.id, source: 'text', contact: '581-232-9500' })!;
+  assert.equal(r.status, 200, r.body.error);
+  const p = r.body.person;
+  assert.deepEqual([p.name, p.dealership, p.source, p.sourceWords, p.contact], ['Samuel Thibault', 'Bravo Garage', 'text', 'Text message', '581-232-9500']);
+  assert.deepEqual([p.uid, p.status, p.note, p.statusAt, p.history], [before.uid, before.status, before.note, before.statusAt, before.history]);
+  assert.equal(t.changes(), n + 1, 'the page and the phone redraw');
+  assert.ok(t.logs.includes('migration person edited'));
+  const again = migrationRoute(t.m, 'POST', '/api/migration/act', { id, action: 'edit', name: 'Samuel Thibault', dealerId: bravo.id, source: 'text', contact: '581-232-9500' })!;
+  assert.equal(again.status, 200);
+  assert.equal(t.changes(), n + 1, 'the same values change nothing and broadcast nothing');
+  assert.equal(migrationRoute(t.m, 'POST', '/api/migration/act', { id, action: 'edit', contact: '' })!.body.person.contact, null, 'an empty contact clears it');
+  assert.equal(migrationRoute(t.m, 'POST', '/api/migration/act', { id, action: 'edit', dealerId: 9999 })!.status, 400, 'a dealership id not on the list');
+});
+
+test('the brain edits through its route with a dealership from the list, and bad input changes nothing', () => {
+  const t = setup();
+  const id = addId(t, { name: 'Max', dealership: 'Dealer One' });
+  const other = addId(t, { name: 'Lea', dealership: 'Bravo Garage' });
+  const edit = (b: object) => migrationRoute(t.m, 'POST', `/api/internal/migration/${id}/edit`, b)!;
+  const ok = edit({ dealership: 'charlie centre', contact: 'max@dealer.ca' });
+  assert.equal(ok.status, 200, ok.body.error);
+  assert.deepEqual([ok.body.person.dealership, ok.body.person.contact, ok.body.person.name], ['Charlie Centre', 'max@dealer.ca', 'Max'], 'a field left out stays');
+  const was = t.m.view(id);
+  const bad = edit({ dealership: 'Dealer Onn Inc' });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /not on the dealership list\. Close: Dealer One\./);
+  assert.match(edit({ contact: 'call me' }).body.error, /phone number .* or an email/);
+  assert.match(edit({ contact: '123' }).body.error, /phone number/, 'too few digits');
+  assert.match(edit({ source: 'fax' }).body.error, /email or text/);
+  assert.match(edit({ name: '  ' }).body.error, /name cannot be empty/);
+  assert.match(edit({}).body.error, /nothing to change/);
+  assert.match(edit({ dealerId: 1 }).body.error, /nothing to change/, 'the brain cannot pick by id');
+  const dup = edit({ name: 'lea', dealership: 'Bravo Garage' });
+  assert.equal(dup.status, 409, 'an edit never makes a duplicate');
+  assert.match(dup.body.error, new RegExp(`Lea is already on the list at Bravo Garage \\(id ${other}\\)`));
+  assert.deepEqual(t.m.view(id), was, 'every refusal left the row as it was');
+  assert.equal(migrationRoute(t.m, 'POST', '/api/internal/migration/999/edit', { name: 'X' })!.status, 404);
+});
+
+test('a contact is a phone number or an email, kept as typed, and add takes one too', () => {
+  for (const c of ['581-232-9500', '+1 (581) 232-9500', '581.232.9500 ext 12', 'Max@Dealer.ca']) assert.equal(contactOf(c), c, c);
+  assert.equal(contactOf('  581  232 9500 '), '581 232 9500');
+  for (const c of ['call me', '12-34', 'a@b', 'x'.repeat(121) + '@a.ca']) assert.equal(contactOf(c), undefined, c);
+  const t = setup();
+  assert.equal(t.m.add(jarvis({ name: 'Max', dealership: 'Dealer One', contact: '581-232-9500' }), 'jarvis').body.person.contact, '581-232-9500');
+  assert.equal(t.m.add(jarvis({ name: 'Lea', dealership: 'Dealer One' }), 'jarvis').body.person.contact, null, 'optional');
+  assert.equal(t.m.add(jarvis({ name: 'Zed', dealership: 'Dealer One', contact: 'nope' }), 'jarvis').status, 400);
+});
+
+test('a database made before contacts gains the column, empty', () => {
+  const store = openStore(':memory:');
+  setup(SAMPLE, store);
+  store.db.exec('ALTER TABLE migration_people DROP COLUMN contact');
+  createTables(store.db);
+  assert.ok((store.db.prepare('PRAGMA table_info(migration_people)').all() as { name: string }[]).some(c => c.name === 'contact'));
+});
+
+test('the real CLI edits a person and adds one with a contact, with the same dealership check as add', async () => {
+  const t = setup();
+  const server = http.createServer(async (req, res) => {
+    let s = ''; for await (const c of req) s += c;
+    const r = migrationRoute(t.m, req.method!, req.url!, s ? JSON.parse(s) : {});
+    res.writeHead(r?.status ?? 404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(r?.body ?? { error: 'not found' }));
+  }).listen(0, '127.0.0.1');
+  await new Promise(r => server.once('listening', r));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const bin = fileURLToPath(new URL('../bin/jarvis-migration', import.meta.url));
+  const cli = (...args: string[]) => new Promise<{ code: number; out: string; err: string }>(resolve => execFile(bin, args, { env: { ...process.env, JARVIS_URL: url } }, (e, out, err) => resolve({ code: e ? (e.code as number) : 0, out, err })));
+  try {
+    const added = await cli('add', '--name', 'Samuel', '--dealership', 'Dealer One', '--source', 'text', '--from', 'chat', '--contact', 'sam@dealer.ca');
+    assert.equal(added.code, 0, added.err);
+    const id = String(JSON.parse(added.out).id);
+    assert.equal(JSON.parse(added.out).contact, 'sam@dealer.ca');
+    const e = await cli('edit', id, '--name', 'Samuel Thibault', '--contact', '581-232-9500');
+    assert.equal(e.code, 0, e.err);
+    assert.deepEqual([JSON.parse(e.out).name, JSON.parse(e.out).contact, JSON.parse(e.out).dealership], ['Samuel Thibault', '581-232-9500', 'Dealer One']);
+    const moved = await cli('edit', id, '--dealership', 'bravo garage', '--source', 'email');
+    assert.deepEqual([JSON.parse(moved.out).dealership, JSON.parse(moved.out).source], ['Bravo Garage', 'email']);
+    const nowhere = await cli('edit', id, '--dealership', 'Nowhere');
+    assert.equal(nowhere.code, 1);
+    assert.match(JSON.parse(nowhere.err).error, /not on the dealership list/);
+    assert.equal(JSON.parse((await cli('edit', id, '--contact', '')).out).contact, null, 'an empty --contact clears it');
+    const none = await cli('edit', id);
+    assert.equal(none.code, 2);
+    assert.match(none.err, /at least one of --name/);
+    assert.equal((await cli('edit', 'abc', '--name', 'X')).code, 2);
+    assert.equal(JSON.parse((await cli('list')).out)[0].name, 'Samuel Thibault');
+  } finally { server.close(); }
+});
+
+test('an open row shows the contact as a link and a small pencil Edit; edit mode shows the fields, Save and Cancel', () => {
+  const dealers = [{ id: 1, name: 'Dealer One', key: 'k', onSheet: true }, { id: 2, name: 'Kia <Matane>', key: 'kia', onSheet: true }];
+  const closed = rowHtml(person({ contact: '581-232-9500' }), {}, NOW);
+  assert.doesNotMatch(closed, /data-edit|m-contact/, 'a closed row stays as light as before');
+  const open = rowHtml(person({ contact: '581-232-9500' }), { open: 1 }, NOW);
+  assert.match(open, /<a class="m-contact" href="tel:5812329500"><svg[^]*?<\/svg><span>581-232-9500<\/span><\/a><button type="button" class="m-edit-btn" data-edit aria-label="Edit Max"><svg[^]*?<\/svg>Edit<\/button>/);
+  assert.match(rowHtml(person({ contact: 'a@b.ca' }), { open: 1 }, NOW), /href="mailto:a@b\.ca"/);
+  assert.doesNotMatch(rowHtml(person({}), { open: 1 }, NOW), /m-contact/, 'no contact, no line');
+  assert.match(contactHtml('x"<y>@a.ca'), /x&quot;&lt;y&gt;@a\.ca/);
+  const edit = { id: 1, name: 'Sam <b>', dealer: '2', source: 'text', contact: '581', error: 'Not saved: bad' };
+  const html = rowHtml(person({}), { open: 1, edit, dealers }, NOW);
+  assert.match(html, /data-e="name" value="Sam &lt;b&gt;"/);
+  assert.match(html, /<option value="2" selected>Kia &lt;Matane&gt;<\/option>/);
+  assert.doesNotMatch(html, /Other\.\.\./, 'edit picks from the list only');
+  assert.match(html, /data-esrc="text" aria-pressed="true" class="on"/);
+  assert.match(html, /data-e="contact" value="581"/);
+  assert.match(html, /data-edit-save>Save<[^]*data-edit-cancel>Cancel</);
+  assert.match(html, /role="alert">Not saved: bad</);
+  assert.doesNotMatch(html, /data-note|data-remove/, 'edit mode replaces the note panel');
+  assert.match(addFormHtml(dealers, { name: '', dealer: '', source: 'email', status: 'todo', note: '', contact: '' }, NOW), /data-f="contact"/);
+});
+
+test('Cancel in edit mode keeps the row: no tap there removes, and a Remove asked before edit mode does not carry over', () => {
+  const s: any = { open: 1, edit: null, confirmRemove: false };
+  // Simon's path: Remove tapped (or landed on) once, then Edit, then Cancel, then a tap on the same spot.
+  assert.equal(rowTap('data-remove', s, 1, NOW), 'draw');
+  assert.equal(rowTap('data-edit', s, 1, NOW + 1000), 'edit');
+  assert.equal(s.confirmRemove, 0, 'Edit clears the pending confirm');
+  s.edit = { id: 1, name: 'Max', dealer: '1', source: 'email', contact: '', error: '' };
+  assert.equal(rowTap('data-remove', s, 1, NOW + 1100), 'none', 'no Remove in edit mode');
+  assert.equal(rowTap('data-remove-yes', s, 1, NOW + 1200), 'none');
+  assert.equal(rowTap('data-edit-cancel', s, 1, NOW + 1300), 'draw');
+  assert.deepEqual([s.open, s.edit, s.confirmRemove], [1, null, 0], 'the row stays open, out of edit mode, nothing armed');
+  assert.equal(rowTap('data-remove-yes', s, 1, NOW + 5000), 'none', 'a confirm tap with nothing asked removes nothing');
+  const html = rowHtml(person({}), s, NOW);
+  assert.match(html, /data-remove>Remove</);
+  assert.doesNotMatch(html, /data-remove-yes/);
+  // Every tap the edit form has, in any order, never says remove.
+  const s2: any = { open: 1, edit: { id: 1 }, confirmRemove: false };
+  for (const t of ['data-edit-save', 'data-esrc', 'data-edit-cancel', 'data-cancel']) assert.notEqual(rowTap(t, s2, 1, NOW), 'remove', t);
+});
+
+test('Remove asks first, and a double tap or a tap within the wait removes nothing', () => {
+  const s: any = { open: 1, edit: null, confirmRemove: false };
+  assert.equal(rowTap('data-remove', s, 1, NOW), 'draw');
+  assert.equal(rowTap('data-remove-yes', s, 1, NOW + 100), 'none', 'too soon: a double tap');
+  assert.equal(rowTap('data-remove-yes', s, 2, NOW + REMOVE_WAIT_MS), 'none', 'another row');
+  assert.equal(rowTap('data-remove-yes', s, 1, NOW + REMOVE_WAIT_MS), 'remove');
+  assert.equal(rowTap('data-remove-keep', s, 1, NOW), 'draw');
+  assert.equal(s.confirmRemove, 0, 'Keep disarms');
+  assert.equal(rowTap('data-remove', { open: 2, confirmRemove: false }, 1, NOW), 'none', 'Remove on a closed row');
+  assert.ok(ROW_TAPS.indexOf('data-edit-cancel') >= 0 && ROW_TAPS.indexOf('data-remove-yes') >= 0, 'the handler checks both');
+  assert.match(read('../web/migration.js'), /rowTap\(tap, s, id\)/, 'the click handler goes through rowTap');
+  assert.doesNotMatch(read('../web/migration.js'), /act\(id, 'remove'\)[^]*act\(id, 'remove'\)/, 'one path to remove');
+});
+
+test('the brain\'s file lists the edit verb and --contact', () => {
+  const v = read('../vault/CLAUDE.md').split('## Migration list')[1].split('\n## ')[0];
+  assert.match(v, /jarvis-migration edit <id> \[--name/);
+  assert.match(v, /--contact/);
+  assert.match(read('../bin/jarvis-migration'), /cmd === 'edit'/);
 });

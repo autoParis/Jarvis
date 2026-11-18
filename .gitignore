@@ -27,3 +27,8 @@ vault/notes/*
 vault/projects/*
 !vault/projects/example-project.md
 !vault/projects/jarvis.md
+
+# Claude Code worktrees of this repo, and the private design spec that lives only in the main checkout.
+.claude/worktrees/
+docs/spec.md
+docs/spec/

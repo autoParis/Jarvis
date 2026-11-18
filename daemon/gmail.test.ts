@@ -253,7 +253,6 @@ test('the reply goes to the sender and Cc, in the thread, with a UTF-8 subject a
 
 // ---- Sending through the gate ----
 
-const id = { run: 'run_x', handle: 'term_x' };
 const noGmail = async () => { throw new Error('no Gmail call expected'); };
 function storeWithEmail() {
   const s = openStore(':memory:');
@@ -267,7 +266,7 @@ function storeWithEmail() {
 test('gmail-send is button only: a relayed yes never sends', async () => {
   assert.ok(BUTTON_ONLY.has('gmail-send'));
   const s = storeWithEmail();
-  const gate = makeGate(s, id, () => {}, undefined, undefined, noGmail);
+  const gate = makeGate(s, () => {}, undefined, undefined, noGmail);
   const a = await gate.propose('gmail-send', { item: 'gmail:a', text: 'Bonjour, je regarde.\nOwner' }, 'Send the reply to Jean?');
   assert.equal(a.status, 'pending');
   assert.deepEqual(JSON.parse(a.args), { item: 'gmail:a', to: 'jdoe@dealer-a.test', cc: 'max@dealer-a.test', subject: 'Photos', text: 'Bonjour, je regarde.' });
@@ -279,16 +278,16 @@ test('gmail-send is button only: a relayed yes never sends', async () => {
 test('gmail-send only answers a stored email, to its sender, in its thread', async () => {
   const s = storeWithEmail();
   const lookup = (e: string) => s.item(e);
-  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:zzz', to: 'x@y.z', text: 'hi' }, id, lookup), /no stored email/);
-  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:a', to: 'boss@elsewhere.test', cc: 'max@dealer-a.test', text: 'hi' }, id, lookup), /must be the sender/);
-  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:a', to: 'jdoe@dealer-a.test', cc: 'max@dealer-a.test, boss@elsewhere.test', text: 'hi' }, id, lookup), /cc must be everyone else/);
-  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:a', to: 'jdoe@dealer-a.test', text: 'hi' }, id, lookup), /cc must be everyone else/);
-  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:a', to: 'jdoe@dealer-a.test', cc: 'max@dealer-a.test' }, id, lookup), /text is required/);
-  const argv = buildCommand('gmail-send', { item: 'gmail:a', to: 'jdoe@dealer-a.test', cc: 'max@dealer-a.test', text: 'hi' }, id, lookup);
+  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:zzz', to: 'x@y.z', text: 'hi' }, lookup), /no stored email/);
+  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:a', to: 'boss@elsewhere.test', cc: 'max@dealer-a.test', text: 'hi' }, lookup), /must be the sender/);
+  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:a', to: 'jdoe@dealer-a.test', cc: 'max@dealer-a.test, boss@elsewhere.test', text: 'hi' }, lookup), /cc must be everyone else/);
+  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:a', to: 'jdoe@dealer-a.test', text: 'hi' }, lookup), /cc must be everyone else/);
+  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:a', to: 'jdoe@dealer-a.test', cc: 'max@dealer-a.test' }, lookup), /text is required/);
+  const argv = buildCommand('gmail-send', { item: 'gmail:a', to: 'jdoe@dealer-a.test', cc: 'max@dealer-a.test', text: 'hi' }, lookup);
   assert.deepEqual(argv.slice(0, 5), ['gws', 'gmail', 'users', 'messages', 'send']);
   assert.equal(JSON.parse(argv[argv.indexOf('--json') + 1]).threadId, 't_a');
   // Even a proposal that names another recipient is rewritten to the sender before it is stored.
-  const gate = makeGate(s, id, () => {}, undefined, undefined, noGmail);
+  const gate = makeGate(s, () => {}, undefined, undefined, noGmail);
   const a = await gate.propose('gmail-send', { item: 'gmail:a', to: 'boss@elsewhere.test', cc: 'boss@elsewhere.test', text: 'hi' }, 'Send?');
   assert.equal(JSON.parse(a.args).to, 'jdoe@dealer-a.test');
   assert.equal(JSON.parse(a.args).cc, 'max@dealer-a.test');
@@ -310,22 +309,22 @@ test('an email stored before reply all reads its To and Cc from Gmail once, and 
     if (args[2] === 'getProfile') return { emailAddress: 'owner2@example.test' };
     return { id: 'old1', payload: { headers: [{ name: 'From', value: 'Morgan <morgan@dealer.test>' }, { name: 'To', value: 'owner2@example.test, Leo <leo@dealer.test>' }, { name: 'Cc', value: 'owner@example.test, morgan@dealer.test' }] } };
   };
-  const gate = makeGate(s, id, () => {}, undefined, undefined, g as any);
+  const gate = makeGate(s, () => {}, undefined, undefined, g as any);
   const a = await gate.propose('gmail-send', { item: 'gmail:old1', text: 'Bonjour.\nOwner' }, 'Send?');
   assert.deepEqual([JSON.parse(a.args).to, JSON.parse(a.args).cc], ['morgan@dealer.test', 'leo@dealer.test']);
   assert.deepEqual(calls, ['getProfile', 'messages metadata']);
   const meta = JSON.parse(s.item('gmail:old1')!.meta!);
   assert.deepEqual([meta.to, meta.cc], [['owner2@example.test', 'leo@dealer.test'], ['owner@example.test', 'morgan@dealer.test']]);
   // Saved: building it again asks Gmail nothing.
-  buildCommand('gmail-send', JSON.parse(a.args), id, e => s.item(e), ['owner2@example.test']);
+  buildCommand('gmail-send', JSON.parse(a.args), e => s.item(e), ['owner2@example.test']);
   assert.equal(calls.length, 2);
 });
 
 test('when Gmail cannot give an older email\'s recipients, the send is refused, never sent to the sender alone', async () => {
   const s = storeWithOldEmail();
   s.setState('gmail_self', 'owner@example.test');
-  const gate = makeGate(s, id, () => {}, undefined, undefined, (async () => ({ error: { code: 500, message: 'backend' } })) as any);
+  const gate = makeGate(s, () => {}, undefined, undefined, (async () => ({ error: { code: 500, message: 'backend' } })) as any);
   await assert.rejects(gate.propose('gmail-send', { item: 'gmail:old1', text: 'hi' }, 'Send?'), /Not sent: I could not read who is on gmail:old1 from Gmail.*"code":500/);
   assert.equal(s.pendingApprovals().length, 0);
-  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:old1', to: 'morgan@dealer.test', text: 'hi' }, id, e => s.item(e)), /not recorded/);
+  assert.throws(() => buildCommand('gmail-send', { item: 'gmail:old1', to: 'morgan@dealer.test', text: 'hi' }, e => s.item(e)), /not recorded/);
 });

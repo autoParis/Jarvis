@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addSteps, finishSteps, type Step } from './worksteps.ts';
-import { formatDuration, formatStamp, summarize, groupSteps, callLine, stepsHtml, foldHtml, eventMessages, eventSubject, messageFoldHtml, answerFoldHtml, fewWords, messageFootHtml, toolRunSummary, toolRunHtml, briefTitle, briefFoldHtml, paneTag } from '../web/workfold.js';
+import { formatDuration, formatStamp, summarize, groupSteps, callLine, stepsHtml, foldHtml, eventMessages, eventSubject, messageFoldHtml, answerFoldHtml, fewWords, messageFootHtml, toolRunSummary, toolRunHtml, paneTag } from '../web/workfold.js';
 
 const tool = (name: string, input = '{}'): Step => ({ kind: 'tool', name, input });
 const note = (text: string): Step => ({ kind: 'note', text });
@@ -179,15 +179,6 @@ test('a run of tool rows folds to one line that counts Claude and Codex commands
   assert.match(toolRunHtml(), /aria-expanded="false".*class="fold-calls" hidden/);
 });
 
-test("Orca's brief folds to the first words of its task, the text escaped", () => {
-  const brief = 'Please carry out\n\nYou are working inside Orca.\n=== TASK ===\nStage 0 of the plan: make worker conversations in the Jarvis app read like chats.\nMore';
-  assert.equal(briefTitle(brief), 'Brief: Stage 0 of the plan: make worker conversations in the…');
-  assert.equal(briefTitle('You are working inside Orca.\nmore'), 'Brief: You are working inside Orca.');
-  const html = briefFoldHtml('You are <b>working</b> inside Orca.');
-  assert.ok(html.includes('hidden') && html.includes('&lt;b&gt;') && !html.includes('<b>'));
-});
-
 test('messages taken out of tool calls say what they are', () => {
-  assert.deepEqual([{ kind: 'ask' }, { kind: 'done' }, { kind: 'done', failed: true }, { kind: 'blocked' }, { kind: 'reply' }, { kind: 'reply', by: 'jarvis' }, {}].map(paneTag),
-    ['Question for you', 'Final report', 'Final report, failed', 'Blocked', 'You answered', 'Jarvis answered', '']);
+  assert.deepEqual([{ kind: 'reply' }, { kind: 'reply', by: 'jarvis' }, {}].map(paneTag), ['You answered', 'Jarvis answered', '']);
 });

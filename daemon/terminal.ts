@@ -2,6 +2,7 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import type { Log } from './log.ts';
 import { PRODUCT_KEY } from './config.ts';
+import { findTmux, matchScreen } from './screen.ts';
 
 // Project terminals from the new-session picker. Each one is a tmux session, so it
 // has a real pty and tmux draws vim, top and Claude Code. jarvisd never parses escape codes itself: it reads tmux's own
@@ -9,9 +10,19 @@ import { PRODUCT_KEY } from './config.ts';
 // jarvisd restart, and `tmux attach -t <name>` picks one up in Terminal.app.
 // Who may reach a terminal is decided in termgate.ts; this file trusts its caller.
 
-export const TMUX = process.env.JARVIS_TMUX ?? '/opt/homebrew/bin/tmux';
+export const TMUX = findTmux();
 export type TermKind = 'terminal' | 'codex';
-export type TermInfo = { name: string; project: string; kind: TermKind; cwd: string; branch: string; createdAt: string; attached: number };
+export type TermInfo = { name: string; project: string; kind: TermKind; cwd: string; branch: string; createdAt: string; attached: number;
+  /** The pane's foreground program (`pane_current_command`): a shell name at the prompt. */
+  command?: string;
+  /** The last output in the window (`window_activity`), as an ISO time. */
+  activity?: string;
+  /** A blocking prompt the last screen read found (screen.ts), while the screen has not changed since. */
+  block?: string };
+/** A shell at its prompt: the terminal is idle. */
+export const SHELLS = /^-?(?:sh|bash|zsh|fish|dash|ksh|tcsh|csh|nu|login)$/;
+/** A terminal running a program with no output this long gets one screen read for that quiet spell. */
+export const TERM_READ_MS = 60_000;
 /** One screen as the page draws it: tmux's lines with their colour codes, and the cursor. */
 export type Screen = { cols: number; rows: number; cursor: [number, number] | null; lines: string[] };
 export type Frame = { cols: number; rows: number; cursor: [number, number] | null; lines?: string[]; d?: [number, string][] } | { ended: string };
@@ -64,17 +75,18 @@ export function parseDisplay(s: string): { cols: number; rows: number; cursor: [
   return { cols: Number(m[3]), rows: Number(m[4]), cursor: m[5] === '1' ? [Number(m[1]), Number(m[2])] : null };
 }
 
-const LIST_FORMAT = '#{session_name}\t#{@jarvis}\t#{@jarvis_project}\t#{@jarvis_kind}\t#{session_created}\t#{pane_current_path}\t#{session_attached}';
+const LIST_FORMAT = '#{session_name}\t#{@jarvis}\t#{@jarvis_project}\t#{@jarvis_kind}\t#{session_created}\t#{pane_current_path}\t#{session_attached}\t#{pane_current_command}\t#{window_activity}';
 export function parseList(out: string): Omit<TermInfo, 'branch'>[] {
   return out.split('\n').map(l => l.split('\t')).filter(f => f.length >= 7 && f[1] === '1' && NAME.test(f[0])).map(f => ({
     name: f[0], project: f[2], kind: f[3] === 'codex' ? 'codex' : 'terminal', cwd: f[5],
     createdAt: new Date(Number(f[4]) * 1000).toISOString(), attached: Number(f[6]) || 0,
+    ...(f[7] ? { command: f[7] } : {}), ...(Number(f[8]) ? { activity: new Date(Number(f[8]) * 1000).toISOString() } : {}),
   }));
 }
 
-type Opts = { log: Log; env?: NodeJS.ProcessEnv; socket?: string; tmux?: string; throttleMs?: number };
+type Opts = { log: Log; env?: NodeJS.ProcessEnv; socket?: string; tmux?: string; throttleMs?: number; now?: () => number };
 
-export function makeTerminals({ log, env = process.env, socket, tmux = TMUX, throttleMs = 30 }: Opts) {
+export function makeTerminals({ log, env = process.env, socket, tmux = TMUX, throttleMs = 30, now = Date.now }: Opts) {
   const base = socket ? ['-L', socket] : [];
   const run = (args: string[], input?: string) => new Promise<string>((resolve, reject) => {
     const c = execFile(tmux, [...base, ...args], { timeout: 5000, env, maxBuffer: 4e6 }, (err, out, errOut) => err ? reject(new Error(String(errOut || err.message).trim())) : resolve(out));
@@ -84,10 +96,30 @@ export function makeTerminals({ log, env = process.env, socket, tmux = TMUX, thr
     execFile('/usr/bin/git', ['-C', cwd, ...args], { timeout: 5000, env }, (err, out) => resolve(err ? '' : out.trim())));
 
   let cache: TermInfo[] = [];
+  // The last screen read per terminal: the output time it was read at, and what it found. Valid while the output time stays.
+  const reads = new Map<string, { activity: string; block?: string }>();
+  /**
+   * A terminal's screen is read only for a reason: a program (not the shell) runs and wrote nothing for TERM_READ_MS.
+   * Once per quiet spell. New output ends the spell and the block with it. Never logged: only the reason and the match.
+   */
+  async function screenOf(t: TermInfo): Promise<string | undefined> {
+    if (!t.command || SHELLS.test(t.command) || !t.activity) { reads.delete(t.name); return undefined; }
+    const seen = reads.get(t.name);
+    if (seen?.activity === t.activity) return seen.block;
+    if (now() - Date.parse(t.activity) < TERM_READ_MS) return undefined;
+    const screen = await run(['capture-pane', '-p', '-t', t.name]).catch(() => undefined);
+    const block = screen === undefined ? undefined : matchScreen(screen);
+    reads.set(t.name, { activity: t.activity, block });
+    log('terminal screen read', { name: t.name, why: `${t.command} wrote nothing for ${Math.round((now() - Date.parse(t.activity)) / 1000)} s`, ok: screen !== undefined, found: block ?? null });
+    return block;
+  }
   async function list(): Promise<TermInfo[]> {
     const out = await run(['list-sessions', '-F', LIST_FORMAT]).catch(() => ''); // no server yet: no sessions
     const found = parseList(out);
-    cache = await Promise.all(found.map(async t => ({ ...t, branch: cache.find(c => c.name === t.name && c.cwd === t.cwd)?.branch || await git(t.cwd, ['branch', '--show-current']) })));
+    cache = await Promise.all(found.map(async t => {
+      const block = await screenOf(t);
+      return { ...t, ...(block ? { block } : {}), branch: cache.find(c => c.name === t.name && c.cwd === t.cwd)?.branch || await git(t.cwd, ['branch', '--show-current']) };
+    }));
     return cache;
   }
   const get = (name: string) => cache.find(t => t.name === name);

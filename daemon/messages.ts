@@ -8,6 +8,7 @@ import type { Gate } from './gate.ts';
 import { replyAll, selfAddresses, stripSignoff, OWNER_EMAILS, type EmailMeta } from './gmail.ts';
 import type { PushMessage } from './push.ts';
 import { GMAIL_ACCOUNT as CONFIG_GMAIL_ACCOUNT } from './config.ts';
+import type { RouteResult, Body } from './route.ts';
 
 // The account `gws` reads, so the link opens the right mailbox when a browser holds several.
 const GMAIL_ACCOUNT = CONFIG_GMAIL_ACCOUNT;
@@ -17,15 +18,19 @@ export type MessageCard = {
   subject: string; summary: string; draft: string; at: string; openLabel: string; openUrl: string;
   /** Nothing here sends it: the popup offers Copy and Done, and `from` is who it is for. */
   copyOnly: boolean;
+  /** An outbox card's channel: slack, email or text. The page offers Text only for `text` with a phone number. */
+  channel?: string;
   /** Who Send reply goes to: reply all, without the owner. Null when an older email's list is read from Gmail at send time. */
   replyTo?: { to: string[]; cc: string[] } | null;
 };
 
-/** Who an outbox card is for, how the owner sends it, and the words. The reason is the item's subject. */
-export type OutboxMeta = { to: string; channel: string; text: string };
-const CHANNELS: Record<string, string> = { slack: 'Slack', email: 'email' };
+/** Who an outbox card is for, how the owner sends it, and the words. The reason is the item's subject.
+ * `contact` is the phone number or email address the owner sends to, shown under the name with its own Copy. */
+export type OutboxMeta = { to: string; channel: string; text: string; contact?: string };
+/** How the card's title names each channel. `text` is a phone text message the owner sends from his phone. */
+const CHANNELS: Record<string, string> = { slack: 'on Slack', email: 'on email', text: 'by text' };
 
-const SOURCES: Record<string, { label: string; openLabel: string; sendAction?: string; fields(i: Item, meta: any, self: string[]): Pick<MessageCard, 'urgent' | 'from' | 'address' | 'draft' | 'openUrl'> & { label?: string; replyTo?: MessageCard['replyTo'] } }> = {
+const SOURCES: Record<string, { label: string; openLabel: string; sendAction?: string; fields(i: Item, meta: any, self: string[]): Pick<MessageCard, 'urgent' | 'from' | 'address' | 'draft' | 'openUrl'> & { label?: string; channel?: string; replyTo?: MessageCard['replyTo'] } }> = {
   gmail: {
     label: 'Email', openLabel: 'Open in Gmail', sendAction: 'gmail-send',
     fields: (_i, m: Partial<EmailMeta>, self) => ({
@@ -36,7 +41,7 @@ const SOURCES: Record<string, { label: string; openLabel: string; sendAction?: s
   },
   outbox: {
     label: 'To send', openLabel: '',
-    fields: (_i, m: Partial<OutboxMeta>) => ({ label: `To send on ${CHANNELS[m.channel ?? ''] ?? m.channel}`, urgent: false, from: m.to ?? 'Unknown', address: '', draft: m.text ?? '', openUrl: '' }),
+    fields: (_i, m: Partial<OutboxMeta>) => ({ label: `To send ${CHANNELS[m.channel ?? ''] ?? `on ${m.channel}`}`, channel: m.channel ?? '', urgent: false, from: m.to ?? 'Unknown', address: m.contact ?? '', draft: m.text ?? '', openUrl: '' }),
   },
 };
 
@@ -54,7 +59,7 @@ export function messageCard(i: Item, proposed?: string, self: string[] = OWNER_E
 /** One line of the brain's session brief. */
 export function outboxLine(i: Item): string {
   const m = JSON.parse(i.meta ?? '{}') as OutboxMeta;
-  return `- [to send] item=${i.external_id} to=${JSON.stringify(m.to)} channel=${m.channel} reason=${JSON.stringify(i.subject)} text=${JSON.stringify(m.text)}`;
+  return `- [to send] item=${i.external_id} to=${JSON.stringify(m.to)} channel=${m.channel}${m.contact ? ` contact=${JSON.stringify(m.contact)}` : ''} reason=${JSON.stringify(i.subject)} text=${JSON.stringify(m.text)}`;
 }
 
 /** Urgent first, then the one that has waited longest. */
@@ -90,16 +95,16 @@ export function makeMessages(d: { store: Store; gate: Gate; log: (m: string, f?:
     list,
     dropProposals,
     /** `jarvis-act message-add`. The same words to the same person while a card is open return that card, so a retry adds nothing. */
-    add(b: { to?: unknown; channel?: unknown; reason?: unknown; text?: unknown }): { status: number; body: unknown } {
+    add(b: { to?: unknown; channel?: unknown; contact?: unknown; reason?: unknown; text?: unknown }): { status: number; body: unknown } {
       const oneLine = (v: unknown) => typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '';
-      const to = oneLine(b.to), reason = oneLine(b.reason), channel = String(b.channel ?? ''), text = typeof b.text === 'string' ? b.text.trim() : '';
+      const to = oneLine(b.to), contact = oneLine(b.contact), reason = oneLine(b.reason), channel = String(b.channel ?? ''), text = typeof b.text === 'string' ? b.text.trim() : '';
       if (!to) return { status: 400, body: { error: '--to is required' } };
-      if (!Object.hasOwn(CHANNELS, channel)) return { status: 400, body: { error: '--channel must be slack or email' } };
+      if (!Object.hasOwn(CHANNELS, channel)) return { status: 400, body: { error: '--channel must be slack, email or text' } };
       if (!reason) return { status: 400, body: { error: '--reason is required' } };
       if (!text) return { status: 400, body: { error: '--text is required' } };
       const same = store.openOutbox().find(i => { const m = JSON.parse(i.meta ?? '{}') as OutboxMeta; return m.to === to && m.channel === channel && m.text === text; });
       if (same) return { status: 200, body: { ...messageCard(same), existing: true } };
-      const meta: OutboxMeta = { to, channel, text };
+      const meta: OutboxMeta = { to, channel, text, ...(contact ? { contact } : {}) };
       const item = store.insertItem({ source: 'outbox', external_id: `outbox:${randomUUID()}`, kind: 'outbox', subject: reason, meta: JSON.stringify(meta), status: 'spoken' })!;
       log('message card added', { item: item.external_id, channel });
       d.onChange();
@@ -135,5 +140,53 @@ export function makeMessages(d: { store: Store; gate: Gate; log: (m: string, f?:
       d.onChange();
       return { status: 200, body: { messages: list() } };
     },
+    /** `jarvis-act message-done`: the brain closes an outbox card because the owner asked in this turn, for example a duplicate.
+     * The route checks his turn. The item records that the brain closed it, the reason, and his words, read from the stored turns. */
+    closeFromChat(id: string, reason: string, words: string[]): { status: number; body: { error?: string; messages: MessageCard[] } } {
+      const item = store.item(id);
+      if (!item) return refused(404, 'That message is not known here.');
+      if (item.source !== 'outbox') return refused(409, `${id} is not a card ${OWNER} sends himself. message-done closes only outbox cards. Use email-done for an email.`);
+      if (!list().some(m => m.id === id)) return refused(409, 'That message is no longer open.');
+      const said = words.join('\n').replace(/\s+/g, ' ').trim().slice(0, 500);
+      const why = reason.replace(/\s+/g, ' ').trim().slice(0, 120);
+      store.markItem(id, 'answered', `Closed by Jarvis${why ? ` (${why})` : ''}. ${OWNER_CAP} wrote: ${JSON.stringify(said)}`, 'jarvis');
+      log('message closed by the brain', { item: id, reason: why });
+      d.onChange();
+      return { status: 200, body: { messages: list() } };
+    },
   };
+}
+
+export type Messages = ReturnType<typeof makeMessages>;
+/**
+ * The Messages popup's routes. Send reply is the owner's Approve for this email, with the words now in the box: `approved`
+ * tells the brain the outcome. I'll handle it, or Done on a message the owner sends himself, closes the card: `handled`
+ * tells the brain. jarvis-act message-add adds a card. jarvis-act message-done closes an outbox card in a turn that holds his message.
+ */
+export async function messagesRoute(o: { messages: Pick<Messages, 'send' | 'handled' | 'add' | 'closeFromChat'>; approved: (a: Approval) => void; handled: (id: string) => void },
+  method: string, url: string, body: Body, owner: { fromOwner: () => boolean; ownerWords?: () => string[] }): Promise<RouteResult | undefined> {
+  if (method !== 'POST') return undefined;
+  if (url === '/api/message/send') {
+    const { id, text } = await body();
+    if (typeof id !== 'string' || typeof text !== 'string') return { status: 400, body: { error: 'id and text are required' } };
+    const r = await o.messages.send(id, text);
+    if (r.body.approval) o.approved(r.body.approval);
+    return r;
+  }
+  if (url === '/api/message/handled') {
+    const { id } = await body();
+    if (typeof id !== 'string') return { status: 400, body: { error: 'id is required' } };
+    const r = o.messages.handled(id);
+    if (r.status === 200) o.handled(id);
+    return r;
+  }
+  if (url === '/api/internal/messages') return o.messages.add(await body());
+  if (url === '/api/internal/messages/done') {
+    // The same rule as jarvis-today start: closing a card is the owner's Done, so it needs his message in this turn.
+    if (!owner.fromOwner()) return { status: 409, body: { error: `Closing a card needs ${OWNER} asking for it in this turn. Tell him to tap Done.` } };
+    const { id, reason } = await body();
+    if (typeof id !== 'string') return { status: 400, body: { error: 'id is required' } };
+    return o.messages.closeFromChat(id, typeof reason === 'string' ? reason : '', owner.ownerWords?.() ?? []);
+  }
+  return undefined;
 }

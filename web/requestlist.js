@@ -15,7 +15,7 @@ export const openIdOf = r => r.row ?? `req:${r.id}`;
 /** The line on a row with no listed conversation. A request still open may just be between polls. */
 export const closedNote = r => r.status === 'working' || r.status === 'waiting' ? 'Conversation not listed right now. Showing what Jarvis recorded.' : 'Conversation closed. Showing what Jarvis recorded.';
 
-/** Newest change first within each group. Open rows sort by status first; failed ones stay there until the owner hides them. */
+/** Newest change first within each group. Open rows sort by status first; failed ones stay there until the owner moves them to Completed. */
 export function requestGroups(requests) {
   const sorted = [...requests].sort((a, b) => (RANK[a.status] ?? 0) - (RANK[b.status] ?? 0) || Date.parse(b.at) - Date.parse(a.at));
   return {
@@ -29,6 +29,18 @@ export function requestGroups(requests) {
 export const reportHref = r => !r.url && r.report ? `#report/${Number(r.id)}` : '';
 export const reportLinkHtml = r => reportHref(r) ? `<a href="${reportHref(r)}" class="num" title="Read the worker's report">Report</a>` : '';
 
+const DOC_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z M14 3v5h5 M10 13h6 M10 17h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+/**
+ * The report the request's worker wrote in data/reports (`r.doc` from daemon/requests.ts): a small icon that opens it.
+ * When a question waits on it, it also says "Read first", so the row shows it needs the owner. Empty without a doc.
+ */
+export function docLinkHtml(r) {
+  const d = r.doc;
+  if (!d?.href) return '';
+  const label = d.waits ? `A question waits on this report. Read it first: ${d.title}` : `Read the report: ${d.title}`;
+  return `<a href="${esc(d.href)}" class="rdoc${d.waits ? ' needs' : ''}" aria-label="${esc(label)}" title="${esc(label)}">${DOC_ICON}${d.waits ? '<span>Read first</span>' : ''}</a>`;
+}
+
 const numHtml = (text, url) => url ? `<a href="${esc(url)}" class="num" target="_blank" rel="noopener">${esc(text)}</a>` : `<span class="num">${esc(text)}</span>`;
 
 /** The title's story number as "#4612", else the PR number. Links to the PR when its URL is known. A Report link takes the same place. */
@@ -38,12 +50,24 @@ function numberHtml(r) {
   return text ? numHtml(text, r.url) : '';
 }
 
-/** Hiding also hides the conversation row, or that row would come back in its work group. */
+/**
+ * The × on a row: anywhere but Completed it moves the row to Completed. In Completed it removes the row now, before its
+ * purge a day later. It always names the conversation row as well, or that row would come back in its work group.
+ * A row with no request (`id` undefined) is a finished or moved conversation (web/worklist.js): its × acts on the row only.
+ */
+export function closeButtonHtml(r) {
+  const verb = r.status === 'done' ? 'remove' : 'complete';
+  const label = verb === 'remove' ? `Remove ${esc(r.title)} from Completed` : `Move ${esc(r.title)} to Completed`;
+  const tip = verb === 'remove' ? 'Remove from Completed now. It leaves by itself a day after it finished.' : 'Move to Completed. Nothing in Orca stops.';
+  return `<button type="button" class="hide" data-${verb}${r.id ? ` data-request="${Number(r.id)}"` : ''}${r.row ? ` data-row-id="${esc(r.row)}"` : ''} aria-label="${label}" title="${tip}">×</button>`;
+}
+
 function rowHtml(r, now) {
-  const hide = `<button type="button" class="hide" data-hide="${r.id}"${r.row ? ` data-hide-row="${esc(r.row)}"` : ''} aria-label="Hide ${esc(r.title)}" title="Hide from this list">×</button>`;
+  const hide = closeButtonHtml(r);
   return `<div class="rrow ${esc(r.status)}" data-row="${esc(openIdOf(r))}" role="button" tabindex="0" title="${esc(r.title)}">`
     + (numberHtml(r) || requestMark(r.status))
-    + `<div class="t">${esc(reportHref(r) ? r.title : r.title.replace(/^\s*#\d+\s*/, '') || r.title)}</div><span class="state">${STATE[r.status] || esc(r.status)}</span><span class="ago">${ago(r.at, now)}</span>${hide}`
+    + `<div class="t">${esc(reportHref(r) ? r.title : r.title.replace(/^\s*#\d+\s*/, '') || r.title)}</div><span class="state">${STATE[r.status] || esc(r.status)}</span>${docLinkHtml(r) ? `<span class="wend">${docLinkHtml(r)}<span class="ago">${ago(r.at, now)}</span></span>` : `<span class="ago">${ago(r.at, now)}</span>`}${hide}`
+    + (r.followUp ? `<div class="follow">Follow-up: ${esc(r.followUp)}</div>` : '')
     + (r.row ? '' : `<div class="gone">${esc(closedNote(r))}</div>`) + '</div>';
 }
 

@@ -21,7 +21,7 @@ function linkHtml(l) {
   if (!l) return '';
   if (l.open !== undefined) return `<button type="button" class="t-link" data-open="${esc(l.open)}">${esc(l.label)}</button>`;
   // Only what the daemon wrote: a PR, or the app's own report page. A link in any other scheme stays out.
-  if (!/^(https?:\/\/|#report\/)/.test(l.url ?? '')) return '';
+  if (!/^(https?:\/\/|#reports?\/)/.test(l.url ?? '')) return '';
   return `<a class="t-link" href="${esc(l.url)}"${l.url.startsWith('#') ? '' : ' target="_blank" rel="noopener"'}>${esc(l.label)}</a>`;
 }
 /** The answer showing on a question: The owner's pick in this page, his saved answer, or the recommended one. */
@@ -56,6 +56,7 @@ export function detailHtml(i, s = {}) {
     + (i.result ? `<div class="t-sec"><h4>Result</h4><p>${esc(i.result)}</p></div>` : '')
     + (i.notProven ? `<div class="t-sec"><h4>Not proven</h4><p>${esc(i.notProven)}</p></div>` : '')
     + (i.link ? `<div>${linkHtml(i.link)}</div>` : '')
+    + (i.history?.length ? `<div class="t-sec"><h4>History</h4><ul>${i.history.map(h => `<li>${esc(h.event)}${h.words ? `, you said: <q>${esc(h.words)}</q>` : ''}</li>`).join('')}</ul></div>` : '')
     + (editable ? `<div class="t-kinds" role="group" aria-label="Kind">${Object.entries(KIND_LABEL).map(([k, l]) => `<button type="button" data-kind="${k}" aria-pressed="${i.kind === k}">${l}</button>`).join('')}</div>` : '')
     + (s.error ? `<p class="t-reason"><span class="pill failed">Not done</span>${esc(s.error)}</p>` : '')
     + (s.notRight ? `<form class="t-note" data-note-form><input type="text" data-note aria-label="What is not right" placeholder="What is not right?" value="${esc(s.noteText ?? '')}" enterkeyhint="send" autocomplete="off"><button type="submit" class="t-act primary">Send</button></form>` : '')
@@ -80,6 +81,20 @@ export function todayListHtml(list, s = {}, now = Date.now()) {
     : `<p class="t-empty">Nothing here. Drop a thought above and find it worked up later.</p>`;
   const history = done.length ? `<button type="button" class="pop-more" data-history aria-expanded="${!!s.history}">Released (${done.length})</button>${s.history ? `<ul class="t-list t-done">${done.map(i => rowHtml(i, s, now)).join('')}</ul>` : ''}` : '';
   return moved + rows + history;
+}
+
+const hourWords = h => h === 0 || h === 24 ? 'midnight' : h === 12 ? 'noon' : h < 12 ? `${h} AM` : `${h - 12} PM`;
+/** One queued story, a link to its GitHub issue when the daemon gives one (`url`), opened in a new tab. */
+const queueRow = q => {
+  const text = `<span class="tq-n">#${esc(q.number)}</span> ${esc(q.topic)}`;
+  return /^https:\/\/github\.com\//.test(q.url ?? '') ? `<li><a class="tq-link" href="${esc(q.url)}" target="_blank" rel="noopener">${text}</a></li>` : `<li>${text}</li>`;
+};
+/** The story queue from daemon/stories.ts, above the list: the next stories in order and the slots in use. Nothing when it is empty and no story runs. */
+export function queueHtml(v) {
+  if (!v || (!v.stories?.length && !v.running?.length)) return '';
+  const head = `<p class="tq-head"><b>Story queue</b><span>${esc(v.running.length)} of ${esc(v.max)} running · starts ${esc(hourWords(v.hours.start))} to ${esc(hourWords(v.hours.end))}${v.hours.open ? '' : ', closed now'}</span></p>`;
+  const rows = v.stories.length ? `<ol class="tq-list">${v.stories.map(queueRow).join('')}</ol>` : '<p class="tq-empty">Nothing queued.</p>';
+  return head + rows;
 }
 
 /**
@@ -149,7 +164,7 @@ export function makeTodayPop(d) {
     if (e.target.closest('[data-history]')) { s.history = !s.history; return draw(); }
     const openLink = e.target.closest('[data-open]');
     if (openLink) return d.openConversation(Number(openLink.dataset.open));
-    if (e.target.closest('a.t-link[href^="#report/"]')) return d.closePop();
+    if (e.target.closest('a.t-link[href^="#report"]')) return d.closePop();
     if (e.target.closest('[data-toggle]')) {
       const same = s.open === id;
       closeRow();

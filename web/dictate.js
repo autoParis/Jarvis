@@ -17,3 +17,40 @@ export function boxAfterSend(now, sent) {
   if (now.startsWith(sent)) return now.slice(sent.length).trimStart();
   return now;
 }
+
+// Phone dictation (the iPhone keyboard's mic) can put its final words into the box a moment after the tap on Send.
+// The send waits until the box has had no `input` or composition event for `quietMs`, and no longer than `maxMs`,
+// before it reads the box. `composing()` says whether a composition is open: the wait then lasts until it ends or
+// `maxMs` passes. Tested by daemon/dictate.test.ts.
+export function settleBox(box, { quietMs = 250, maxMs = 1200, composing = () => false } = {}) {
+  return new Promise(done => {
+    const start = Date.now();
+    let timer;
+    const finish = () => {
+      clearTimeout(timer);
+      for (const ev of EVENTS) box.removeEventListener(ev, arm);
+      done();
+    };
+    function arm() {
+      clearTimeout(timer);
+      const left = maxMs - (Date.now() - start);
+      if (left <= 0) return finish();
+      timer = setTimeout(() => (composing() && Date.now() - start < maxMs ? arm() : finish()), Math.min(quietMs, left));
+    }
+    for (const ev of EVENTS) box.addEventListener(ev, arm);
+    arm();
+  });
+}
+const EVENTS = ['input', 'compositionstart', 'compositionupdate', 'compositionend'];
+
+// The one message a send posts: the box text, then one `[image: path]` line per picture. Empty when both are empty.
+export function withPictures(text, lines) {
+  return [String(text ?? '').trim(), ...(lines || [])].filter(Boolean).join('\n');
+}
+
+// The message a voice clip sends: the typed text, the words, then the pictures. Nothing heard sends nothing, and the
+// typed text and the pictures stay in the box.
+export function voiceMessage(typed, words, lines) {
+  const said = withTyped(typed, words);
+  return said ? withPictures(said, lines) : '';
+}
