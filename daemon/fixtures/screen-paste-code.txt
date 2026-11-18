@@ -1,0 +1,5 @@
+ Browser didn't open? Use the url below to sign in (c to copy)
+
+https://claude.com/cai/oauth/authorize?code=true&client_id=REDACTED
+
+ Paste code here if prompted >

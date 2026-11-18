@@ -3,6 +3,11 @@ import { execFile } from 'node:child_process';
 // The work list's shapes: one row per native worker (native.ts) and per project terminal (termrows.ts). main.ts merges
 // them for the app; nothing here speaks, pushes or wakes the brain.
 
+/** A row's status (web/contract.js WORK_STATUSES), and why it is blocked (BLOCKED_REASONS). daemon/contract.test.ts checks both lists. */
+export type WorkStatusName = 'idle' | 'working' | 'blocked' | 'done';
+export type BlockedReason = 'permission' | 'question' | 'waiting on you' | 'trust prompt' | 'login' | 'usage limit' | 'mcp servers' | 'settings error' | 'prompt on screen';
+export type WorkStatus = { name: WorkStatusName; reason?: string };
+
 export type WorkGroup = 'story' | 'babysit' | 'side' | 'terminal' | 'other';
 export type WorkRow = {
   /** `n:<id>` for a native worker, `t:<name>` for a project terminal. */
@@ -15,6 +20,8 @@ export type WorkRow = {
   /** The PR a session's workspace is linked to, when its label is the story number. */
   pr?: string;
   state: 'waiting' | 'working' | 'idle' | 'exited';
+  /** idle, working, blocked (with its reason) or done. The page shows it; the brain reads it in its state brief. */
+  status?: WorkStatus;
   /** Why it waits (the ask's subject), or how long it has been done. */
   note?: string;
   /** When it finished (done, failed or stopped), as an ISO time. A row with no request and a DONE report goes to Completed with this time (web/worklist.js). Absent while it runs. */
@@ -31,7 +38,9 @@ export type WorkRow = {
     /** Set while its last turn ended on a WAITING line that only the owner ends: the words after WAITING and the report time (ISO). */
     waitingOn?: { text: string; since: string };
     /** A follow-up turn's FAILED result on a story that stays done: its first line and when (ISO). */
-    followUp?: { text: string; at: string; outcome: 'failed' } };
+    followUp?: { text: string; at: string; outcome: 'failed' };
+    /** The worker's tmux session on the worker socket, and the command that opens its live screen. Absent for a worker started before tmux. */
+    tmux?: { session: string; attach: string } };
   /** Set on a project terminal or Codex session from the new-session picker (terminal.ts). */
   tmux?: { name: string; project: string; kind: 'terminal' | 'codex'; cwd: string; branch: string };
 };

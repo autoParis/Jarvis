@@ -4,8 +4,10 @@ export { NATIVE_FOOTER, REPORT_NUDGE, WAITING_LINE, STALL_MS } from './workercon
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { closeSync, constants, existsSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { attachCommand, makeWorkerTmux, matchScreen, needsReason, workerSession, type WorkerTmux } from './screen.ts';
 import { cleanEnv } from './config.ts';
-import { classify, type NativeState, type WorkRow } from './work.ts';
+import { classify, type NativeState, type WorkRow, type WorkStatus } from './work.ts';
 import type { Approval, Item, NativeWorkerRow, Store } from './store.ts';
 import type { Log } from './log.ts';
 import { lastAssistantText, lastTurnMessages } from './transcript.ts';
@@ -54,6 +56,8 @@ export type NativeWorker = {
   in_fifo: string | null;
   /** Continue on phone: the Remote Control name the session runs with. A resume keeps it, and the idle reaper leaves the row alone. */
   remote: string | null;
+  /** In tmux (screen.ts): the session jarvisd types into and reads. `block` is the blocking prompt the last screen read found, at `block_at`. */
+  tmux?: string | null; block?: string | null; block_at?: string | null;
 };
 /** What Continue on phone did: the row it runs as, or why not and which processes hold the session. */
 export type PhoneResult = { ok: true; worker: NativeWorker; already?: boolean } | { ok: false; error: string; holders?: Holder[] };
@@ -137,6 +141,22 @@ export const RESUME_MAX = 3, RESUME_WINDOW_MS = 10 * 60_000;
 export const IDLE_REAP_MS = 3_600_000;
 export const IDLE_STOPPED = 'Idle, resumes on a message';
 export const DESKTOP_WAITING = 'Open in the Claude desktop app';
+/** Screen read triggers (readScreen). A session that sent no hook this long after its start or resume: login, trust and other start prompts. */
+export const START_READ_MS = 60_000;
+/** A working session with no hook and no transcript write this long. Well before STALL_MS. Silence alone changes nothing: only a matched prompt does. */
+export const QUIET_READ_MS = 5 * 60_000;
+/** A Notification hook that says the session waits on the owner. */
+export const WAITS_NOTICE = /waiting for (?:your )?input|needs your (?:permission|attention|input|approval)|waiting on you/i;
+/** How the brain hears each reason a screen read found. */
+const SCREEN_WORDS: Record<string, string> = {
+  'trust prompt': 'the question whether to trust its folder', login: 'a login screen', 'mcp servers': 'the question whether to use the MCP servers of its project',
+  'settings error': 'a settings error dialog', permission: 'a permission dialog', 'prompt on screen': 'a Claude Code dialog',
+};
+/** What the brain hears once per new blocked state from a screen read. */
+export const screenBlockedText = (w: Pick<NativeWorker, 'name'>, reason: string, attach: string) =>
+  `Worker ${w.name} is blocked: ${reason}. Its screen shows ${SCREEN_WORDS[reason] ?? reason}, which it cannot pass alone. ${OWNER} can open its screen with: ${attach}`;
+/** The state key that holds the time of the worker's last hook of any kind, for the screen read triggers. */
+const hookKey = (id: string) => `nativeHook:${id}`;
 /** The first message of a resumed session whose task was unfinished when its terminal died. */
 export const NUDGE = 'Your terminal was restarted by Jarvis. Continue the task from where you stopped. Check the result of your last action before repeating it. Report DONE or FAILED as before.';
 
@@ -159,6 +179,9 @@ export function workerSettings(jarvisUrl: string, advisor?: string): object {
       PermissionRequest: [hook('permission', 86_400)],
       Stop: [hook('stop', 30)],
       PreToolUse: [{ matcher: 'AskUserQuestion', ...hook('pre', 30) }],
+      // Two signals for the screen reads (readScreen): the brief or a message reached the model, and Claude Code waits on the owner.
+      UserPromptSubmit: [hook('prompt', 10)],
+      Notification: [hook('notification', 10)],
     },
   };
 }
@@ -236,9 +259,10 @@ export function makeFifo(path: string): void {
  * then an `attachment` of type `queued_command`), and the model answers it in the same message.
  */
 export function typedBytes(text: string): Buffer {
-  const clean = text.replace(/\r\n?/g, '\n').replace(/\x1b/g, '');
-  return Buffer.from(`\x1b[200~${clean}\x1b[201~\r`, 'utf8');
+  return Buffer.from(`\x1b[200~${typedText(text)}\x1b[201~\r`, 'utf8');
 }
+/** The words as typed: a carriage return becomes a newline and escape bytes are dropped. The tmux path pastes this, then Enter. */
+export const typedText = (text: string) => text.replace(/\r\n?/g, '\n').replace(/\x1b/g, '');
 
 /**
  * Writes to the session's stdin pipe. Opened non-blocking so a pipe with no reader (the terminal is gone) fails at once
@@ -332,6 +356,11 @@ export function makeNative(o: {
   killPid?: (pid: number) => void;
   /** Typing into an interactive session's stdin pipe (throws when it cannot). */
   writeFifo?: (fifo: string, bytes: Buffer) => void;
+  /**
+   * The tmux driver for interactive workers (screen.ts): start, type, read the screen. The default is the real one, except
+   * when `spawnPty` is given (the pipe path, kept for rows started before tmux and for a Mac with no tmux). null: no tmux.
+   */
+  workerTmux?: WorkerTmux | null;
   /** Continue on phone: `ps -axo pid=,command=` lines, a transcript's last write time and its tail. */
   processes?: () => Promise<string[]>;
   written?: (file: string) => number;
@@ -345,6 +374,7 @@ export function makeNative(o: {
   const alivePgid = o.alivePgid ?? ((pgid: number) => { try { process.kill(pgid, 0); return true; } catch { return false; } });
   const killPid = o.killPid ?? ((pid: number) => { try { process.kill(pid, 'SIGTERM'); } catch {} });
   const typeInto = o.writeFifo ?? writeFifo;
+  const wt: WorkerTmux | null = o.workerTmux !== undefined ? o.workerTmux : o.spawnPty ? null : makeWorkerTmux({ env: { ...cleanEnv, HOME: process.env.HOME } });
   const processes = o.processes ?? processTable;
   const written = o.written ?? ((f: string) => statSync(f).mtimeMs);
   const tail = o.tail ?? ((f: string) => tailOf(f));
@@ -374,6 +404,19 @@ export function makeNative(o: {
   const ptyDir = join(o.dataDir, 'pty');
   mkdirSync(ptyDir, { recursive: true });
   const fifoFor = (name: string, resumes: number) => { const f = join(ptyDir, `${name}-r${resumes}.in`); mkfifo(f); return f; };
+  /**
+   * Starts an interactive terminal: in tmux when there is a driver (the default since 2026-11-18), so jarvisd can read the
+   * screen and types with paste-buffer; else the old `script` and pipe path. The tmux path needs no Mac app and no `script`.
+   */
+  const startPty = (argv: string[], cwd: string, name: string, resumes: number): { pgid: number; in_fifo: string | null; tmux: string | null } => {
+    if (wt) {
+      const session = workerSession(name, resumes);
+      try { return { pgid: wt.start(argv, cwd, session, join(ptyDir, `${session}.arg`)), in_fifo: null, tmux: session }; }
+      catch (e) { log('native: tmux start failed, using the pipe terminal', { name, session, error: (e as Error).message }); }
+    }
+    const fifo = fifoFor(name, resumes);
+    return { pgid: spawnPty(argv, cwd, fifo), in_fifo: fifo, tmux: null };
+  };
   // Permission prompts held open: approval id to the resolver of the hook's http reply.
   const held = new Map<number, { worker: string; resolve: (reply: object) => void }>();
   // Workers the last poll found stuck (stalledFrom), and the time their last activity was. rows() shows it; the ten-minute check reports it.
@@ -483,7 +526,7 @@ export function makeNative(o: {
    * Worker 579 (2026-11-11): "working" for 8 hours on a WAITING line, and nothing told anyone.
    */
   const stalledFrom = (w: NativeWorker, a: Agent | undefined): number | undefined => {
-    if (!unfinished(w) || w.state === 'blocked' || w.remote || pendingCard(w.id)) return undefined;
+    if (!unfinished(w) || w.state === 'blocked' || w.block || w.remote || pendingCard(w.id)) return undefined;
     // A worker that waits on the owner is not stuck, and nudging it does nothing. The check repeats its finding instead.
     if (waitsOnOwner(w)) return undefined;
     if (w.approval_id && store.approval(w.approval_id)?.action === 'side-chat') return undefined;
@@ -505,6 +548,112 @@ export function makeNative(o: {
       h.resolve({});
       o.onCard(store.approval(approvalId)!);
     }
+  };
+
+  // ---- Screen reads (screen.ts). Each read has a reason, and each is logged with it. ----
+  // The triggers already used per worker, so one quiet spell or one start is read once: `start:<time>`, `quiet:<time>`.
+  const readKeys = new Map<string, Set<string>>();
+  const reading = new Set<string>();
+  /** When the worker's last hook of any kind arrived (ms), or 0. Kept in the store, so a jarvisd restart does not read again. */
+  const hookAt = (id: string) => Date.parse(store.getState(hookKey(id)) || '') || 0;
+  /** When the session started or was last resumed (ms). */
+  const startedAt = (w: NativeWorker) => Date.parse(w.last_resume_at ?? w.created_at) || 0;
+  const clearBlock = (w: NativeWorker, why: string): NativeWorker => {
+    if (!w.block) return w;
+    log('native screen block cleared', { worker: w.id, block: w.block, why });
+    return update(w.id, { block: null, block_at: null });
+  };
+  /**
+   * A hook reached jarvisd from the worker: it is past its start prompts and its model runs. Any hook but a Notification
+   * (which says it waits) also ends a blocked state a screen read set.
+   */
+  const touch = (w: NativeWorker, hook: string) => {
+    store.setState(hookKey(w.id), iso());
+    if (hook !== 'Notification') clearBlock(w, `a ${hook} hook arrived`);
+  };
+  /**
+   * Reads a tmux worker's screen and matches it against the known blocking prompts (screen.ts matchScreen, no model).
+   * A match sets `block` and tells the brain once per new blocked state; no match ends an earlier block. `why` names the
+   * trigger. Returns the reason found, or undefined (no tmux session, a read under way, the session gone, nothing found).
+   */
+  async function readScreen(w: NativeWorker, why: string): Promise<string | undefined> {
+    if (!wt || !w.tmux || reading.has(w.id)) return undefined;
+    reading.add(w.id);
+    try {
+      let screen: string;
+      try { screen = await wt.capture(w.tmux); }
+      catch (e) { log('native screen read', { worker: w.id, session: w.tmux, why, ok: false, error: (e as Error).message.slice(0, 200) }); return undefined; }
+      const found = matchScreen(screen);
+      log('native screen read', { worker: w.id, session: w.tmux, why, ok: true, found: found ?? null });
+      const cur = row(w.id) ?? w;
+      if (!found) { clearBlock(cur, 'a screen read found no prompt'); return undefined; }
+      if (cur.block === found) return found;
+      const next = update(w.id, { block: found, block_at: iso() });
+      log('native notice', { worker: w.id, kind: 'screen-blocked', block: found });
+      o.onNotice(next, screenBlockedText(next, found, attachCommand(w.tmux)));
+      return found;
+    } finally { reading.delete(w.id); }
+  }
+  /** Reads once per key: the same start or the same quiet spell is never read twice. */
+  const readOnce = (w: NativeWorker, key: string, why: string) => {
+    const done = readKeys.get(w.id) ?? new Set<string>();
+    if (done.has(key)) return Promise.resolve(undefined);
+    done.add(key); readKeys.set(w.id, done);
+    return readScreen(w, why);
+  };
+  /**
+   * The poll's two clock triggers for a tmux worker. (a) It started or resumed START_READ_MS ago and no hook came since:
+   * a login, trust or other start prompt holds it. (b) It is working, and for QUIET_READ_MS no hook came and its
+   * transcript did not grow. A long command with no output is silent too, so a read that finds nothing changes nothing.
+   * A transcript write after a block ends it (the owner answered the prompt in the terminal).
+   */
+  async function screenTriggers(w: NativeWorker): Promise<void> {
+    if (!w.tmux || w.outcome || !['starting', 'working', 'blocked'].includes(w.state) || w.state === 'blocked' && pendingCard(w.id)) return;
+    let wrote = 0;
+    const file = api.transcriptFile(w.id);
+    try { if (file) wrote = written(file); } catch {}
+    if (w.block && w.block_at && wrote > Date.parse(w.block_at)) { clearBlock(w, 'its transcript grew'); return; }
+    const start = startedAt(w), hook = hookAt(w.id);
+    if (hook < start && now() - start >= START_READ_MS) { await readOnce(w, `start:${start}`, `no hook ${Math.round((now() - start) / 1000)} s after its ${w.last_resume_at ? 'resume' : 'start'}`); return; }
+    const last = Math.max(start, hook, wrote, Date.parse(w.report_at ?? '') || 0);
+    if (w.state === 'working' && now() - last >= QUIET_READ_MS) await readOnce(w, `quiet:${last}`, `working, no hook and no transcript write for ${Math.round((now() - last) / 60_000)} min`);
+  }
+  /**
+   * A row's status (web/contract.js WORK_STATUSES): idle, working, blocked with its reason, or done. A screen read's block
+   * comes first, then a permission card or Claude Code's own prompt, an open ask, a WAITING line on the owner.
+   */
+  const statusOf = (w: NativeWorker, asking: boolean, ownerWait: boolean): WorkStatus => {
+    if (w.block && !['stopped', 'failed', 'done'].includes(w.state)) return { name: 'blocked', reason: w.block };
+    if (w.state === 'blocked') return { name: 'blocked', reason: pendingCard(w.id) ? 'permission' : needsReason(w.waiting_for) };
+    if (asking) return { name: 'blocked', reason: 'question' };
+    if (ownerWait) return { name: 'blocked', reason: 'waiting on you' };
+    if (w.outcome && ['done', 'failed', 'stopped'].includes(w.state)) return w.outcome === 'failed' ? { name: 'done', reason: 'failed' } : { name: 'done' };
+    if (w.state === 'working' || w.state === 'starting') return turnEnded(w) ? { name: 'idle' } : { name: 'working' };
+    return w.state === 'failed' ? { name: 'idle', reason: 'failed' } : { name: 'idle' };
+  };
+  /**
+   * Binds a tmux row that started at a prompt, with no session id yet, to its session once `claude agents` lists it by
+   * name: the owner passed the prompt. A hook from that session can then find its row.
+   */
+  async function bindPending(list?: Agent[]): Promise<void> {
+    const pending = store.nativeWorkers().map(asWorker).filter(w => w.kind === 'interactive' && !w.session_id && w.tmux && w.state !== 'abandoned');
+    if (!pending.length) return;
+    list ??= await agents();
+    for (const w of pending) {
+      const a = listed(list, w);
+      if (!a?.pid || !a.sessionId) continue;
+      update(w.id, { session_id: a.sessionId, state: 'working', ...(a.cwd ? { cwd: a.cwd } : {}) });
+      alive.add(w.id);
+      clearBlock(row(w.id)!, 'claude agents lists it now');
+      log('native worker past its start prompt', { worker: w.id, session: a.sessionId });
+    }
+  }
+  /** The row a hook names, binding a pending tmux row first when the session is new to jarvisd. */
+  const hookRow = async (body: any): Promise<NativeWorker | undefined> => {
+    const sid = String(body?.session_id ?? '');
+    let w = find(sid);
+    if (!w && sid) { await bindPending().catch(() => {}); w = find(sid); }
+    return w;
   };
 
   async function agents(): Promise<Agent[]> {
@@ -664,11 +813,11 @@ export function makeNative(o: {
         const nudge = midTask(w);
         failHeld(w.id, `the worker's terminal died before ${OWNER} answered`);
         const resumes = w.resumes + 1;
-        const fifo = fifoFor(w.name, resumes);
-        const pgid = spawnPty(['claude', '--resume', w.session_id, '--name', w.name, ...(w.remote ? [`--remote-control=${w.remote}`] : []), '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
-          '--settings', settingsFor(w.approval_id), ...(nudge ? [NUDGE] : [])], w.cwd, fifo);
+        const term = startPty(['claude', '--resume', w.session_id, '--name', w.name, ...(w.remote ? [`--remote-control=${w.remote}`] : []), '--permission-mode', w.permission_mode ?? 'auto', '--model', w.model ?? DEFAULT_MODEL,
+          '--settings', settingsFor(w.approval_id), ...(nudge ? [NUDGE] : [])], w.cwd, w.name, resumes);
+        const pgid = term.pgid;
         const resumedAt = iso();
-        update(w.id, { pgid, in_fifo: fifo, resumes, last_resume_at: resumedAt, waiting_for: null });
+        update(w.id, { pgid, in_fifo: term.in_fifo, tmux: term.tmux, block: null, block_at: null, resumes, last_resume_at: resumedAt, waiting_for: null });
         store.setState(resumedKey(w.id), nudge ? JSON.stringify({ at: resumedAt, after: w.report_at }) : '');
         const seen = await waitFor(row(w.id)!, a => !!a.pid, RESPAWN_WAIT_MS);
         if (seen) alive.add(w.id);
@@ -753,13 +902,13 @@ export function makeNative(o: {
         const name = mine?.name ?? `${remote.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session'}-${id}`;
         const cwd = mine?.cwd ?? a.cwd;
         const resumes = mine ? mine.resumes + 1 : 0;
-        const fifo = fifoFor(name, resumes);
-        const pgid = spawnPty(['claude', '--resume', sid, '--name', name, `--remote-control=${remote}`, '--permission-mode', mode, '--model', model, '--settings', mine ? settingsFor(mine.approval_id) : settingsPath], cwd, fifo);
+        const term = startPty(['claude', '--resume', sid, '--name', name, `--remote-control=${remote}`, '--permission-mode', mode, '--model', model, '--settings', mine ? settingsFor(mine.approval_id) : settingsPath], cwd, name, resumes);
+        const pgid = term.pgid;
         const t = iso();
-        if (mine) update(id, { kind: 'interactive', pgid, in_fifo: fifo, resumes, last_resume_at: t, remote, model, permission_mode: mode, state: 'done', waiting_for: null });
+        if (mine) update(id, { kind: 'interactive', pgid, in_fifo: term.in_fifo, tmux: term.tmux, block: null, block_at: null, resumes, last_resume_at: t, remote, model, permission_mode: mode, state: 'done', waiting_for: null });
         else {
           store.addNativeWorker({ id, session_id: sid, name, cwd, approval_id: a.approvalId ?? null, state: 'done', waiting_for: null, report: null, report_at: null, outcome: 'done',
-            transcript: file ?? null, created_at: t, updated_at: t, kind: 'interactive', pgid, repo: cwd, model, permission_mode: mode, resumes, last_resume_at: t, in_fifo: fifo, remote });
+            transcript: file ?? null, created_at: t, updated_at: t, kind: 'interactive', pgid, repo: cwd, model, permission_mode: mode, resumes, last_resume_at: t, in_fifo: term.in_fifo, tmux: term.tmux, remote });
           o.onChange(row(id)!);
         }
         const seen = await waitFor(row(id)!, x => !!x.pid, RESPAWN_WAIT_MS);
@@ -779,8 +928,11 @@ export function makeNative(o: {
 
     /** The PermissionRequest http hook. Resolves when the owner taps Allow or Deny. */
     permissionRequest(body: any): Promise<object> {
-      const w = find(String(body?.session_id ?? ''));
-      if (!w) { log('hook from an unknown session', { hook: 'PermissionRequest', session: body?.session_id ?? null }); return Promise.resolve({}); }
+      // A known session gets its card at once; a new one first binds a row that started at a prompt.
+      const known = find(String(body?.session_id ?? ''));
+      if (!known) return hookRow(body).then(w => w ? api.permissionRequest(body) : (log('hook from an unknown session', { hook: 'PermissionRequest', session: body?.session_id ?? null }), {}));
+      const w = known;
+      touch(w, 'PermissionRequest');
       const tool = String(body.tool_name ?? '?');
       const summary = summarize(tool, body.tool_input);
       const a = store.addApproval({ action: 'worker-permission', args: JSON.stringify({ worker: w.id, name: w.name, tool, input: body.tool_input ?? null, summary }), say: `Allow ${tool} in ${w.name}?` });
@@ -813,6 +965,7 @@ export function makeNative(o: {
     stopHook(body: any): object {
       const w = find(String(body?.session_id ?? ''));
       if (!w) { log('hook from an unknown session', { hook: 'Stop', session: body?.session_id ?? null }); return {}; }
+      touch(w, 'Stop');
       const text = String(body.last_assistant_message ?? '');
       const outcome = outcomeOf(text);
       const transcript = body.transcript_path ?? w.transcript;
@@ -888,8 +1041,34 @@ export function makeNative(o: {
     },
 
     preToolUse(body: any): object {
+      const w = find(String(body?.session_id ?? ''));
+      if (w) touch(w, 'PreToolUse');
       return body?.tool_name === 'AskUserQuestion' ? NO_ASK : {};
     },
+
+    /** The UserPromptSubmit hook: the brief or a message reached the model, so the session is past its start prompts. */
+    async promptHook(body: any): Promise<object> {
+      const w = await hookRow(body);
+      if (!w) { log('hook from an unknown session', { hook: 'UserPromptSubmit', session: body?.session_id ?? null }); return {}; }
+      touch(w, 'UserPromptSubmit');
+      return {};
+    },
+
+    /**
+     * The Notification hook. One that says the session waits on the owner (WAITS_NOTICE) is trigger (c): the screen is read
+     * to name what it waits on. Answered at once; the read runs after.
+     */
+    async notificationHook(body: any): Promise<object> {
+      const w = await hookRow(body);
+      if (!w) { log('hook from an unknown session', { hook: 'Notification', session: body?.session_id ?? null }); return {}; }
+      touch(w, 'Notification');
+      const message = String(body?.message ?? '');
+      if (WAITS_NOTICE.test(message)) void readScreen(w, `notification: ${message.slice(0, 80)}`).catch(e => log('native screen read failed', { worker: w.id, error: (e as Error).message }));
+      return {};
+    },
+
+    /** Reads a worker's screen now, for a caller with its own reason (the tests, a route). */
+    readScreen: (id: string, why: string) => { const w = find(id); return w ? readScreen(w, why) : Promise.resolve(undefined); },
 
     /** One `claude agents` round: states, liveness and the findings the brain should hear. */
     async poll(): Promise<void> {
@@ -975,16 +1154,20 @@ export function makeNative(o: {
         const task = taskOf(w);
         const r: WorkRow = {
           id: `${ROW_PREFIX}${w.id}`, kind: 'worker', dispatch: `${ROW_PREFIX}${w.id}`, title: w.name, ...classify(task.title, task.spec),
-          state: rowState(w, asking(w) || ownerWait(w)),
+          // A blocking prompt on its screen waits on the owner like an ask.
+          state: rowState(w, asking(w) || ownerWait(w) || statusOf(w, false, false).name === 'blocked'),
+          status: statusOf(w, asking(w), ownerWait(w)),
           worktree: basename(w.cwd),
           // An interactive session takes a message in any state: a stopped or failed one is resumed first.
           steer: w.kind === 'interactive' || ['done', 'working', 'blocked', 'starting'].includes(w.state) ? 'auto' : 'none',
           native: { id: w.id, sessionId: w.session_id, name: w.name, state: w.state, waitingFor: w.waiting_for, outcome: w.outcome, kind: w.kind, ...(w.remote ? { remote: w.remote } : {}),
             ...(stalled.has(w.id) ? { stalledSince: new Date(stalled.get(w.id)!).toISOString() } : {}),
             ...(ownerWait(w) ? { waitingOn: { text: waitingText(w.report ?? ''), since: w.report_at! } } : {}),
-            ...(w.outcome === 'done' && followUpOf(store, w.id) ? { followUp: { text: firstLine(followUpOf(store, w.id)!.text), at: followUpOf(store, w.id)!.at, outcome: 'failed' as const } } : {}) },
+            ...(w.outcome === 'done' && followUpOf(store, w.id) ? { followUp: { text: firstLine(followUpOf(store, w.id)!.text), at: followUpOf(store, w.id)!.at, outcome: 'failed' as const } } : {}),
+            ...(w.tmux ? { tmux: { session: w.tmux, attach: attachCommand(w.tmux) } } : {}) },
         };
-        if (w.state === 'blocked' && w.waiting_for) r.note = w.waiting_for;
+        if (r.status?.name === 'blocked' && w.block) r.note = `Blocked: ${w.block}`;
+        else if (w.state === 'blocked' && w.waiting_for) r.note = w.waiting_for;
         else if (asking(w)) r.note = asks.get(`${ROW_PREFIX}${w.id}`);
         else if (ownerWait(w)) r.note = waitingText(w.report ?? '');
         else if (stalled.has(w.id)) r.note = `Stuck: nothing for ${ago(now() - stalled.get(w.id)!).replace(' ago', '')}`;
@@ -1024,7 +1207,17 @@ export function makeNative(o: {
       // The relay (a haiku session carrying SendMessage, about 8 s) is the fallback when the pipe has no reader, and the only way into a background session.
       const cur = find(w.id)!;
       let r: { ok: true } | { ok: false; error: string }, via = 'relay';
-      if (cur.kind === 'interactive' && cur.in_fifo) {
+      if (cur.kind === 'interactive' && cur.tmux && wt) {
+        // Trigger (d): the screen is read just before typing. Words and Enter typed into a dialog would pick one of its
+        // options (Enter on the trust question exits the session), so a blocking prompt refuses the words.
+        const blocked = await readScreen(cur, 'just before typing');
+        if (blocked) {
+          log('native reply', { worker: w.id, by, via: 'none', chars: text.length, ok: false, blocked });
+          return { ok: false, error: `Not typed: the worker's screen shows ${SCREEN_WORDS[blocked] ?? blocked} (blocked: ${blocked}). Answer it in its terminal first: ${attachCommand(cur.tmux)}` };
+        }
+        try { await wt.type(cur.tmux, typedText(text)); r = { ok: true }; via = 'terminal'; }
+        catch (e) { log('native reply: typing into the terminal failed, relaying instead', { worker: w.id, tmux: cur.tmux, error: (e as Error).message.slice(0, 200) }); r = await relay(cur, text); }
+      } else if (cur.kind === 'interactive' && cur.in_fifo) {
         try { typeInto(cur.in_fifo, typedBytes(text)); r = { ok: true }; via = 'terminal'; }
         catch (e) { log('native reply: typing into the terminal failed, relaying instead', { worker: w.id, fifo: cur.in_fifo, error: (e as NodeJS.ErrnoException).code ?? (e as Error).message }); r = await relay(cur, text); }
       } else r = await relay(cur, text);
@@ -1088,6 +1281,8 @@ export function makeNative(o: {
       for (const r of store.nativeWorkers()) {
         const w = asWorker(r);
         if (w.kind !== 'interactive' || w.state === 'abandoned') continue;
+        // A row at its start prompt has no session to resume; the poll binds it or fails it.
+        if (w.tmux && !w.session_id) continue;
         const a = listed(list, w);
         if (a?.pid && w.state !== 'stopped' && stuck.has(w.id)) {
           if (w.pgid) killGroup(w.pgid);
@@ -1115,10 +1310,20 @@ export function makeNative(o: {
   async function pollOnce(): Promise<void> {
       const list = await agents();
       alive = new Set(list.filter(a => a.pid).map(a => a.id));
+      await bindPending(list);
       for (const r of store.nativeWorkers()) {
         const w = asWorker(r);
         if (w.state === 'abandoned') continue;
         const a = listed(list, w);
+        // Started at a prompt and not past it yet: no session to list, resume or report. Only its terminal can end.
+        if (w.kind === 'interactive' && w.tmux && !w.session_id) {
+          if (['starting', 'working', 'blocked'].includes(w.state) && !(w.pgid && alivePgid(w.pgid))) {
+            const next = update(w.id, { state: 'failed', waiting_for: 'Its terminal ended before the session started', block: null, block_at: null });
+            log('native worker ended at its start prompt', { worker: w.id, pgid: w.pgid });
+            if (!noticed.has(`${w.id}:failed`)) { noticed.add(`${w.id}:failed`); o.onNotice(next, `Worker ${w.name} failed: its terminal ended before the session started`); }
+          }
+          continue;
+        }
         const f: Partial<NativeWorkerRow> = {};
         if (a?.sessionId && a.sessionId !== w.session_id) f.session_id = a.sessionId;
         if (w.kind === 'interactive' && a?.pid) alive.add(w.id);
@@ -1168,6 +1373,8 @@ export function makeNative(o: {
             if (since !== undefined && now() - since >= IDLE_REAP_MS) { api.reap(next); next = row(w.id) ?? next; }
           }
         }
+        // The screen read triggers (a) and (b), for a live tmux worker only.
+        if (next.tmux && a?.pid) { await screenTriggers(next).catch(e => log('native screen read failed', { worker: w.id, error: (e as Error).message })); next = row(w.id) ?? next; }
         const notice = (kind: string, holds: boolean, text: () => string) => {
           const key = `${w.id}:${kind}`;
           if (!holds) { noticed.delete(key); return; }
@@ -1205,12 +1412,30 @@ export function makeNative(o: {
    */
   async function startInteractive(a: { name: string; cwd: string; brief: string; model?: string; permissionMode?: 'auto' | 'default'; approvalId?: number; worktree?: boolean }): Promise<NativeWorker> {
     const model = a.model ?? DEFAULT_MODEL, mode = a.permissionMode ?? 'auto';
-    const fifo = fifoFor(a.name, 0);
-    const pgid = spawnPty(['claude', '--name', a.name, '--permission-mode', mode, '--model', model, '--settings', settingsFor(a.approvalId), ...(a.worktree ? ['-w', a.name] : []), a.brief], a.cwd, fifo);
+    const term = startPty(['claude', '--name', a.name, '--permission-mode', mode, '--model', model, '--settings', settingsFor(a.approvalId), ...(a.worktree ? ['-w', a.name] : []), a.brief], a.cwd, a.name, 0);
+    const { pgid, in_fifo: fifo } = term;
     const t = iso();
     const probe: NativeWorker = { id: '', session_id: null, name: a.name, cwd: a.cwd, approval_id: a.approvalId ?? null, state: 'starting', waiting_for: null, report: null, report_at: null, outcome: null, transcript: null, created_at: t, updated_at: t, kind: 'interactive', pgid,
-      repo: a.cwd, model, permission_mode: mode, resumes: 0, last_resume_at: null, in_fifo: fifo };
+      repo: a.cwd, model, permission_mode: mode, resumes: 0, last_resume_at: null, in_fifo: fifo, tmux: term.tmux, block: null, block_at: null };
     const seen = await waitFor(probe, x => !!x.sessionId, SESSION_WAIT_MS * 2);
+    if (!seen?.sessionId && term.tmux && wt) {
+      // Not listed: Claude Code lists a session only once it is past its start prompts (the folder trust question, a login).
+      // The screen says which one. A known prompt keeps the row, blocked with that reason, so the owner can answer it in
+      // the terminal; the poll binds the session when it shows up. Its id is random, as it has no session id yet.
+      let found: string | undefined, screen = '';
+      try { screen = await wt.capture(term.tmux); found = matchScreen(screen); } catch (e) { screen = `(${(e as Error).message})`; }
+      log('native screen read', { name: a.name, session: term.tmux, why: `not listed ${SESSION_WAIT_MS * 2 / 1000} s after its start`, ok: !screen.startsWith('('), found: found ?? null });
+      if (found) {
+        const id = randomBytes(4).toString('hex');
+        store.addNativeWorker({ ...probe, id, block: found, block_at: iso() });
+        const w = row(id)!;
+        o.onChange(w);
+        log('native worker started at a prompt', { worker: id, name: a.name, approval: a.approvalId ?? null, block: found, session: term.tmux, pgid });
+        log('native notice', { worker: id, kind: 'screen-blocked', block: found });
+        o.onNotice(w, screenBlockedText(w, found, attachCommand(term.tmux)));
+        return w;
+      }
+    }
     if (!seen?.sessionId) {
       killGroup(pgid);
       log('native worker failed to start', { name: a.name, approval: a.approvalId ?? null, kind: 'interactive', pgid });
@@ -1221,7 +1446,7 @@ export function makeNative(o: {
     alive.add(id);
     const w = row(id)!;
     o.onChange(w);
-    log('native worker started', { worker: id, session: w.session_id, name: a.name, approval: a.approvalId ?? null, cwd: w.cwd, repo: a.cwd, worktree: !!a.worktree, kind: 'interactive', pgid, fifo });
+    log('native worker started', { worker: id, session: w.session_id, name: a.name, approval: a.approvalId ?? null, cwd: w.cwd, repo: a.cwd, worktree: !!a.worktree, kind: 'interactive', pgid, ...(term.tmux ? { tmux: term.tmux } : { fifo }) });
     return w;
   }
 

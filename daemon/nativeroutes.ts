@@ -36,6 +36,9 @@ export async function nativeRoute(o: NativeRouteOptions, method: string, url: st
   // A turn that ended with no report line is sent back once: the reply carries Claude Code's `decision: block`.
   if (url === '/api/hooks/stop') return { status: 200, body: o.native.stopHook(body) };
   if (url === '/api/hooks/pre') return { status: 200, body: o.native.preToolUse(body) };
+  // Signals for the screen reads (native.ts readScreen): the prompt reached the model, and Claude Code waits on the owner.
+  if (url === '/api/hooks/prompt') return { status: 200, body: await o.native.promptHook(body) };
+  if (url === '/api/hooks/notification') return { status: 200, body: await o.native.notificationHook(body) };
   if (url === '/api/internal/native/reply') {
     const worker = typeof body.worker === 'string' ? body.worker : '';
     const text = typeof body.text === 'string' ? body.text.trim() : '';

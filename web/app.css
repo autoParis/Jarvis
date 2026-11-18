@@ -818,6 +818,8 @@ a.num:hover { color: var(--ink); }
   .fold-head[aria-expanded="true"] .ago { display: inline; }
 }
 .wrow .note { grid-column: 2 / -1; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+/* A blocked row's reason ("Blocked: login"): what the owner must act on. */
+.wrow .note.blocked { color: var(--need-ink); font-weight: 600; }
 .rrow .follow { grid-column: 2 / -1; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .rrow .gone { grid-column: 2 / -1; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .done-line { flex: none; padding: 10px 18px 12px; font-size: 12px; color: var(--muted); }

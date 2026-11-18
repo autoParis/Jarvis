@@ -14,13 +14,15 @@
 //   for shows in Completed itself, for a day from the press, the same purge as a done request.
 import { esc, ago, mark, requestMark, requestGroups, requestListHtml, openIdOf, closedNote, reportLinkHtml, docLinkHtml, closeButtonHtml, STATE } from './requestlist.js';
 import { formatStamp } from './workfold.js';
-import { actionsWith } from './contract.js';
+import { actionsWith, statusText } from './contract.js';
 
 export const GROUPS = [['story', 'Stories'], ['babysit', 'Babysitting'], ['side', 'Side chats'], ['terminal', 'Terminals'], ['other', 'Other']];
 // A project terminal's mark: a small screen with a prompt (daemon/termrows.ts).
 export const TERM_MARK = '<svg class="g-term" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/></svg>';
 const WORK_STATE = { waiting: 'Waiting on you', idle: 'Idle', working: 'Working', exited: 'Exited' };
 const RANK = { waiting: 0, failed: 1, working: 2, idle: 3, exited: 4 };
+/** A row's status as the page says it: "Blocked: login", "Working", "Done: failed". Empty for a row without one. */
+export const statusLabel = s => { const t = statusText(s); return t ? t.charAt(0).toUpperCase() + t.slice(1) : ''; };
 /** How long a row the owner moved with × stays in Completed. The same as DONE_KEEP_MS in daemon/requests.ts. */
 export const COMPLETED_KEEP_MS = 24 * 60 * 60_000;
 /** How the detail pane names the owner. jarvisd sends it (`owner` in GET /api/work); the page calls setOwner once at load. */
@@ -87,19 +89,22 @@ export function groupOpen(group, shut, closedWaiting) {
 function itemHtml(i, ctx) {
   const { row, req } = i, title = req?.title ?? row.title;
   const failed = req?.status === 'failed';
-  const status = row?.tmux ? `Running in tmux session ${row.tmux.name}` : failed ? STATE.failed : req && !row ? STATE[req.status] ?? req.status : WORK_STATE[row.state] ?? row.state;
+  const st = statusLabel(row?.status);
+  const status = row?.tmux ? `Running in tmux session ${row.tmux.name}${st ? ` · ${st}` : ''}` : failed ? STATE.failed : req && !row ? STATE[req.status] ?? req.status : (st || (WORK_STATE[row.state] ?? row.state));
+  // A blocked row says why under its title: "Blocked: login". The reason is the thing the owner must act on.
+  const blocked = row?.status?.name === 'blocked' && row.status.reason ? st : '';
   const shape = row?.tmux ? TERM_MARK : failed ? mark('failed') : !row ? requestMark(req.status) : mark(row.state === 'exited' ? 'stopped' : row.state);
   const idleNote = row?.state === 'idle' && row.note;
   // The age column holds a real time or a short idle note. A row with neither shows nothing there.
   const age = req ? ago(req.at, ctx.now) : idleNote && idleNote.length <= 14 ? idleNote : '';
-  const note = !req && idleNote && idleNote.length > 14 ? idleNote : !row && !req.row ? closedNote(req) : '';
+  const note = blocked || (!req && idleNote && idleNote.length > 14 ? idleNote : !row && !req.row ? closedNote(req) : '');
   const openId = row?.id ?? openIdOf(req);
   // The × moves the row, and the request it stands for, to Completed.
   const hide = closeButtonHtml({ id: (req ?? i.merge)?.id, title, status: (req ?? i.merge)?.status, row: row?.id });
   const state = failed ? 'failed' : row?.state ?? req.status;
-  return `<div class="wrow s-${esc(state)}${openId && ctx.reading === openId ? ' reading' : ''}"${openId ? ` data-id="${esc(openId)}" role="button" tabindex="0"` : ''} title="${esc(status)}${row?.note && row.state !== 'idle' ? `: ${esc(row.note)}` : ''}">`
+  return `<div class="wrow s-${esc(state)}${row?.status ? ` st-${esc(row.status.name)}` : ''}${openId && ctx.reading === openId ? ' reading' : ''}"${openId ? ` data-id="${esc(openId)}" role="button" tabindex="0"` : ''} title="${esc(status)}${row?.note && row.state !== 'idle' ? `: ${esc(row.note)}` : ''}">`
     + `${shape}<span class="t">${esc(title)}</span><span class="wend">${req ? docLinkHtml(req) + reportLinkHtml(req) : ''}<span class="ago">${esc(age)}<span class="sr"> ${esc(status)}</span></span></span>${hide}`
-    + (note ? `<div class="note">${esc(note)}</div>` : '') + '</div>';
+    + (note ? `<div class="note${blocked ? ' blocked' : ''}">${esc(note)}</div>` : '') + '</div>';
 }
 
 /** `ctx`: { shut, closedWaiting, folders, reading, now }. */

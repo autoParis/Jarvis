@@ -78,3 +78,21 @@ test('every jarvis-* command, verb and flag the vault tells the brain to run exi
     }
   }
 });
+
+test('the work statuses and blocked reasons are the catalog lists, and every reason jarvisd sets is one of them', async () => {
+  const { WORK_STATUSES, BLOCKED_REASONS, statusText } = await import('../web/contract.js');
+  const work = read('daemon/work.ts');
+  const union = (name: string) => [...new RegExp(`export type ${name} = ([^;]+);`).exec(work)![1].matchAll(/'([a-z ]+)'/g)].map(m => m[1]);
+  assert.deepEqual(union('WorkStatusName'), WORK_STATUSES);
+  assert.deepEqual(union('BlockedReason'), BLOCKED_REASONS);
+  for (const f of ['daemon/native.ts', 'daemon/termrows.ts']) {
+    for (const m of read(f).matchAll(/name: '([a-z]+)'(?:, reason: '([a-z ]+)')?/g)) {
+      assert.ok(WORK_STATUSES.includes(m[1]), `${f}: status ${m[1]}`);
+      if (m[2] && m[1] === 'blocked') assert.ok(BLOCKED_REASONS.includes(m[2]), `${f}: reason ${m[2]}`);
+    }
+  }
+  assert.equal(statusText({ name: 'blocked', reason: 'login' }), 'blocked: login');
+  assert.equal(statusText({ name: 'working' }), 'working');
+  const { statusLabel } = await import('../web/worklist.js');
+  assert.equal(statusLabel({ name: 'blocked', reason: 'trust prompt' }), 'Blocked: trust prompt');
+});
