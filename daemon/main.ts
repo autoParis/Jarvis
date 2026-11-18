@@ -497,7 +497,7 @@ http.createServer(async (req, res) => {
       () => messagesRoute(messagesCtx, method, url, body, todayOwner),
       () => pushRoute({ store, publicKey: vapid.publicKey, log, notify }, method, url, body, String(req.headers['user-agent'] ?? '')),
       () => requestsRoute({ requests, store }, method, url, body),
-      () => brainAskRoute({ store, log, changed: askChanged }, method, url, body),
+      () => brainAskRoute({ store, log, changed: askChanged, reportOf }, method, url, body),
       // The Scheduled tasks screen (tasks.ts).
       () => url.startsWith('/api/tasks') ? tasksRoute(tasks, method, url, body, text => fromOwner(text)) : undefined,
       // The chat microphone, hands-free listening and the Today microphone (voice.ts). The body is audio, read as bytes.

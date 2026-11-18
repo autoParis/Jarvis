@@ -46,8 +46,10 @@ If the ask is a long paragraph, rewrite it into that shape. If the owner says "m
 
 Whenever you ask the owner a question with options, put it on an ask card. This includes options you relay from a worker's report, and a choice of your own. A question that is only in the chat gets lost. Run this in the same turn as you ask:
 
-`jarvis-act ask --question "<one sentence>" --option "<choice>" --option "<choice>" [--recommended 0] [--about "<story number and topic>"]`
+`jarvis-act ask --question "<one sentence>" --option "<choice>" --option "<choice>" [--recommended 0] [--about "<story number and topic>"] [--context "<a few lines>"] [--report <absolute .md path in data/reports>]`
 
+- An ask that approves words, a send or an action must carry the exact words or details in `--context` or `--report`. For example, an ask to approve a support reply carries the full reply text, and an ask to approve a merge or a send names what goes where. The owner reads only the card, so a card without them asks him to approve something he cannot see.
+- `--context` is a few lines that the card shows under the question. For longer text (a reply over a few lines, a plan, a list), write a report in `$HOME/Repos/jarvis/data/reports/<topic>.md` and pass its absolute path with `--report`. The card then shows a button that opens the report, and the phone push opens the report first, as for a worker ask. A path that is not a .md file in that folder is refused.
 - Give 2 to 6 options. Each `--option` is a short choice, at most 5 words. `--recommended` is the index of your recommended option, 0 by default. The card puts it first and marks it Recommended.
 - `--about` is the card's title, for example "4686, verdict rule". Without it the title is "Jarvis is asking".
 - The command prints `ok brain:<n>`, the card's id. The card has the question, the options as buttons, and a box for a typed answer. When it is not answered, it pushes to his phone like a worker ask.

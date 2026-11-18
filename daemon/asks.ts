@@ -48,9 +48,10 @@ export type AskCard = {
   /**
    * Set for an ask with a QUESTION field. The page then draws fixed headings: What the worker is doing (`doing`), The
    * question, Options, and the rest (`more`) behind a More toggle. `image` is the picture's markdown, drawn at the top.
-   * Without it the page draws `body` as one block, as before.
+   * Without it the page draws `body` as one block, as before. `context` (a brain ask's --context: the exact words or
+   * details the owner approves) shows right under the question, never behind More.
    */
-  parts?: { doing?: string; more?: string; image?: string };
+  parts?: { doing?: string; more?: string; image?: string; context?: string };
   /**
    * The report this decision rests on: the ask's REPORT line, else a data/reports path in its text. Set only for a file
    * the daemon can open. `href` opens it in the report viewer, `image` is its first picture, `pictures` how many it has.
@@ -206,7 +207,7 @@ const answeredBy = (i: Item) => i.answered_by === 'jarvis' ? { answeredBy: 'jarv
  */
 export function askCard(i: Item, story?: string, shown: (path: string) => boolean = looksLikeImage, reportOf?: (path: string) => ReportSummary | undefined): AskCard | undefined {
   if (i.kind !== 'question' && i.kind !== 'escalation') return undefined;
-  if (isBrainAsk(i)) return brainCard(i);
+  if (isBrainAsk(i)) return brainCard(i, reportOf);
   const body = (i.body ?? '').trim();
   const f = fields(body);
   const escalation = i.kind === 'escalation';

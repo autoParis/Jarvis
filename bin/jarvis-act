@@ -21,8 +21,11 @@
 //   jarvis-act reply-resume <id>   the owner says the manual steps are done, or to try a failed send again
 //   jarvis-act reply-drop <id>     the owner says not to send it
 //   jarvis-act ask --question "<text>" --option "<label>" --option "<label>" [--recommended 0] [--about "<story or topic>"]
+//                  [--context "<a few lines>"] [--report <absolute .md path in data/reports>]
 //                              your own question as an ask card in the app, options as buttons. A tap or a typed answer
 //                              comes back as an [ask card answer] line. Prints the card's id (brain:<n>).
+//                              --context shows under the question. --report adds a button that opens the report, and the
+//                              phone push opens it first. An ask that approves words, a send or an action carries them in one.
 //   jarvis-act ask-done <id> --answer "<his answer>"   the owner answered that ask in the chat; its card closes
 const [cmd, ...rest] = process.argv.slice(2);
 const flag = n => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
@@ -37,9 +40,9 @@ if (cmd === 'email-done') {
 if (cmd === 'ask' || cmd === 'ask-done') {
   const options = rest.flatMap((a, i) => a === '--option' && rest[i + 1] !== undefined ? [rest[i + 1]] : []);
   const req = cmd === 'ask'
-    ? ['ask', { question: flag('question'), options, recommended: flag('recommended'), about: flag('about') }]
+    ? ['ask', { question: flag('question'), options, recommended: flag('recommended'), about: flag('about'), context: flag('context'), report: flag('report') }]
     : ['ask-done', { id: rest[0]?.startsWith('--') ? undefined : rest[0], answer: flag('answer') }];
-  if (cmd === 'ask' && !flag('question')) { console.error('usage: jarvis-act ask --question "<text>" --option "<label>" --option "<label>" [--recommended 0] [--about "<topic>"]'); process.exit(2); }
+  if (cmd === 'ask' && !flag('question')) { console.error('usage: jarvis-act ask --question "<text>" --option "<label>" --option "<label>" [--recommended 0] [--about "<topic>"] [--context "<a few lines>"] [--report <abs .md path in data/reports>]'); process.exit(2); }
   if (cmd === 'ask-done' && (!/^brain:\d+$/.test(rest[0] ?? '') || !flag('answer'))) { console.error('usage: jarvis-act ask-done brain:<n> --answer "<his answer>"'); process.exit(2); }
   const res = await fetch(`${url}/api/internal/${req[0]}`, { method: 'POST', body: JSON.stringify(req[1]) });
   const text = await res.text();
