@@ -49,6 +49,7 @@
         + (p.image ? `<div class="ask-body md">${md(p.image)}</div>` : '')
         + (p.doing ? head('What the worker is doing') + `<div class="ask-body md">${md(p.doing)}</div>` : '')
         + head('The question') + md(card.question).replace(/^<p>/, '<p class="ask-q" role="heading" aria-level="2">')
+        + (p.context ? `<div class="ask-body ask-context md">${md(p.context)}</div>` : '')
         + (opts ? head('Options') + `<div class="ask-options">${opts}</div>` : '')
         + (p.more ? `<details class="card-more"><summary>More</summary><div class="ask-body md">${md(p.more)}</div></details>` : '')
         + outcome;

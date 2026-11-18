@@ -147,3 +147,12 @@ test('jarvis-act ask sends every --option in order, and ask-done sends the id an
   assert.equal(bad.code, 2);
   assert.equal(bad.path, undefined, 'nothing was posted');
 });
+
+test('jarvis-act ask sends --context and --report as they are typed', async () => {
+  const report = '/srv/jarvis/data/reports/ticket-1052-reply.md';
+  const a = await act(['ask', '--question', 'Queue this reply?', '--option', 'Queue it', '--option', 'Change it',
+    '--context', 'Bonjour Malik,\nThe fix is live.', '--report', report]);
+  assert.equal(a.path, '/api/internal/ask');
+  assert.deepEqual(a.body, { question: 'Queue this reply?', options: ['Queue it', 'Change it'], context: 'Bonjour Malik,\nThe fix is live.', report });
+  assert.equal(a.out, 'ok brain:7');
+});

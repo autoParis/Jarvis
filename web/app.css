@@ -372,6 +372,8 @@ body.pane-open .need-btn { padding: 0 8px; gap: 6px; }
 .card-p { font-size: 15px; line-height: 1.4; color: var(--ink); overflow-wrap: anywhere; margin: 0; }
 .ask .card-h + .ask-body { font-size: 15px; color: var(--ink); }
 .card-h ~ .ask-q { font-size: 20px; line-height: 26px; }
+/* A brain ask's --context: the exact words or details the owner approves, right under the question */
+.ask-context { font-size: 15px; color: var(--ink); padding-left: 10px; border-left: 2px solid var(--ac-line); }
 .card-more { border-top: 1px solid var(--line, var(--control)); padding-top: 10px; }
 .card-more > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--muted); list-style: none; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
 .card-more > summary::-webkit-details-marker { display: none; }

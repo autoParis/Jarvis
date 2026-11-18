@@ -1,6 +1,8 @@
 import type { Store, Item } from './store.ts';
 import type { Log } from './log.ts';
 import type { AskCard } from './asks.ts';
+import type { ReportSummary } from './reports.ts';
+import { docHref } from '../web/contract.js';
 import { OWNER } from './config.ts';
 import type { RouteResult, Body } from './route.ts';
 
@@ -12,20 +14,34 @@ export const BRAIN_SOURCE = 'brain';
 const MAX_OPTIONS = 6;
 const MAX_QUESTION = 600;
 const MAX_LABEL = 200;
+const MAX_CONTEXT = 1500;
+const MD_PATH = /^\/\S*\.md$/i;
 
 export const isBrainAsk = (i: Item | undefined): i is Item => i?.source === BRAIN_SOURCE;
 
 const optionsOf = (i: Item): string[] => { try { const v = JSON.parse(i.options ?? '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
 const isoTime = (t: string) => `${t.replace(' ', 'T')}Z`;
 
-export type NewBrainAsk = { question?: unknown; options?: unknown; recommended?: unknown; about?: unknown };
+/** What `--context` and `--report` stored on a brain ask (the item's meta): the exact words or details it approves. */
+type Extra = { context?: string; report?: string };
+const extraOf = (i: Item): Extra => { try { const v = JSON.parse(i.meta ?? '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; } };
+/** The report path a brain ask carries (`--report`), for the card button and the phone push. */
+export const brainAskReport = (i: Item): string | undefined => isBrainAsk(i) ? extraOf(i).report : undefined;
+
+/** Reads a report in data/reports (main.ts passes reports.ts reportSummary); undefined when it cannot be opened. */
+export type ReportOf = (path: string) => ReportSummary | undefined;
+
+export type NewBrainAsk = { question?: unknown; options?: unknown; recommended?: unknown; about?: unknown; context?: unknown; report?: unknown };
 type Result = { status: number; body: { error?: string; id?: string; ask?: AskCard }; item?: Item };
 
 /**
  * Validates and stores one brain ask. The recommended option moves to the front, so the card marks it Recommended.
  * Refused with 400, and nothing stored, when the question is empty or there are fewer than two distinct options.
+ * `context` is a few lines the card shows under the question. `report` is an absolute .md path in data/reports: the card
+ * gets the worker ask's "Read the report first" button and the push opens it first. With `reportOf`, a report it cannot
+ * open is refused, so the brain learns at once instead of the owner seeing a card with no button.
  */
-export function addBrainAsk(store: Store, input: NewBrainAsk, now: () => number = Date.now): Result {
+export function addBrainAsk(store: Store, input: NewBrainAsk, now: () => number = Date.now, reportOf?: ReportOf): Result {
   const question = typeof input.question === 'string' ? input.question.trim() : '';
   if (!question) return { status: 400, body: { error: '--question is required.' } };
   if (question.length > MAX_QUESTION) return { status: 400, body: { error: `The question is over ${MAX_QUESTION} characters. Put the detail in the chat and keep the question to one sentence.` } };
@@ -38,24 +54,36 @@ export function addBrainAsk(store: Store, input: NewBrainAsk, now: () => number 
   if (!Number.isInteger(rec) || rec < 0 || rec >= options.length) return { status: 400, body: { error: `--recommended must be an option index from 0 to ${options.length - 1}.` } };
   const ordered = [options[rec], ...options.filter((_, n) => n !== rec)];
   const about = typeof input.about === 'string' ? input.about.trim().slice(0, 120) : '';
+  const context = typeof input.context === 'string' ? input.context.trim() : '';
+  if (context.length > MAX_CONTEXT) return { status: 400, body: { error: `--context is over ${MAX_CONTEXT} characters. Put long text in a report in data/reports and pass it with --report.` } };
+  const report = typeof input.report === 'string' ? input.report.trim() : '';
+  if (report && (!MD_PATH.test(report) || (reportOf && !reportOf(report)))) return { status: 400, body: { error: `--report must be the absolute path of a .md file that exists in data/reports. ${report} is not.` } };
+  const extra: Extra = { ...(context ? { context } : {}), ...(report ? { report } : {}) };
   // A millisecond id the brain can type back; a second ask in the same millisecond takes the next number.
   let t = now(), item: Item | undefined;
   for (let n = 0; n < 5 && !item; n++, t++) {
-    item = store.insertItem({ source: BRAIN_SOURCE, external_id: `brain:${t}`, kind: 'question', subject: about, body: question, options: JSON.stringify(ordered), status: 'spoken' });
+    item = store.insertItem({ source: BRAIN_SOURCE, external_id: `brain:${t}`, kind: 'question', subject: about, body: question, options: JSON.stringify(ordered), meta: Object.keys(extra).length ? JSON.stringify(extra) : null, status: 'spoken' });
   }
   if (!item) return { status: 500, body: { error: 'Could not store the ask.' } };
-  return { status: 200, body: { id: item.external_id, ask: brainCard(item) }, item };
+  return { status: 200, body: { id: item.external_id, ask: brainCard(item, reportOf) }, item };
 }
 
-/** The card for a brain ask: the topic as title, the question large, the options as buttons with the first recommended. */
-export function brainCard(i: Item): AskCard {
+/**
+ * The card for a brain ask: the topic as title, the question large, the options as buttons with the first recommended.
+ * `--context` shows under the question (`parts.context`). `--report` shows the worker ask's report button, when
+ * `reportOf` can open the file.
+ */
+export function brainCard(i: Item, reportOf?: ReportOf): AskCard {
+  const { context, report } = extraOf(i);
+  const summary = report ? reportOf?.(report) : undefined;
   return {
     id: i.external_id, kind: 'question', dispatch: null,
     title: i.subject?.trim() || 'Jarvis is asking',
     body: i.body ?? '', question: i.body ?? '',
     options: optionsOf(i).map(label => ({ value: label, label })),
-    // Empty parts: the page draws The question and Options under headings, with no "What the worker is doing".
-    parts: {},
+    // The page draws The question and Options under headings, with no "What the worker is doing".
+    parts: context ? { context } : {},
+    ...(summary ? { report: { ...summary, href: docHref(summary.path) } } : {}),
     at: isoTime(i.created_at), ...(i.updated_at ? { settledAt: isoTime(i.updated_at) } : {}),
     status: i.status === 'answered' || i.status === 'done' ? 'answered' : i.status === 'replying' ? 'sending' : 'open',
     answer: i.answer,
@@ -121,7 +149,8 @@ export function brainAskDone(store: Store, input: { id?: unknown; answer?: unkno
 
 /** The brief's line for an open brain ask. */
 export function briefLine(i: Item): string {
-  return `- [brain ask] message_id=${i.external_id}${i.subject ? ` about=${JSON.stringify(i.subject)}` : ''} question=${JSON.stringify(i.body)} options=${i.options} (your own ask, on a card in the app; when ${OWNER} answers in the chat, run jarvis-act ask-done ${i.external_id} --answer "<his answer>")`;
+  const { context, report } = extraOf(i);
+  return `- [brain ask] message_id=${i.external_id}${i.subject ? ` about=${JSON.stringify(i.subject)}` : ''} question=${JSON.stringify(i.body)} options=${i.options}${context ? ` context=${JSON.stringify(context)}` : ''}${report ? ` report=${report}` : ''} (your own ask, on a card in the app; when ${OWNER} answers in the chat, run jarvis-act ask-done ${i.external_id} --answer "<his answer>")`;
 }
 
 /** The check's line for a brain ask that waited `minutes`. */
@@ -130,10 +159,10 @@ export function checkLine(i: Item, minutes: number): string {
 }
 
 /** jarvis-act ask stores Jarvis's own question as an ask card. jarvis-act ask-done closes one the owner answered in the chat. `changed` gets the card's id. */
-export async function brainAskRoute(o: { store: Store; log: Log; changed: (id: string) => void }, method: string, url: string, body: Body): Promise<RouteResult | undefined> {
+export async function brainAskRoute(o: { store: Store; log: Log; changed: (id: string) => void; reportOf?: ReportOf }, method: string, url: string, body: Body): Promise<RouteResult | undefined> {
   if (method !== 'POST' || (url !== '/api/internal/ask' && url !== '/api/internal/ask-done')) return undefined;
   const done = url === '/api/internal/ask-done';
-  const r = done ? brainAskDone(o.store, await body()) : addBrainAsk(o.store, await body());
+  const r = done ? brainAskDone(o.store, await body()) : addBrainAsk(o.store, await body(), Date.now, o.reportOf);
   if (r.item) { o.log(done ? 'brain ask answered in the chat' : 'brain ask added', { item: r.item.external_id }); o.changed(r.item.external_id); }
   return { status: r.status, body: r.body };
 }

@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import type { Store, Item } from './store.ts';
 import type { RouteResult, Body } from './route.ts';
 import { askReportPath, reportPathIn } from './workercontract.ts';
+import { brainAskReport } from './brainasks.ts';
 import { docHref } from '../web/contract.js';
 
 // Web push without a library: VAPID (RFC 8292) signs who is sending, aes128gcm (RFC 8291) encrypts the payload.
@@ -173,7 +174,7 @@ export async function pushOpenAsks(store: Store, send: (m: PushMessage, opts: { 
 type ReportOf = (path: string) => { path: string; title: string } | undefined;
 
 /**
- * The push for an ask. An ask with a report (its REPORT line, else a data/reports path in its text) opens that report
+ * The push for an ask. An ask with a report (a brain ask's --report, else its REPORT line, else a data/reports path in its text) opens that report
  * when tapped, and its text says there is a report to read. `?item=` stays in the address, so the page shows the
  * ask again when the owner closes the report.
  */
@@ -181,7 +182,7 @@ export function askMessage(i: Item, reportOf?: ReportOf): PushMessage {
   const title = i.source === 'brain' ? 'Jarvis is asking' : i.kind === 'escalation' ? 'Jarvis: a worker is stuck' : 'Jarvis: a worker is asking';
   const q = /QUESTION:\s*(.+)/.exec(i.body ?? '')?.[1];
   const text = (q ?? i.subject ?? i.body ?? '').trim();
-  const path = askReportPath(i.body ?? '') ?? reportPathIn(i.body);
+  const path = brainAskReport(i) ?? askReportPath(i.body ?? '') ?? reportPathIn(i.body);
   const report = path ? reportOf?.(path) : undefined;
   const url = `/?item=${encodeURIComponent(i.external_id)}`, tag = `item-${i.external_id}`;
   if (!report) return { title, body: text.slice(0, 180), url, tag };
