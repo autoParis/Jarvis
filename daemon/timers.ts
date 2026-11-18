@@ -76,7 +76,8 @@ export function startStoryQueue(o: { fill: () => Promise<unknown>; everyMs: numb
 export function startTermPoll<T>(o: { list: () => Promise<T>; current: () => T; publish: () => void }): () => Promise<void> {
   let termKey = '';
   async function pollTerms() {
-    const key = JSON.stringify(await o.list().catch(() => o.current()));
+    // The output time moves with every line; a change of program or of status publishes, output alone does not.
+    const key = JSON.stringify(await o.list().catch(() => o.current()), (k, v) => k === 'activity' ? undefined : v);
     if (key !== termKey) { termKey = key; o.publish(); }
   }
   setInterval(() => { pollTerms().catch(() => {}); }, TERM_POLL_MS);

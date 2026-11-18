@@ -45,6 +45,23 @@ export const REMINDER_STATUSES = ['open', 'fired', 'done'];
 export const TODAY_STATUSES = ['new', 'waiting', 'queued', 'working', 'ready', 'released', 'dropped', 'moved'];
 /** The status of a support reply that waits for its fix to reach production. */
 export const SUPPORT_REPLY_STATUSES = ['waiting', 'held', 'sending', 'sent', 'failed', 'unknown', 'dropped'];
+/**
+ * The status of a work-list row, a native worker or a project terminal (daemon/work.ts WorkStatus), with its reason:
+ * - idle: nothing runs: a shell prompt, a session stopped after an hour idle, a side chat between turns.
+ * - working: a turn or a program runs. Silence alone never changes it.
+ * - blocked: it cannot go on without the owner. The reason says why (BLOCKED_REASONS).
+ * - done: the worker reported DONE or FAILED. The reason is "failed" for a FAILED report.
+ */
+export const WORK_STATUSES = ['idle', 'working', 'blocked', 'done'];
+/**
+ * Why a row is blocked. permission: a permission card. question: an ask card. waiting on you: a WAITING line only the
+ * owner ends. login and usage limit also come from Claude Code's own words in `claude agents` (screen.ts needsReason).
+ * The rest come from a screen read (screen.ts BLOCKING_PROMPTS): the folder trust prompt, a login or first-run screen,
+ * the MCP server approval, a settings error dialog, and any other Claude Code dialog (prompt on screen).
+ */
+export const BLOCKED_REASONS = ['permission', 'question', 'waiting on you', 'trust prompt', 'login', 'usage limit', 'mcp servers', 'settings error', 'prompt on screen'];
+/** "blocked: login", "done: failed", "working". */
+export const statusText = s => s ? (s.reason ? `${s.name}: ${s.reason}` : s.name) : '';
 /** The status of a row in the Requests sidebar. */
 export const REQUEST_STATUSES = ['waiting', 'working', 'review', 'done', 'failed'];
 

@@ -93,10 +93,14 @@ export type NativeWorkerRow = {
   resumes: number; last_resume_at: string | null; in_fifo: string | null;
   /** Continue on phone (2026-11-08): the Remote Control name the session runs with, so a resume keeps it reachable from the Claude app. */
   remote: string | null;
+  /** Workers in tmux (2026-11-18): the session on the worker socket (screen.ts) that jarvisd types into and reads. A row
+   * with it has no `in_fifo`. `block` is the blocking prompt the last screen read found ('trust prompt', 'login'), with
+   * `block_at` the read's time; both are null while nothing blocks it. */
+  tmux: string | null; block: string | null; block_at: string | null;
 };
 
 /** The native_workers columns a caller may leave out: they default to a background session with nothing to replay. */
-type NativeOptional = 'kind' | 'pgid' | 'repo' | 'model' | 'permission_mode' | 'resumes' | 'last_resume_at' | 'in_fifo' | 'remote';
+type NativeOptional = 'kind' | 'pgid' | 'repo' | 'model' | 'permission_mode' | 'resumes' | 'last_resume_at' | 'in_fifo' | 'remote' | 'tmux' | 'block' | 'block_at';
 
 export function openStore(path: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -195,6 +199,8 @@ export function openStore(path: string) {
     ALTER TABLE native_workers ADD COLUMN resumes INTEGER NOT NULL DEFAULT 0; ALTER TABLE native_workers ADD COLUMN last_resume_at TEXT; ALTER TABLE native_workers ADD COLUMN in_fifo TEXT;`);
   // Continue on phone (2026-11-08): the Remote Control name a resume replays.
   if (!nativeCols.includes('remote')) db.exec('ALTER TABLE native_workers ADD COLUMN remote TEXT;');
+  // Workers in tmux and their screen reads (2026-11-18).
+  if (!nativeCols.includes('tmux')) db.exec('ALTER TABLE native_workers ADD COLUMN tmux TEXT; ALTER TABLE native_workers ADD COLUMN block TEXT; ALTER TABLE native_workers ADD COLUMN block_at TEXT;');
   // The × moves a row to Completed (2026-11-12). Older databases get the column here.
   const requestCols = (db.prepare('PRAGMA table_info(requests)').all() as { name: string }[]).map(c => c.name);
   if (!requestCols.includes('closed_at')) db.exec('ALTER TABLE requests ADD COLUMN closed_at TEXT;');
@@ -570,13 +576,13 @@ export function openStore(path: string) {
     },
     addNativeWorker(w: Omit<NativeWorkerRow, NativeOptional> & Partial<Pick<NativeWorkerRow, NativeOptional>>) {
       db.prepare(`INSERT INTO native_workers (id, session_id, name, cwd, approval_id, state, waiting_for, report, report_at, outcome, transcript, created_at, updated_at, kind, pgid,
-        repo, model, permission_mode, resumes, last_resume_at, in_fifo, remote) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        repo, model, permission_mode, resumes, last_resume_at, in_fifo, remote, tmux, block, block_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(w.id, w.session_id, w.name, w.cwd, w.approval_id, w.state, w.waiting_for, w.report, w.report_at, w.outcome, w.transcript, w.created_at, w.updated_at, w.kind ?? 'background', w.pgid ?? null,
-          w.repo ?? null, w.model ?? null, w.permission_mode ?? null, w.resumes ?? 0, w.last_resume_at ?? null, w.in_fifo ?? null, w.remote ?? null);
+          w.repo ?? null, w.model ?? null, w.permission_mode ?? null, w.resumes ?? 0, w.last_resume_at ?? null, w.in_fifo ?? null, w.remote ?? null, w.tmux ?? null, w.block ?? null, w.block_at ?? null);
     },
     /** Sets the named columns and moves updated_at. `id`, `name` and `created_at` never change; `cwd` only when the listing names the session's real folder. */
     updateNativeWorker(id: string, f: Partial<Omit<NativeWorkerRow, 'id' | 'name' | 'created_at'>>) {
-      const allowed = ['session_id', 'approval_id', 'state', 'waiting_for', 'report', 'report_at', 'outcome', 'transcript', 'updated_at', 'pgid', 'cwd', 'model', 'permission_mode', 'resumes', 'last_resume_at', 'in_fifo', 'kind', 'remote'] as const;
+      const allowed = ['session_id', 'approval_id', 'state', 'waiting_for', 'report', 'report_at', 'outcome', 'transcript', 'updated_at', 'pgid', 'cwd', 'model', 'permission_mode', 'resumes', 'last_resume_at', 'in_fifo', 'kind', 'remote', 'tmux', 'block', 'block_at'] as const;
       const cols = allowed.filter(k => f[k] !== undefined);
       if (!cols.length) return;
       db.prepare(`UPDATE native_workers SET ${cols.map(k => `${k} = ?`).join(', ')} WHERE id = ?`).run(...cols.map(k => f[k] as string | number | null), id);

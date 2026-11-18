@@ -233,7 +233,7 @@ test('rows have the contract shape and finished rows leave after a day', async (
   const { native, fake, tick } = setup();
   const w = await native.start({ name: 'fix-dead-list-412', cwd: '/w/fix-dead-list-412', brief: 'b', approvalId: 412 });
   assert.deepEqual(native.rows(), [{
-    id: 'n:deabc023', kind: 'worker', dispatch: 'n:deabc023', title: 'fix-dead-list-412', group: 'other', state: 'working',
+    id: 'n:deabc023', kind: 'worker', dispatch: 'n:deabc023', title: 'fix-dead-list-412', group: 'other', state: 'working', status: { name: 'working' },
     worktree: 'fix-dead-list-412', steer: 'auto',
     native: { id: 'deabc023', sessionId: SESSION, name: 'fix-dead-list-412', state: 'working', waitingFor: null, outcome: null, kind: 'background' },
   }]);

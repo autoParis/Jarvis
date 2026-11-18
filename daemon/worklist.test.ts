@@ -329,3 +329,16 @@ test('a worker with no request is in Completed once, and one removed from Comple
   assert.equal(mergeWork([r], [], { 'n:a': new Date(0).toISOString() }, NOW).done.length, 0, 'removed from Completed');
   assert.equal(mergeWork([r], [req(1, 'working', { row: 'n:a' })], none).done.length, 0, 'an open request keeps it in its group');
 });
+
+test('a blocked row says its reason under its title, and every row with a status names it', async () => {
+  const { mergeWork, workListHtml } = await import('../web/worklist.js');
+  const rows = [
+    { id: 'n:a', kind: 'worker', title: 'story-501', group: 'other', state: 'waiting', status: { name: 'blocked', reason: 'login' }, note: 'Blocked: login', steer: 'auto' },
+    { id: 'n:b', kind: 'worker', title: 'story-502', group: 'other', state: 'working', status: { name: 'working' }, steer: 'auto' },
+    { id: 't:ev-1', kind: 'session', title: 'Terminal in Jarvis', group: 'terminal', state: 'idle', status: { name: 'idle' }, note: 'ev-1', steer: 'none', tmux: { name: 'ev-1', project: 'jarvis', kind: 'terminal', cwd: '/r', branch: 'm' } },
+  ];
+  const html = workListHtml(mergeWork(rows, []), { shut: new Set(), closedWaiting: new Set(), folders: {}, now: Date.now() });
+  assert.match(html, /<div class="wrow s-waiting st-blocked"[^>]*title="Blocked: login[^"]*">.*?<div class="note blocked">Blocked: login<\/div>/s);
+  assert.match(html, /st-working"[^>]*title="Working"/);
+  assert.match(html, /title="Running in tmux session ev-1 · Idle"/);
+});
