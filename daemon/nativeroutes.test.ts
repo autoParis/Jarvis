@@ -84,8 +84,8 @@ test('a worker\'s message to the brain becomes a question item; a stranger\'s is
   assert.equal(r.item?.body, 'QUESTION: merge?');
   assert.equal(r.speak, true);
   assert.equal(s.store.openItems().length, 1);
-  // The brain's reply through jarvis-native: relayed, and the open question is answered in Jarvis's name.
-  const reply = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1', text: 'Yes, merge it.' });
+  // The brain's reply through jarvis-native: relayed, and the question it names is answered in Jarvis's name.
+  const reply = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1', text: 'Yes, merge it.', item: askId(w.id, 1000) });
   assert.equal(reply?.status, 200);
   assert.ok(s.calls.some(c => c[0] === '-p' && c.includes('SendMessage')));
   assert.equal(s.store.openItems().length, 0);
@@ -99,6 +99,43 @@ test('a worker\'s message to the brain becomes a question item; a stranger\'s is
   const quiet = routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 2000 }, { from: 'probe-1', text: 'status: fine' }, 'SILENT');
   assert.equal(quiet.speak, false);
   assert.deepEqual(answerOpenAsks(s.store, w.id, 'ok', 'owner'), [askId(w.id, 2000)]);
+});
+
+test('a brain reply that names no ask leaves the worker\'s ask card open (2026-11-18: an answer to another question closed it)', async () => {
+  const s = setup();
+  const w = await s.native.start({ name: 'probe-1', cwd: '/tmp', brief: 'x' });
+  routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 1000 }, { from: 'probe-1', text: 'QUESTION: overview or merged table?' }, 'It asks.');
+  const ask = askId(w.id, 1000);
+  // The brain relays the owner's answer to its own earlier question: the words go in, the card stays.
+  const plain = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1', text: 'Build the other one first.' });
+  assert.equal(plain?.status, 200);
+  assert.deepEqual((plain?.body as any).answered, []);
+  assert.deepEqual((plain?.body as any).still_open, [ask]);
+  assert.equal(s.store.item(ask)?.status, 'spoken');
+  assert.deepEqual(s.changed, []);
+  assert.ok(!s.logs.some(l => l.startsWith('native ask answered by the brain')));
+  // A named ask that is not open for this worker: refused, and nothing is sent.
+  const sends = s.calls.length;
+  const wrong = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1', text: 'x', item: 'ask:other:1' });
+  assert.equal(wrong?.status, 409);
+  assert.equal(s.calls.length, sends);
+  assert.equal(s.store.item(ask)?.status, 'spoken');
+  // Two open asks and --answers: refused, because it cannot tell which one.
+  routeWorkerTurn({ native: s.native, store: s.store, log: s.log, now: () => 2000 }, { from: 'probe-1', text: 'QUESTION: second?' }, 'It asks again.');
+  const two = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1', text: 'Yes.', answers: true });
+  assert.equal(two?.status, 409);
+  assert.match((two?.body as any).error, /--item/);
+  assert.equal(s.store.openItems().length, 2);
+  // Naming one closes that one only.
+  const named = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1', text: 'The merged table.', item: ask });
+  assert.deepEqual((named?.body as any).answered, [ask]);
+  assert.equal(s.store.item(ask)?.status, 'answered');
+  assert.equal(s.store.item(askId(w.id, 2000))?.status, 'spoken');
+  // One open ask and --answers: it closes.
+  const only = await nativeRoute(s.o, 'POST', '/api/internal/native/reply', { worker: 'probe-1', text: 'Yes.', answers: true });
+  assert.deepEqual((only?.body as any).answered, [askId(w.id, 2000)]);
+  assert.equal(s.store.openItems().length, 0);
+  assert.deepEqual(s.changed, [ask, askId(w.id, 2000)]);
 });
 
 test('the gate routes native worker-start, stop and abandon to native.ts and never proposes a permission card', () => {

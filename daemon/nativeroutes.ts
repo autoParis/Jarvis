@@ -36,10 +36,23 @@ export async function nativeRoute(o: NativeRouteOptions, method: string, url: st
     if (!worker || !text) return { status: 400, body: { error: 'worker and text are required' } };
     const w = findWorker(o.native, worker);
     if (!w) return { status: 404, body: { error: `no native worker ${worker}. jarvis-native list shows them.` } };
+    // Which open ask this reply answers. Only a named ask (--item) or the worker's only ask (--answers) closes;
+    // a plain reply closes nothing, because it can answer a different question than the open card (2026-11-18).
+    const open = openAsks(o.store, w.id).map(i => i.external_id);
+    let close: string[] = [];
+    if (typeof body.item === 'string' && body.item) {
+      if (!open.includes(body.item)) return { status: 409, body: { error: `Nothing was sent: ${body.item} is not an open ask of ${w.name}. Its open asks: ${open.join(', ') || 'none'}.` } };
+      close = [body.item];
+    } else if (body.answers === true) {
+      if (open.length > 1) return { status: 409, body: { error: `Nothing was sent: ${w.name} has ${open.length} open asks. Name the one this answers with --item: ${open.join(', ')}.` } };
+      close = open;
+    }
     const r = await o.native.reply(w.id, text, 'jarvis');
     if (!r.ok) return { status: 502, body: { error: r.error } };
-    for (const id of answerOpenAsks(o.store, w.id, text, 'jarvis')) { o.log('native ask answered by the brain', { worker: w.id, item: id }); o.askChanged(id); }
-    return { status: 200, body: { ok: true, worker: `${ROW_PREFIX}${w.id}`, name: w.name } };
+    for (const id of close) { o.store.markItem(id, 'answered', text, 'jarvis'); o.log('native ask answered by the brain', { worker: w.id, item: id }); o.askChanged(id); }
+    const still = open.filter(id => !close.includes(id));
+    if (still.length) o.log('native reply left asks open', { worker: w.id, items: still });
+    return { status: 200, body: { ok: true, worker: `${ROW_PREFIX}${w.id}`, name: w.name, answered: close, still_open: still } };
   }
   if (url === '/api/internal/native/list') return { status: 200, body: o.native.list() };
   return undefined;
@@ -50,9 +63,14 @@ export function findWorker(native: Pick<Native, 'get' | 'list'>, key: string): N
   return native.get(key) ?? native.list().find(w => w.name === key);
 }
 
+/** This worker's open question items, oldest first. */
+export function openAsks(store: Store, worker: string): Item[] {
+  return store.openItems().filter(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${worker}`);
+}
+
 /** Marks this worker's open questions answered with the words that went to it. Returns their ids. */
 export function answerOpenAsks(store: Store, worker: string, text: string, by: 'owner' | 'jarvis'): string[] {
-  const open = store.openItems().filter(i => i.source === 'native' && i.dispatch_id === `${ROW_PREFIX}${worker}`);
+  const open = openAsks(store, worker);
   for (const i of open) store.markItem(i.external_id, 'answered', text, by === 'jarvis' ? 'jarvis' : undefined);
   return open.map(i => i.external_id);
 }
